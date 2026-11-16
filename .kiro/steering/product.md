@@ -58,7 +58,7 @@ JustRunMe exposes an MCP server so Kiro agents can call: `rehearse`, `get_impact
 
 - It does not undo network calls, emails, payment charges, or any external API side effect. Those are marked irreversible and require approval.
 - It does not replace Kiro's own permissions, approval flow, or sandbox. It layers on top of them.
-- It does not provide a time machine or unlimited undo for arbitrary shell commands.
+- It does not provide unlimited undo for arbitrary shell commands.
 - It does not track changes made outside a declared mission contract.
 
 ---
@@ -72,8 +72,8 @@ Do **not** use the following names for JustRunMe features, even informally:
 - "Checkpoint" or "Rewind" (Kiro IDE's built-in session undo)
 - "Snapshot" (ambiguous with VM snapshots and Kiro checkpoints)
 - "Goal" (Kiro's task planning concept)
-- "Time Machine" (macOS backup product; also implies universal undo, which we do not provide)
-- "Mission Control" (macOS window manager; also implies a UI we do not have)
+- Never use "Time Machine" (macOS backup product; implies universal undo, which we do not provide)
+- Never use "Mission Control" (macOS window manager; implies a UI we do not have)
 
 When comparing to Kiro's built-in features, be accurate:
 - Kiro's checkpoints revert files edited by Kiro's own tools in a session. They do not cover Postgres data, running containers, or config state outside the working tree. JustRunMe covers those gaps.

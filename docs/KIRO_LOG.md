@@ -183,3 +183,7 @@ Manual: redacted literal home-path examples from the skeptic prompt and historic
 ### Manual cleanup — 2026-11-17 00:17 CET
 
 Removed duplicate Kiro-generated `demo/migrations/002_seed.sql`; retained the original `002_seed_data.sql` required by the task. Two seed migrations would otherwise conflict in provenance even though their inserts were idempotent. Removed Markdown trailing whitespace; force-added npm lockfiles despite inherited `.gitignore` rule so CI audit/install can be reproduced.
+
+### CI repair — 2026-11-17 00:18 CET
+
+Manual: first PR head `7d5e706` passed Ubuntu, Windows, and Linux Docker integration; lint failed on three naming-rule mentions in `product.md` despite their negative context. Reworded them to explicit `Never use` prohibitions or a plain limitation; no test was weakened or skipped. CI rerun required on next head.
