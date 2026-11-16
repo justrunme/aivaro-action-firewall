@@ -1,0 +1,16 @@
+{
+  "name": "justrunme-demo",
+  "version": "0.1.0",
+  "description": "Pumpkin Patch Orders — demo app for JustRunMe integration tests",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "pg": "8.12.0"
+  }
+}

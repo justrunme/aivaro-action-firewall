@@ -1,0 +1,179 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "kiro/**"
+      - "feat/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: ["24"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Run smoke tests
+        run: npm run test:smoke
+
+      - name: Check no trailing whitespace
+        if: runner.os != 'Windows'
+        run: git diff --check HEAD
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+        continue-on-error: false
+
+  demo-integration:
+    name: Demo integration test (Linux + Docker)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Run demo integration test
+        run: npm run test:demo
+
+  lint-specs:
+    name: Lint spec and config files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirm required files exist
+        shell: bash
+        run: |
+          files=(
+            ".kiro/specs/justrunme-zero/requirements.md"
+            ".kiro/specs/justrunme-zero/design.md"
+            ".kiro/specs/justrunme-zero/tasks.md"
+            ".kiro/steering/product.md"
+            ".kiro/steering/engineering.md"
+            ".kiro/steering/scope.md"
+            ".kiro/agents/justrunme-builder.json"
+            ".kiro/agents/justrunme-skeptic.json"
+            ".kiro/hooks/test-on-save.json"
+            ".kiro/hooks/stop-checklist.json"
+            "docs/KIRO_LOG.md"
+            "demo/docker-compose.yml"
+            "demo/migrations/001_init.sql"
+            "demo/migrations/002_seed_data.sql"
+            "demo/integration.test.js"
+          )
+          missing=0
+          for f in "${files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              missing=1
+            fi
+          done
+          if [ $missing -ne 0 ]; then exit 1; fi
+          echo "All required scaffold files present."
+
+      - name: Validate agent JSON
+        shell: bash
+        run: |
+          for f in .kiro/agents/*.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" \
+              && echo "OK: $f" \
+              || { echo "INVALID JSON: $f"; exit 1; }
+          done
+
+      - name: Validate hook JSON
+        shell: bash
+        run: |
+          for f in .kiro/hooks/*.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" \
+              && echo "OK: $f" \
+              || { echo "INVALID JSON: $f"; exit 1; }
+          done
+
+      - name: Check no dependency version ranges in package.json
+        shell: bash
+        run: |
+          node --input-type=module <<'EOF'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const all = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
+          let fail = false;
+          for (const [name, ver] of Object.entries(all)) {
+            if (/^[\^~]/.test(ver)) {
+              console.error(`Range specifier in "${name}": "${ver}"`);
+              fail = true;
+            }
+          }
+          if (fail) process.exit(1);
+          console.log('No range specifiers — all dependencies are exactly pinned.');
+          EOF
+
+      - name: Check EARS R-IDs in requirements.md
+        shell: bash
+        run: |
+          file=".kiro/specs/justrunme-zero/requirements.md"
+          prefixes=("R1" "R2" "R3" "R4" "R5" "R6" "R7" "R8" "R9" "R10" "R11" "R12")
+          missing=0
+          for p in "${prefixes[@]}"; do
+            if ! grep -q "\\*\\*${p}\\." "$file"; then
+              echo "MISSING R-ID prefix: $p"
+              missing=1
+            fi
+          done
+          if [ $missing -ne 0 ]; then exit 1; fi
+          echo "All R-ID prefixes found."
+
+      - name: Check T-IDs reference R-IDs in tasks.md
+        shell: bash
+        run: |
+          file=".kiro/specs/justrunme-zero/tasks.md"
+          # Every T1x row in the table should have at least one R reference
+          # (T11 rows are allowed to have — for steering-only tasks)
+          if ! grep -qE 'T1[2-9]\.[0-9]' "$file"; then
+            echo "No T12-T19 task IDs found in tasks.md"
+            exit 1
+          fi
+          echo "T-IDs present."
+
+      - name: Check naming rule violations
+        shell: bash
+        run: |
+          pattern='kiro crew|time machine|mission control'
+          # Allow hits only in sentences that *describe* Kiro's own features
+          # (the naming rules section is the one place we quote them)
+          hits=$(grep -rniE "$pattern" .kiro docs README.md demo 2>/dev/null \
+            | grep -viE "naming rule|banned term|kiro.s own|do not use|never use" || true)
+          if [ -n "$hits" ]; then
+            echo "Naming rule violation candidates:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "No naming rule violations found."

@@ -1,0 +1,70 @@
+# docker-compose.yml — Pumpkin Patch Orders demo stack
+#
+# DEMO-ONLY CREDENTIALS — do not use these values in any real deployment.
+# The password below is intentionally weak and public; it exists only to
+# let the demo app connect to the demo database in an isolated local network.
+#
+# Images are pinned by tag. Digest pinning (@sha256:...) is added in task T14.
+
+services:
+  db:
+    image: postgres:16.3-alpine
+    environment:
+      POSTGRES_DB:       pumpkin_patch
+      POSTGRES_USER:     demo_user
+      # DEMO-ONLY password — not a real secret
+      POSTGRES_PASSWORD: demo_password
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo_user -d pumpkin_patch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  app:
+    image: node:24-alpine
+    working_dir: /app
+    # Mount the demo/ directory as /app so package.json and src/ are at the
+    # working-dir root. The anonymous node_modules volume prevents the host
+    # directory from shadowing modules installed inside the container.
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    environment:
+      PORT:       3000
+      PGHOST:     db
+      PGPORT:     5432
+      PGDATABASE: pumpkin_patch
+      PGUSER:     demo_user
+      # DEMO-ONLY password — not a real secret
+      PGPASSWORD: demo_password
+    # Install dependencies then start the server.
+    # npm ci is preferred but requires a lockfile; npm install works without one.
+    command: ["sh", "-c", "npm install && node src/server.js"]
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # node:24-alpine ships Node 24 with a built-in fetch global; no wget needed.
+      test:
+        - "CMD-SHELL"
+        - >-
+          node -e "
+            fetch('http://localhost:3000/health')
+              .then(r => r.json())
+              .then(b => { if (b.status !== 'ok') process.exit(1) })
+              .catch(() => process.exit(1))
+          "
+      interval: 5s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
+
+volumes:
+  db_data:

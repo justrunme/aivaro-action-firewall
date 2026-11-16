@@ -1,0 +1,41 @@
+{
+  "name": "justrunme-zero",
+  "version": "0.1.0",
+  "description": "Rehearse. Run. Recover. The mission simulator and undo engine for Kiro agents.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "test:smoke": "node --test test/smoke.test.js",
+    "test:demo": "node --test demo/integration.test.js"
+  },
+  "exports": {
+    ".": "./src/core/index.js"
+  },
+  "bin": {
+    "justrunme": "./src/cli/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "keywords": [
+    "kiro",
+    "kiroween",
+    "mcp",
+    "ai-agents",
+    "rehearsal",
+    "undo",
+    "ed25519",
+    "webauthn"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/justrunme/justrunme-zero.git"
+  },
+  "homepage": "https://github.com/justrunme/justrunme-zero#readme",
+  "bugs": {
+    "url": "https://github.com/justrunme/justrunme-zero/issues"
+  }
+}

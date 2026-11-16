@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Test on JS save",
+      "description": "Runs the smoke test suite after saving any JavaScript file in the JustRunMe workspace",
+      "trigger": "PostFileSave",
+      "matcher": "\\.(js|mjs)$",
+      "action": {
+        "type": "command",
+        "command": "npm test --silent"
+      }
+    }
+  ]
+}
