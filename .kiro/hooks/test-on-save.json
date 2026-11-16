@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "Test on JS save",
+      "description": "Runs npm test --silent after saving any JavaScript file",
+      "trigger": "PostFileSave",
+      "matcher": "\\.(js|mjs)$",
+      "action": {
+        "type": "command",
+        "command": "npm test --silent"
+      }
+    }
+  ]
+}

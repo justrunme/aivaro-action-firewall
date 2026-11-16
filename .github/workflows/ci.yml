@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "kiro/**"
+      - "feat/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-14, windows-2022]
+        node: ["24"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts
+
+      - name: Run tests
+        run: npm test
+
+      - name: Audit dependencies
+        # Fail CI on high or critical vulnerabilities.
+        # --audit-level=high also catches critical.
+        run: npm audit --audit-level=high
+        # Dependencies are empty at scaffold stage; this will pass trivially
+        # and become meaningful once packages are added.
+        continue-on-error: false
+
+  lint-specs:
+    name: Lint spec files
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirm required spec files exist
+        shell: bash
+        run: |
+          files=(
+            ".kiro/specs/kiro-action-firewall/requirements.md"
+            ".kiro/specs/kiro-action-firewall/design.md"
+            ".kiro/specs/kiro-action-firewall/tasks.md"
+            ".kiro/steering/engineering.md"
+            ".kiro/steering/scope.md"
+            ".kiro/agents/builder.json"
+            ".kiro/agents/skeptic.json"
+            ".kiro/hooks/post-file-save.json"
+            ".kiro/hooks/stop.json"
+            "docs/KIRO_LOG.md"
+          )
+          missing=0
+          for f in "${files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              missing=1
+            fi
+          done
+          if [ $missing -ne 0 ]; then
+            exit 1
+          fi
+          echo "All required scaffold files present."
+
+      - name: Validate agent JSON
+        shell: bash
+        run: |
+          for f in .kiro/agents/*.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" \
+              && echo "OK: $f" \
+              || { echo "INVALID JSON: $f"; exit 1; }
+          done
+
+      - name: Validate hook JSON
+        shell: bash
+        run: |
+          for f in .kiro/hooks/*.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" \
+              && echo "OK: $f" \
+              || { echo "INVALID JSON: $f"; exit 1; }
+          done
+
+      - name: Check no dependency version ranges in package.json
+        shell: bash
+        run: |
+          node --input-type=module <<'EOF'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const all = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
+          let fail = false;
+          for (const [name, ver] of Object.entries(all)) {
+            if (/^[\^~]/.test(ver)) {
+              console.error(`Range specifier in "${name}": "${ver}"`);
+              fail = true;
+            }
+          }
+          if (fail) process.exit(1);
+          console.log('No range specifiers — all dependencies are exactly pinned.');
+          EOF

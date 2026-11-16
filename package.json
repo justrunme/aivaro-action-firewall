@@ -1,0 +1,36 @@
+{
+  "name": "aivaro-action-firewall",
+  "version": "0.1.0",
+  "description": "Kiro PreToolUse hook that gates every agent tool call with allow / deny / ask, backed by Ed25519-signed receipts and a hash-chained SQLite audit log.",
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.js'",
+    "test:smoke": "node --test test/smoke.test.js"
+  },
+  "exports": {
+    ".": "./src/core/index.js"
+  },
+  "bin": {
+    "aivaro": "./src/cli/index.js"
+  },
+  "dependencies": {},
+  "devDependencies": {},
+  "keywords": [
+    "kiro",
+    "hook",
+    "firewall",
+    "policy",
+    "webauthn",
+    "ed25519",
+    "audit-log",
+    "mcp"
+  ],
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aivaro/aivaro-action-firewall.git"
+  }
+}
