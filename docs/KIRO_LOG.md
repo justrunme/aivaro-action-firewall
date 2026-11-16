@@ -119,3 +119,7 @@ team confirms the migration.
 ### Operator verification and cleanup — 2026-11-16 20:09 CET
 
 Manual cleanup: removed four legacy agent JSON files (including two .bak copies) and two legacy hook JSON files; kept only task-specified filenames. Tests: npm test 33/33 passed; both Kiro agents validated; JSON syntax checks passed; git diff --check passed. No production source was implemented.
+
+### CI repair — 2026-11-16 20:10 CET
+
+Manual: updated four stale required-file paths in `.github/workflows/ci.yml` to the Kiro-corrected agent/hook filenames after CI lint failed on head `3fa6a1e`. No checks were disabled or weakened. macOS runner jobs were cancelled before logs became available; kept macOS matrix enabled.

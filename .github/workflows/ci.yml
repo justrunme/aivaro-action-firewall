@@ -60,10 +60,10 @@ jobs:
             ".kiro/specs/kiro-action-firewall/tasks.md"
             ".kiro/steering/engineering.md"
             ".kiro/steering/scope.md"
-            ".kiro/agents/builder.json"
-            ".kiro/agents/skeptic.json"
-            ".kiro/hooks/post-file-save.json"
-            ".kiro/hooks/stop.json"
+            ".kiro/agents/aivaro-builder.json"
+            ".kiro/agents/aivaro-skeptic.json"
+            ".kiro/hooks/test-on-save.json"
+            ".kiro/hooks/stop-checklist.json"
             "docs/KIRO_LOG.md"
           )
           missing=0
