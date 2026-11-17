@@ -15,6 +15,7 @@
  */
 
 import { realpathSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -38,7 +39,7 @@ const OPTIONS = {
   help: { type: 'boolean', short: 'h', default: false },
 }
 
-const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock> [options]'
+const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge> [options]'
 
 async function dispatch(command, rest, repoDir, opts) {
   const ctx = { repoDir, opts }
@@ -68,6 +69,8 @@ async function dispatch(command, rest, repoDir, opts) {
       return cmd.reanchorCmd(ctx)
     case 'lock':
       return cmd.lockCmd({ ...ctx, action: rest[0] })
+    case 'judge':
+      return cmd.judgeCmd(ctx)
   }
   throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
 }
@@ -78,7 +81,12 @@ function textOf(out) {
     lines.push(`${out.error.code}: ${out.error.message}`)
     if (out.error.detail !== undefined) lines.push(JSON.stringify(out.error.detail))
   }
-  if (out.result) {
+  if (out.command === 'judge' && out.result?.steps) {
+    const j = out.result.judge
+    lines.push(`${j.status} in ${(j.elapsed_ms / 1000).toFixed(1)} s (budget ${j.budget_ms / 1000} s, ${j.budget_enforced ? 'enforced' : 'not enforced: images were downloaded'})`)
+    for (const s of out.result.steps) lines.push(`  ${s.status === 'passed' ? 'ok  ' : s.status === 'failed' ? 'FAIL' : 'skip'} ${s.title}${s.duration_ms === undefined ? '' : ` (${(s.duration_ms / 1000).toFixed(1)} s)`}`)
+    lines.push(`receipts verified: ${out.result.counts.receipts_verified}, mismatches: ${out.result.counts.mismatches}, policy violations: ${out.result.counts.policy_violations}`)
+  } else if (out.result) {
     for (const [k, v] of Object.entries(out.result)) lines.push(`${k}: ${typeof v === 'object' && v !== null ? JSON.stringify(v) : v}`)
   }
   return lines.map(printable).join('\n') + '\n'
@@ -121,7 +129,10 @@ export async function main(argv) {
     }
   }
   const out = { command, ok: exit === EXIT.OK, exit_code: exit, ...body }
-  return { exit, text: opts.text, output: redactDeep(scrubPaths(out, [[keyHome(), '$JUSTRUNME_HOME'], [path.resolve(opts.repo ?? process.cwd()), '$REPO']])) }
+  const pairs = [[keyHome(), '$JUSTRUNME_HOME'], [path.resolve(opts.repo ?? process.cwd()), '$REPO']]
+  // judge works in temporary directories whose names can appear in error text.
+  if (command === 'judge') for (const t of new Set([os.tmpdir(), tryReal(os.tmpdir())])) pairs.push([t, '$TMP'])
+  return { exit, text: opts.text, output: redactDeep(scrubPaths(out, pairs)) }
 }
 
 /**
@@ -139,6 +150,14 @@ export function scrubPaths(value, pairs) {
     return v
   }
   return walk(value)
+}
+
+const tryReal = (p) => {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
 }
 
 /** Text mode: no control characters, so nothing can colour the terminal or fake a line. */

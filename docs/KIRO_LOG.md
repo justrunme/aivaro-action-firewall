@@ -606,3 +606,52 @@ Not taken, recorded:
   - Exit 17 when restored and verified, 14 when not, 30 if the journal itself cannot be written. Never 0.
 - Security limit stated plainly in README: JustRunMe is not a sandbox; plan steps run as the OS user and can read the key directory.
 - Fingerprint: `base.target` now includes `db_user` and `health`; changing either after authorization blocks the run (`FIDELITY_MISMATCH`, component named).
+
+---
+
+## Run 17 — T19 `justrunme judge`
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t19-judge`, from `main` at `2bdc373` (PR 10 merged by the operator) |
+
+### Written
+
+- `src/judge/scenario.js`: the scenario as ordered steps against a backend. It drives the CLI only: rehearse the dangerous plan, authorize it (denied), rehearse the safe plan on the same base, compare, authorize, run, undo, verify, replay; then verify again after the containers are gone with an empty `PATH`, change one byte of the chain (verification must fail with exit 30) and put it back. Each step lists named checks next to its exit code, including direct reads of the real database (the dangerous rehearsal did not touch it, the run added the column and lost no row, the undo restored tables and columns). The first mismatch stops the run; later steps are `skipped`, never passed.
+- `src/judge/report.js`: PASS/FAIL report (R8.4): counts of receipts verified, mismatches, policy violations; findings `STEP_FAILED`, `STEP_SKIPPED`, `OVER_BUDGET`; the story, the receipt list with hashes, the operator public key, the limits.
+- `src/judge/env.js`: the Docker backend. Throwaway workspace, key directory and Compose project `jrm-judge-<id>`; the image is checked for presence first; child processes get only `PATH`, `HOME`, `DOCKER_*`, `TMPDIR`, `LANG` and `JUSTRUNME_HOME` pointing at the throwaway key directory.
+- `src/judge/index.js`: timing around the whole run (setup and teardown included), cleanup on Ctrl-C and SIGTERM.
+- `justrunme judge` in the CLI (`--text` prints a step list), exit 40 on a failed judge, 41 when Docker is missing.
+- `src/rehearsal/compose.js`: `psql` and `dump` use `docker exec -i <container>` instead of `docker compose exec`. A mission ran about 80 compose execs at 0.25 s overhead each. The container id is looked up once per process and dropped when this process runs `up` or `down` on the project.
+
+### Decisions
+
+- The judge is a live demo with its own database, not only a replay of an existing mission. `verify` and `replay` keep that role. `justrunme judge` takes no `--repo` or `--mission`.
+- The 60 s budget is judged only when the Postgres image is already local. A first run that downloads it is timed, reported with `budget_enforced: false`, and not failed for that reason.
+- Measured on the author's Mac before the exec change: 55.6 s. After: 44.1 s. The Postgres container start (about 6 s per start, three starts) did not move with health-check interval, `fsync=off` or `--no-sync` (measured, then dropped), so the judge keeps the demo compose file as it is.
+- Not done: `judge <mission-id>` as in R8.1, a network probe for "no network calls" (T19.2), Chaos Twin (T19.4).
+
+### Review by the `justrunme-skeptic` agent (read-only) and what changed
+
+Verdict was FAIL on two P1 and several P2 items. All P1 and the P2 items below were taken.
+
+- P1: `git` in the judge inherited the caller's whole environment (`GIT_DIR` could redirect `git init`/`commit` to another repository, `core.hooksPath` could run caller hooks). Every child (CLI, git, docker) now gets `childEnv`: `PATH`, `HOME`, `TMPDIR`, `LANG`, `DOCKER_*`, a throwaway `JUSTRUNME_HOME`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_CONFIG_NOSYSTEM=1`; `GIT_DIR` is never passed (unit test).
+- P1: Ctrl-C during the first `up` left containers, and the handler removed only the stack, not the rehearsal copies the child CLI starts (`jrm-reh-judge<id>-*`). The handlers are now installed before anything is created; cleanup kills the running children, runs `down` (and retries if the earlier `down` failed, instead of marking the stack stopped), removes the rehearsal copies' containers, volumes and networks by name, then the temporary directories. `test/demo-judge.test.js` interrupts a run during a rehearsal and checks exit 130 and no leftovers. Known remainder: a `jrm-rehearsal-*` workspace directory in the system temp directory when the CLI child is killed mid-rehearsal (stated in README).
+- P2: "no production credential" was too broad: `HOME` and `DOCKER_*` do pass through. The wording is narrowed everywhere (README, report `limits`), and a remote `DOCKER_HOST` is refused (`REMOTE_DOCKER`, exit 41).
+- P2: the test claimed the default key directory was untouched but set `JUSTRUNME_HOME`, which the judge overrides anyway. The test now also sets `HOME` to an empty directory and checks that neither it nor the caller's `JUSTRUNME_HOME` gets anything; canary credentials, the real home path and the fake home path are checked in stdout and stderr.
+- P2: `tamper_detected` accepted any exit 30. It now needs `ok: false` and a named finding; the unit test for a verifier that approves a damaged chain still applies.
+- P2: error text in the report could carry temporary directory paths. For `judge` the CLI replaces the system temporary directory (and its real path) with `$TMP` before redaction.
+- P2: a backend call outside a step that throws (`stopStack`, `readReceipts`, writing a migration) used to reject the whole run with no report. It now fails the run (`BACKEND_ERROR` finding, later steps skipped) and the report is still produced.
+- P3: `sameData` also compares `schema_hash`; the `base_hash` and `plan_id` checks require strings (an `undefined === undefined` match no longer counts).
+- Not taken, recorded: a slow run still ends as PASS in the sense that `OVER_BUDGET` is judged at the end, not by a timer, and it is not judged at all when the image had to be downloaded; the "under 60 s" assertion in the test therefore depends on the image being local (the CI workflow does not pre-pull it, so on a cold runner the budget is reported, not enforced); no unit test for the container-id cache itself (the Docker tests exercise it); a service scaled above one replica would pick an arbitrary one (the demo does not scale).
+- `npm test` now runs with `--test-concurrency=1`. The judge test measures wall time against 60 s, and on CI the Docker test files would otherwise run in parallel and slow each other (and share one cold image pull). Cost: the unit tests no longer overlap with the Docker tests.
+
+### PR 11 operator review: Docker isolation (P1)
+
+- The `DOCKER_HOST` check did not cover `DOCKER_CONTEXT` or the configured current context, and `up`/`down`/`psql` of the stack ran with the caller's environment.
+- `pinLocalDocker` asks the Docker CLI for the active context (`docker context ls --format '{{.Current}}\t{{.DockerEndpoint}}'`, so the CLI applies `DOCKER_HOST`, `DOCKER_CONTEXT` and the configured context), refuses anything but a `unix://` or `npipe://` socket (`REMOTE_DOCKER`, exit 41) or an ambiguous answer, and builds one environment with `DOCKER_HOST` set to that socket and no `DOCKER_CONTEXT`. The version check, image check, sweep, git, the child CLI processes and the stack target all use it.
+- `src/rehearsal/compose.js`: a target may carry `env`; `up`, `down`, `psql`, `dump`, container lookup, health probe and `imageDigests` pass it to docker. Without `env` nothing changes.
+- Tests: endpoint and listing parsing; a fake `docker` whose active context is `ssh://...` makes `createBackend` refuse; a fake `docker` logs `DOCKER_HOST` and every call of `up`, `psql`, `dump`, `imageDigests` and `down` sees the target's socket while the process environment says otherwise.
+- Limit, stated in README and the report: a local socket that is itself forwarded to another machine cannot be told apart.

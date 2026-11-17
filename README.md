@@ -23,7 +23,7 @@ feature until it has a passing end-to-end test.
 | Receipts (Ed25519, hash chain) | Implemented for rehearsal, authorization, run, undo, verification and every hook decision, with a head anchor outside the workspace and ordering rules; a one-byte change anywhere fails verification (property test); 24 parallel hook processes produce one gap-free chain (test) |
 | Plan comparison (counterfactual replay) | Implemented as a library: stored rehearsals are compared only with equal `base_hash` (same source state and environment), equal rehearsal conditions, operator signatures and matching rehearsal receipts; a fixed rule picks the plan, names the deciding rule, and the choice is a signed `plan_selected` receipt. A replay checks that the choice follows from the signed measurements; it does not measure the database again. When several plans were rehearsed on the current state, only the selected one can be authorized; a selection made on another state grants nothing. Demo A compares its dangerous and safe plans against real Postgres. No `compare` CLI command yet |
 | MCP server, Kiro Power, `justrunme-operator` agent | Not implemented |
-| Judge mode (one command, under 60 s) | Not implemented (T19) |
+| Judge mode (`justrunme judge`) | Implemented as a one-command demo: a throwaway Postgres 16 container, a throwaway operator key and workspace; a dangerous plan is rehearsed (rows lost measured), its authorization is denied, the safe plan is rehearsed on the same base, compared, authorized, run and undone, then the receipt chain is verified again with no Docker and an empty `PATH`, and a one-byte change to the chain must be detected. Prints a PASS/FAIL report with counts, per-step results and the signed receipts. The Docker test asserts under 60 s when the Postgres image is already on the machine (about 45 s on the author's Mac). Judge does not take a mission ID; `verify` and `replay` re-check any recorded mission |
 | CLI (`justrunme`) | Implemented: JSON output, stable exit codes, every refusal named; the whole mission (rehearse, compare, authorize, run, undo, verify, replay) runs through the CLI against real Docker and Postgres in a test |
 | Console UI | Not implemented |
 | Phone passkey approval (WebAuthn) | Deferred to P2 |
@@ -82,6 +82,7 @@ justrunme run
 justrunme undo <capture_id>
 justrunme verify | replay | status | receipt [--seq n]
 justrunme reanchor --reason "..." | lock inspect | lock recover --sha256 ... --reason "..."
+justrunme judge [--text]                # the whole demo in one command; needs Docker
 ```
 
 `justrunme.target.json` names the operator's Compose project:
@@ -110,6 +111,8 @@ The hook protects it like the contract.
 | 25 | `rehearse` refused before running anything |
 | 30 | `verify` / `replay` / `status`: chain, policy or selection does not check out; or a command did its work but could not record it (`RESULT_UNRECORDED`, result included) |
 | 31 | the receipt chain lock is held or stuck (`justrunme lock inspect`) |
+| 40 | `judge`: a step did not match, or the 60 s budget was exceeded |
+| 41 | `judge`: Docker is not available or the demo database could not be prepared |
 
 Break-glass recovery. A normal `undo` refuses to restore when the receipt chain
 does not verify. If the chain is damaged and production must be restored anyway:
@@ -123,6 +126,37 @@ capture that is not operator-signed. It restores, always runs the recovery
 verification, never touches or repairs the chain, and records a signed,
 hash-linked entry with `evidence_status: "unverified"` in a separate journal
 under `JUSTRUNME_HOME/emergency/`. Exit 17 even when everything was restored.
+
+### `justrunme judge`
+
+```
+node src/cli/index.js judge --text
+```
+
+It uses none of your workspace or keys: its own temporary workspace, operator key
+and Compose project (`jrm-judge-<id>`), the demo's `postgres:16.3-alpine` image
+with the demo-only credentials. Every child process gets only `PATH`, `HOME`,
+`TMPDIR`, `LANG` and the `DOCKER_*` settings (the Docker client needs them), a
+throwaway `JUSTRUNME_HOME`, and git settings that ignore your git configuration;
+database and cloud credentials in your shell are not passed on (a test sets
+canary values and checks the output). The Docker daemon is resolved once through
+the Docker CLI (so `DOCKER_HOST`, `DOCKER_CONTEXT` and the configured context all
+count); anything but a local socket is refused, and every docker process of the
+judge then runs with that one socket as `DOCKER_HOST` and no `DOCKER_CONTEXT`. A
+local socket that is itself forwarded to another machine cannot be told apart. It takes
+no `--repo` or `--mission`, and a test checks that it creates nothing in a
+`JUSTRUNME_HOME` you set or in `~/.justrunme`.
+
+At the end, on failure, and on Ctrl-C or SIGTERM it removes the stack and the
+rehearsal copies' containers, volumes and networks and its own temporary
+directories (a test interrupts a run during a rehearsal and checks this). One
+leftover is possible when the run is interrupted mid-rehearsal: the rehearsal's
+temporary workspace directory `jrm-rehearsal-*` in the system temp directory.
+
+The 60 s budget covers setup and teardown and is judged only when the image was
+already on the machine; the first run that downloads it is timed and reported
+(`budget_enforced: false`) but not judged. Undo covers the Postgres database named
+in the contract and tracked files; nothing else. JustRunMe is not a sandbox.
 
 Every non-zero exit carries `error.code` (for example `COMPARISON_REQUIRED`,
 `PLAN_NOT_SELECTED`, `FIDELITY_MISMATCH`, `BASE_MISMATCH`) in the JSON output.
