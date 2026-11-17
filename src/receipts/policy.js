@@ -11,7 +11,10 @@
  *   4. verification refers to the undo receipt right before it;
  *   5. plan_selected refers to an earlier rehearsal receipt for every compared
  *      plan, with the same report and base, and never recommends a plan whose
- *      rehearsal was not SAFE.
+ *      rehearsal was not SAFE;
+ *   6. authorization_issued applies the latest plan_selected for its base and
+ *      authorizes the selected plan; without a selection only one plan may have
+ *      been rehearsed on that base (single-rehearsal mode).
  * Each break is a POLICY_VIOLATION finding naming the receipt and the rule.
  */
 
@@ -25,6 +28,8 @@ export function checkPolicy(receipts) {
   const findings = []
   const bySeqHash = new Map()
   const usedAuthorizations = new Set()
+  const latestRehearsal = new Map() // plan_id -> latest rehearsal receipt so far
+  const latestSelection = new Map() // base_hash -> latest plan_selected so far
   let lastOperatorReceipt = null
   const violation = (r, rule) => findings.push({ seq: r.seq, kind: 'POLICY_VIOLATION', rule, problem: `${r.kind}: ${rule}` })
   const earlier = (ref) => (ref ? bySeqHash.get(ref) : undefined)
@@ -35,6 +40,23 @@ export function checkPolicy(receipts) {
       if (!reh || reh.kind !== 'rehearsal') violation(r, 'must refer to an earlier rehearsal receipt')
       else if (reh.verdict !== 'SAFE') violation(r, `refers to a rehearsal with verdict ${reh.verdict}`)
       else if (reh.subject?.plan_id !== r.subject?.plan_id) violation(r, 'refers to a rehearsal of another plan')
+      // T17 selection binding, checked from the chain alone.
+      const base = reh?.subject?.base_hash
+      if (r.refs?.selection) {
+        const s = earlier(r.refs.selection)
+        if (!s || s.kind !== 'plan_selected') violation(r, 'must refer to an earlier plan_selected receipt')
+        else if (s.subject?.recommended !== r.subject?.plan_id) violation(r, 'authorized a plan other than the selected one')
+        else if (s.subject?.base_hash !== base) violation(r, 'applied a selection made on another base')
+        else if (s !== latestSelection.get(base)) violation(r, 'applied a selection that a later comparison replaced')
+        else {
+          const compared = new Map((s.subject?.compared ?? []).map((c) => [c.plan_id, c.report_hash]))
+          const uncovered = [...latestRehearsal.values()].filter((x) => x.subject?.base_hash === base && compared.get(x.subject.plan_id) !== x.subject.report_hash)
+          if (uncovered.length > 0) violation(r, 'applied a selection that does not cover every plan rehearsed on this base')
+        }
+      } else if (typeof base === 'string') {
+        if (latestSelection.has(base)) violation(r, 'a plan selection exists for this base but was not applied')
+        else if ([...latestRehearsal.values()].filter((x) => x.subject?.base_hash === base).length > 1) violation(r, 'several plans were rehearsed on this base, but none was selected')
+      }
     }
     if (r.kind === 'run_result') {
       const ref = r.refs?.authorization
@@ -68,6 +90,8 @@ export function checkPolicy(receipts) {
       else if (undo !== lastOperatorReceipt) violation(r, 'must directly follow the undo it verifies')
     }
     bySeqHash.set(receiptHash(r), r)
+    if (r.kind === 'rehearsal' && typeof r.subject?.plan_id === 'string') latestRehearsal.set(r.subject.plan_id, r)
+    if (r.kind === 'plan_selected' && typeof r.subject?.base_hash === 'string') latestSelection.set(r.subject.base_hash, r)
     if (!CHAIN_MAINTENANCE.has(r.kind)) lastOperatorReceipt = r
   }
   return { ok: findings.length === 0, findings }

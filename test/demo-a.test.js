@@ -148,6 +148,9 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     assert.equal(safeReport.base_hash, dangerReport.base_hash)
     assert.notEqual(safeReport.plan_id, dangerReport.plan_id)
 
+    // Two plans on the same state: authorization needs a comparison first.
+    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'COMPARISON_REQUIRED')
+
     // T17: counterfactual replay of both measured plans; the rule, not an agent, picks.
     const cmp = comparePlans({ repoDir, keys, missionId: c.contract.id, planIds: [dangerReport.plan_id, safeReport.plan_id] })
     assert.equal(cmp.comparison.ranking.recommended, safeReport.plan_id)
@@ -161,6 +164,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
 
     const auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
     assert.match(auth.signature, /^[0-9a-f]{128}$/)
+    assert.deepEqual(auth.selection, { mode: 'selected', receipt: cmp.receipt_hash })
 
     // PR #5 condition 1: the authorization does not fit another plan ...
     const otherPlan = { ...c.contract, plan: [{ ...c.contract.plan[0], args: ['demo/migrations/003_consolidate_orders.sql'] }] }

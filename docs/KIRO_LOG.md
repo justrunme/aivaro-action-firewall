@@ -515,10 +515,28 @@ The operator's order is T16.1, counterfactual replay, CLI with exit codes, final
 - `FAILED` is excluded with `DATA LOSS`; this is stricter than the R15.4 text.
 - Duration is wall-clock and used as measured, with no tolerance; it is deterministic for the stored inputs, not across re-rehearsals.
 - Reports from before T17 have no conditions and are refused (`CONDITIONS_UNKNOWN`) rather than assumed comparable.
-- The selection does not yet gate authorization: a plan other than the selected one can still be authorized if its own rehearsal is SAFE. Binding authorization to the latest selection is a possible follow-up.
+- The selection gates authorization (added after the operator's review, see below).
 
 ### Verification (local, macOS)
 
 `test/compare.test.js`: 15 pass. Covered: each rule and the deciding rule; nothing recommended when nothing survives, with the removing rule per plan; property test (300 runs) that input order never changes the result and that a recommended plan is SAFE, reversible when possible and has the lowest duration of its pool; signed choice with a verifying chain, passing policy and a replay that re-derives both reports; refusal for a changed table checksum, another Compose project with identical data, different protected tables, missing conditions, an edited report, a report signed by another key, a report never recorded, an older report put back, too few, duplicate and malformed plan ids, and a chain that does not verify (nothing written); replay detects an edited comparison file; an operator-signed choice that contradicts the rule is caught by replay and by policy.
 
 Demo A now compares its dangerous and safe plans after both rehearsals on real Postgres: the safe plan is selected by R15.4.1, the dangerous one is removed with "verdict DATA LOSS" and 1 row lost in `orders`, the replay re-derives both reports, and the chain story is rehearsal, plan_selected, authorization, run. `npm test`: 227 pass, 0 fail. Docker Demo A and B with `JRM_DOCKER_TESTS=1`: 15 pass, 0 fail, 0 skipped.
+
+### PR 9 review (operator decisions and evidence checks)
+
+Operator decisions: `FAILED` stays excluded by R15.4.1; `failing_tests: null` is never read as zero failures and R15.4.2 stays "not applied" until tests are measured; the selection must bind authorization, a stale selection must grant nothing, and single-rehearsal mode stays; numbering stays.
+
+Checked in code, gaps closed, each with a test in `test/compare.test.js`:
+
+1. Stale signed report: a report is compared only if it is the one the latest rehearsal receipt for its plan recorded (an older genuine report put back is `NOT_IN_CHAIN`). For authorization, a selection counts only for the current base (below).
+2. Changed conditions or measured values: both are inside the signed report body; editing `conditions`, `rows_lost` or `duration_ms` is `REPORT_INVALID`. The measured rows are copied into the signed comparison file.
+3. Replay of every plan: `verifySelection` already walked every compared plan. Gap found: it did not check that the plan sets agree, so an extra row in `plans` would have taken part in the ranking unchecked. Now the plan sets of receipt, comparison file, measured rows and refs must be equal, and the report hashes of receipt and file must match. Tested with an operator-signed file whose losing plan has a changed duration (two findings for the loser) and one with an extra row.
+4. Selection from another state: new `src/compare/gate.js`, called by `authorizeMission` after the verdict and fidelity checks, on a verified chain. Only the latest `plan_selected` with the current `base_hash` counts. It must replay, recommend a plan, recommend this plan (`PLAN_NOT_SELECTED`), have compared exactly this report (`SELECTION_OUTDATED`) and cover every plan whose latest rehearsal is on this base (`SELECTION_INCOMPLETE`). Without a selection for this base: one plan is single-rehearsal mode; several plans are `COMPARISON_REQUIRED`. A selection on another base grants nothing and blocks nothing. The plan's latest rehearsal must be this report on this base (`REHEARSAL_NOT_ON_BASE`). The signed authorization carries `selection: { mode, receipt }`; the `authorization_issued` receipt carries the mode and a ref to the selection. Policy checks the same binding from the chain alone.
+5. `plan_comparison_refused` is a record only: it grants nothing and does not replace a selection. Retrying with a smaller set of plans cannot help: a comparison that leaves out a plan rehearsed on the same base is `SELECTION_INCOMPLETE`, and so is a selection made before a new plan was rehearsed.
+
+Demo A: authorizing the safe plan before the comparison is `COMPARISON_REQUIRED`; after it, the authorization carries `selection.mode = selected` and the `plan_selected` receipt. Demo B (one plan) runs in single-rehearsal mode unchanged.
+
+Residual: when a stored report has since been replaced, replay checks its verdict and duration against the rehearsal receipt but cannot re-derive rows lost; it reports how many reports it re-derived (`reports_rechecked`).
+
+Verification (local, macOS): `test/compare.test.js` 24 pass; `npm test` 236 pass, 0 fail; Docker Demo A and B with `JRM_DOCKER_TESTS=1` 15 pass, 0 fail, 0 skipped.

@@ -109,7 +109,15 @@ export function verifySelection({ repoDir, home, publicKey, missionId, receiptHa
   if (body.operator_pubkey !== publicKeyHex(publicKey) || !verifyValue(publicKey, body, signature)) findings.push('comparison signature does not verify')
   if (body.base_hash !== sel.base_hash) findings.push('comparison base_hash differs from the receipt')
 
-  // Each compared plan: bound to its signed rehearsal receipt, measured values consistent with it.
+  // The same set of plans everywhere: receipt, comparison file, measured rows, refs.
+  // Otherwise a row could take part in the ranking without being checked below.
+  const ids = (list) => canonicalJson((Array.isArray(list) ? list : []).map((x) => x?.plan_id).sort())
+  const refIds = canonicalJson(Object.keys(found.receipt.refs ?? {}).filter((k) => k.startsWith('rehearsal:')).map((k) => k.slice(10)).sort())
+  const want = ids(sel.compared)
+  if (ids(body.compared) !== want || ids(body.plans) !== want || refIds !== want) findings.push('compared plans differ between receipt, comparison file, measured rows and refs')
+  if (canonicalJson(sel.compared) !== canonicalJson((body.compared ?? []).map(({ plan_id, report_hash }) => ({ plan_id, report_hash })))) findings.push('report hashes differ between receipt and comparison file')
+
+  // Each compared plan, winner and losers alike: bound to its signed rehearsal receipt, measured values consistent with it.
   const byHash = new Map(chain.receipts.map((r) => [hashValue(r), r]))
   let rechecked = 0
   for (const c of body.compared ?? []) {
@@ -124,8 +132,13 @@ export function verifySelection({ repoDir, home, publicKey, missionId, receiptHa
     if (!row || row.verdict !== reh.verdict || row.duration_ms !== reh.subject.duration_ms) findings.push(`${c.plan_id}: measured values differ from the rehearsal receipt`)
     // If the stored report is still the compared one, re-derive every measured value from it.
     const rp = reportPath(repoDir, missionId, c.plan_id)
-    if (existsSync(rp)) {
-      const report = JSON.parse(readFileSync(rp, 'utf8'))
+    let report = null
+    try {
+      report = existsSync(rp) ? JSON.parse(readFileSync(rp, 'utf8')) : null
+    } catch {
+      report = null // unreadable now: checked against the receipt only, not counted as re-derived
+    }
+    if (report) {
       if (hashValue(report) === c.report_hash) {
         rechecked++
         if (canonicalJson(measuredRow(report)) !== canonicalJson(row)) findings.push(`${c.plan_id}: measured values differ from the stored report`)

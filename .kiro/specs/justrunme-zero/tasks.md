@@ -190,6 +190,7 @@ T17 notes:
 - Failing tests are not measured during rehearsal yet (`tests_measured: false`); every plan shows `failing_tests: null` and R15.4.2 reports "not applied". Tests measured for some plans but not others is refused as not comparable.
 - Rehearsal duration is wall-clock time and varies with machine load; R15.4.4 uses it as measured, without tolerance.
 - Reports written before T17 have no `conditions` and are refused (`CONDITIONS_UNKNOWN`); rehearse again.
+- Selection binds authorization (`src/compare/gate.js`, operator decision on PR 9): only the latest `plan_selected` for the current `base_hash` counts; it must replay, select this plan, have compared this exact report and cover every plan whose latest rehearsal is on this base. No selection: one plan on the base is single-rehearsal mode, several are `COMPARISON_REQUIRED`. A selection on another base grants nothing. Policy checks the same binding from the chain.
 
 ---
 

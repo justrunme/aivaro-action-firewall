@@ -18,6 +18,7 @@ import { baseHash } from '../src/fidelity/gate.js'
 import { reportPath } from '../src/rehearsal/engine.js'
 import { rankPlans } from '../src/compare/rank.js'
 import { comparePlans, comparisonPath, verifySelection } from '../src/compare/select.js'
+import { selectionGate } from '../src/compare/gate.js'
 
 const MISSION = 'mission-compare'
 const dirs = []
@@ -300,5 +301,177 @@ describe('T17 replay of a recorded selection', () => {
     const p = checkPolicy(chainOf(dir).receipts)
     assert.equal(p.ok, false)
     assert.match(p.findings[0].rule, /verdict is DATA LOSS/)
+  })
+})
+
+// PR 9 review: integrity of the evidence and the binding of the choice to authorization.
+const BASE_HASH = baseHash({ base: BASE })
+const gate = (dir, plan, base = BASE_HASH) => {
+  const report = JSON.parse(readFileSync(reportPath(dir, MISSION, plan), 'utf8'))
+  return selectionGate({
+    receipts: chainOf(dir).receipts,
+    planId: plan,
+    reportHash: hashValue(report),
+    baseHash: base,
+    replay: (h) => verifySelection({ repoDir: dir, home: keys.home, publicKey: keys.publicKey, missionId: MISSION, receiptHash: h }),
+  })
+}
+const replayOf = (dir) => verifySelection({ repoDir: dir, home: keys.home, publicKey: keys.publicKey, missionId: MISSION })
+const rehearsalHash = (dir, plan) => hashValue(chainOf(dir).receipts.filter((r) => r.kind === 'rehearsal' && r.subject.plan_id === plan).at(-1))
+
+/** Write an operator-signed comparison file and its plan_selected receipt, bypassing comparePlans. */
+function forgeSelection(dir, { plans, compared, ranking }) {
+  const body = { version: 1, mission_id: MISSION, base_hash: BASE_HASH, conditions: CONDITIONS, compared, plans, ranking, compared_at: '2026-11-17T10:00:00.000Z', operator_pubkey: publicKeyHex(keys.publicKey) }
+  const signed = { ...body, signature: signValue(keys.privateKey, body) }
+  const h = hashValue(signed)
+  mkdirSync(path.dirname(comparisonPath(dir, MISSION, h)), { recursive: true })
+  writeFileSync(comparisonPath(dir, MISSION, h), JSON.stringify(signed))
+  appendReceipt({
+    repoDir: dir,
+    keys,
+    missionId: MISSION,
+    kind: 'plan_selected',
+    verdict: ranking.recommended ? 'selected' : 'none',
+    subject: { base_hash: BASE_HASH, comparison_hash: h, recommended: ranking.recommended, decided_by: ranking.decided_by, compared: compared.map(({ plan_id, report_hash }) => ({ plan_id, report_hash })), removed: ranking.removed },
+    refs: Object.fromEntries(compared.map((c) => [`rehearsal:${c.plan_id}`, c.rehearsal_receipt])),
+  })
+}
+
+describe('PR 9 review: signed inputs cannot be changed or swapped', () => {
+  it('editing conditions or a measured value in a stored report breaks its signature', () => {
+    const dir = tmp('jrm-cmp-')
+    const a = rehearsed(dir, { plan: pid(1) })
+    rehearsed(dir, { plan: pid(2) })
+    const file = reportPath(dir, MISSION, pid(1))
+    writeFileSync(file, JSON.stringify({ ...a, conditions: { ...a.conditions, protected_tables: ['patches'] } }))
+    assert.throws(() => compare(dir, [pid(1), pid(2)]), refusedWith('REPORT_INVALID', (e) => /signature/.test(e.message)))
+    const edited = structuredClone(a)
+    edited.tables.orders.rows_lost = 0
+    edited.duration_ms = 1
+    writeFileSync(file, JSON.stringify(edited))
+    assert.throws(() => compare(dir, [pid(1), pid(2)]), refusedWith('REPORT_INVALID', (e) => /signature/.test(e.message)))
+  })
+
+  it('replay checks every compared plan, not only the winner, and the plan sets must agree', () => {
+    const dir = tmp('jrm-cmp-')
+    const loser = rehearsed(dir, { plan: pid(1), verdict: 'DATA LOSS', ordersLost: 1, duration: 300 })
+    const winner = rehearsed(dir, { plan: pid(2), duration: 900 })
+    const row = (r, over = {}) => ({ plan_id: r.plan_id, verdict: r.verdict, rows_lost: { orders: r.tables.orders.rows_lost, patches: 0 }, failing_tests: null, duration_ms: r.duration_ms, all_reversible: true, irreversible_actions: [], ...over })
+    const compared = [loser, winner].map((r) => ({ plan_id: r.plan_id, report_hash: hashValue(r), rehearsal_receipt: rehearsalHash(dir, r.plan_id) }))
+    // The loser's measured duration is changed in an otherwise consistent, operator-signed file.
+    const plans = [row(loser, { duration_ms: 1 }), row(winner)]
+    forgeSelection(dir, { plans, compared, ranking: rankPlans(plans) })
+    const v = replayOf(dir)
+    assert.equal(v.ok, false)
+    assert.ok(v.findings.includes(`${pid(1)}: measured values differ from the rehearsal receipt`), JSON.stringify(v.findings))
+    assert.ok(v.findings.includes(`${pid(1)}: measured values differ from the stored report`))
+
+    // An extra measured row that no receipt refers to.
+    const dir2 = tmp('jrm-cmp-')
+    const l2 = rehearsed(dir2, { plan: pid(1), verdict: 'DATA LOSS', ordersLost: 1 })
+    const w2 = rehearsed(dir2, { plan: pid(2) })
+    const c2 = [l2, w2].map((r) => ({ plan_id: r.plan_id, report_hash: hashValue(r), rehearsal_receipt: rehearsalHash(dir2, r.plan_id) }))
+    const p2 = [row(l2), row(w2), row(w2, { plan_id: pid(0), duration_ms: 1 })]
+    forgeSelection(dir2, { plans: p2, compared: c2, ranking: rankPlans(p2) })
+    assert.ok(replayOf(dir2).findings.includes('compared plans differ between receipt, comparison file, measured rows and refs'))
+  })
+})
+
+describe('PR 9 review: the selection binds authorization', () => {
+  it('only the selected plan passes; the other plan is refused', () => {
+    const dir = tmp('jrm-cmp-')
+    rehearsed(dir, { plan: pid(1), duration: 900 })
+    rehearsed(dir, { plan: pid(2), duration: 400 })
+    compare(dir, [pid(1), pid(2)])
+    assert.deepEqual(gate(dir, pid(2)).mode, 'selected')
+    assert.throws(() => gate(dir, pid(1)), refusedWith('PLAN_NOT_SELECTED'))
+  })
+
+  it('one plan on this state keeps single-rehearsal mode; several plans without a selection are refused', () => {
+    const dir = tmp('jrm-cmp-')
+    rehearsed(dir, { plan: pid(1) })
+    assert.deepEqual(gate(dir, pid(1)), { mode: 'single_rehearsal', receipt: null, stale_selection_ignored: false })
+    rehearsed(dir, { plan: pid(2) })
+    assert.throws(() => gate(dir, pid(1)), refusedWith('COMPARISON_REQUIRED', (e) => e.detail.plans.length === 2))
+  })
+
+  it('a selection made on another state grants nothing: it neither authorizes its plan nor blocks a fresh one', () => {
+    const dir = tmp('jrm-cmp-')
+    rehearsed(dir, { plan: pid(1), verdict: 'DATA LOSS', ordersLost: 1 })
+    rehearsed(dir, { plan: pid(2) })
+    compare(dir, [pid(1), pid(2)])
+    const drifted = structuredClone(BASE)
+    drifted.postgres.pumpkin_patch.tables.orders.rows = 4
+    const newBase = baseHash({ base: drifted })
+    // The selected plan was not rehearsed on the new state.
+    assert.throws(() => gate(dir, pid(2), newBase), refusedWith('REHEARSAL_NOT_ON_BASE'))
+    // A plan rehearsed on the new state stands on its own rehearsal.
+    rehearsed(dir, { plan: pid(3), base: drifted })
+    assert.deepEqual(gate(dir, pid(3), newBase), { mode: 'single_rehearsal', receipt: null, stale_selection_ignored: true })
+  })
+
+  it('cherry-picking fails: leaving a plan out of the comparison, or rehearsing one afterwards, voids the selection', () => {
+    const dir = tmp('jrm-cmp-')
+    rehearsed(dir, { plan: pid(1), duration: 900 })
+    rehearsed(dir, { plan: pid(2), duration: 400 })
+    rehearsed(dir, { plan: pid(3), verdict: 'DATA LOSS', ordersLost: 1 })
+    compare(dir, [pid(1), pid(3)]) // pid(2), the faster SAFE plan, left out
+    assert.throws(() => gate(dir, pid(1)), refusedWith('SELECTION_INCOMPLETE', (e) => e.detail.plans[0] === pid(2)))
+    compare(dir, [pid(1), pid(2), pid(3)])
+    assert.equal(gate(dir, pid(2)).mode, 'selected')
+    rehearsed(dir, { plan: pid(4), duration: 100 })
+    assert.throws(() => gate(dir, pid(2)), refusedWith('SELECTION_INCOMPLETE', (e) => e.detail.plans[0] === pid(4)))
+  })
+
+  it('a refused comparison changes nothing, and retrying cannot get around the gate', () => {
+    const dir = tmp('jrm-cmp-')
+    rehearsed(dir, { plan: pid(1), duration: 900 })
+    rehearsed(dir, { plan: pid(2), duration: 400 })
+    compare(dir, [pid(1), pid(2)])
+    assert.throws(() => compare(dir, [pid(1), pid(2), '../x']), refusedWith('INVALID_PLAN_ID'))
+    assert.throws(() => compare(dir, [pid(1)]), refusedWith('TOO_FEW_PLANS'))
+    assert.equal(chainOf(dir).receipts.at(-1).kind, 'plan_comparison_refused')
+    // The earlier, valid selection still decides.
+    assert.equal(gate(dir, pid(2)).mode, 'selected')
+    assert.throws(() => gate(dir, pid(1)), refusedWith('PLAN_NOT_SELECTED'))
+  })
+
+  it('a plan rehearsed again after the comparison, an edited selection, and "none" are refused', () => {
+    const dir = tmp('jrm-cmp-')
+    rehearsed(dir, { plan: pid(1), verdict: 'DATA LOSS', ordersLost: 1 })
+    rehearsed(dir, { plan: pid(2) })
+    const r = compare(dir, [pid(1), pid(2)])
+    const file = comparisonPath(dir, MISSION, r.comparison_hash)
+    const original = readFileSync(file)
+    writeFileSync(file, original.toString().replace('"duration_ms": 1000', '"duration_ms": 999'))
+    assert.throws(() => gate(dir, pid(2)), refusedWith('SELECTION_INVALID'))
+    writeFileSync(file, original)
+    rehearsed(dir, { plan: pid(2), duration: 1200 })
+    assert.throws(() => gate(dir, pid(2)), refusedWith('SELECTION_OUTDATED'))
+
+    const none = tmp('jrm-cmp-')
+    rehearsed(none, { plan: pid(1), verdict: 'DATA LOSS', ordersLost: 1 })
+    rehearsed(none, { plan: pid(2), verdict: 'FAILED' })
+    compare(none, [pid(1), pid(2)])
+    assert.throws(() => gate(none, pid(2)), refusedWith('NO_PLAN_SELECTED'))
+  })
+
+  it('policy checks the binding from the chain alone', () => {
+    const add = (dir, plan, refs) => appendReceipt({ repoDir: dir, keys, missionId: MISSION, kind: 'authorization_issued', verdict: 'allow', subject: { plan_id: plan }, refs })
+    const dir = tmp('jrm-cmp-')
+    rehearsed(dir, { plan: pid(1), duration: 900 })
+    rehearsed(dir, { plan: pid(2), duration: 400 })
+    add(dir, pid(1), { rehearsal: rehearsalHash(dir, pid(1)) })
+    assert.match(checkPolicy(chainOf(dir).receipts).findings.at(-1).rule, /several plans were rehearsed on this base, but none was selected/)
+
+    const dir2 = tmp('jrm-cmp-')
+    rehearsed(dir2, { plan: pid(1), duration: 900 })
+    rehearsed(dir2, { plan: pid(2), duration: 400 })
+    const sel = compare(dir2, [pid(1), pid(2)]).receipt_hash
+    add(dir2, pid(1), { rehearsal: rehearsalHash(dir2, pid(1)), selection: sel })
+    add(dir2, pid(1), { rehearsal: rehearsalHash(dir2, pid(1)) })
+    add(dir2, pid(2), { rehearsal: rehearsalHash(dir2, pid(2)), selection: sel })
+    const rules = checkPolicy(chainOf(dir2).receipts).findings.map((f) => f.rule)
+    assert.deepEqual(rules, ['authorized a plan other than the selected one', 'a plan selection exists for this base but was not applied'])
   })
 })
