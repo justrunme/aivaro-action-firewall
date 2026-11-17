@@ -1,0 +1,69 @@
+/**
+ * Recovery verification (R5.1 to R5.3, R5.5 to R5.7).
+ *
+ * Every check is computed from the live state and compared with the capture.
+ * PASS only if every check passes; a restore tool's exit status is never used
+ * as evidence. Each failing check carries expected and actual values.
+ */
+
+import { measureDatabase } from '../rehearsal/measure.js'
+import { httpStatusInService, imageDigests, psql } from '../rehearsal/compose.js'
+import { verifyFiles } from '../capture/files.js'
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/** Exponential back-off, at most maxMs in total (R5.3). */
+export async function pollHealth(target, health, maxMs = 30000) {
+  const started = Date.now()
+  let wait = 250
+  let status = 0
+  for (;;) {
+    status = await httpStatusInService(target, health.service, health.url)
+    if (status === 200 || Date.now() - started + wait > maxMs) return status
+    await sleep(wait)
+    wait = Math.min(wait * 2, 4000)
+  }
+}
+
+/**
+ * @param {object} a
+ * @param {string} a.repoDir
+ * @param {any} a.manifest verified capture manifest
+ * @param {import('../rehearsal/compose.js').Target} a.target real target, composeFile absolute
+ * @param {{ service: string, url: string } | null} [a.health]
+ */
+export async function verifyRecovery({ repoDir, manifest, target, health = null }) {
+  const checks = [...verifyFiles(repoDir, manifest.files)]
+
+  for (const db of manifest.postgres) {
+    let live = null
+    try {
+      live = await measureDatabase((sql) => psql({ ...target, dbName: db.name }, { sql }))
+    } catch (err) {
+      checks.push({ check: 'postgres_reachable', resource: db.name, expected: 'reachable', actual: String(err.message), ok: false })
+      continue
+    }
+    const want = db.measurement
+    checks.push({ check: 'schema_hash', resource: db.name, expected: want.schema_hash, actual: live.schema_hash, ok: want.schema_hash === live.schema_hash })
+    const tables = [...new Set([...Object.keys(want.tables), ...Object.keys(live.tables)])].sort()
+    for (const t of tables) {
+      const w = want.tables[t]
+      const l = live.tables[t]
+      checks.push({ check: 'row_count', resource: `${db.name}.${t}`, expected: w?.rows ?? null, actual: l?.rows ?? null, ok: (w?.rows ?? null) === (l?.rows ?? null) })
+      checks.push({ check: 'table_checksum', resource: `${db.name}.${t}`, expected: w?.checksum ?? null, actual: l?.checksum ?? null, ok: (w?.checksum ?? null) === (l?.checksum ?? null) })
+    }
+  }
+
+  const images = await imageDigests(target)
+  for (const [service, image] of Object.entries(manifest.containers.images)) {
+    checks.push({ check: 'container_image', resource: service, expected: image, actual: images[service] ?? null, ok: images[service] === image })
+  }
+
+  if (health) {
+    const status = await pollHealth(target, health)
+    checks.push({ check: 'health', resource: `${health.service} ${health.url}`, expected: 200, actual: status, ok: status === 200 })
+  }
+
+  const failed = checks.filter((c) => !c.ok)
+  return { status: failed.length === 0 ? 'PASS' : 'FAIL', checks, failed, integration_tests: 'not configured' }
+}
