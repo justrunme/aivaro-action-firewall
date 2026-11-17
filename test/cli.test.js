@@ -20,6 +20,7 @@ import { comparisonPath } from '../src/compare/select.js'
 import { EXIT } from '../src/cli/codes.js'
 import { printable, scrubPaths } from '../src/cli/index.js'
 import { errorSummary } from '../src/privacy/redact.js'
+import { appendEmergencyRecord, emergencyJournalPath, verifyEmergencyJournal } from '../src/undo/emergency.js'
 
 const CLI = new URL('../src/cli/index.js', import.meta.url).pathname
 const MISSION = 'mission-cli-test'
@@ -386,5 +387,41 @@ describe('PR 10 review: output hygiene', () => {
     assert.ok(!s.includes('hunter2'), s)
     assert.match(s, /violates not-null constraint/)
     assert.match(s, /postgres:\/\/\[REDACTED\]@db:5432/)
+  })
+})
+
+describe('Break-glass recovery (operator decision on PR 10)', () => {
+  it('the flag exists only for undo, and needs a reason and the capture id typed again', () => {
+    const dir = workspace()
+    for (const args of [['verify', '--emergency-recovery'], ['run', '--emergency-recovery'], ['status', '--confirm', 'x']]) {
+      const r = cli(dir, args)
+      assert.deepEqual([r.code, r.out.error.code], [EXIT.USAGE, 'USAGE'], JSON.stringify(args))
+    }
+    const cap = 'cap-20261117000000-abcdef'
+    assert.equal(cli(dir, ['undo', cap, '--emergency-recovery', '--confirm', cap]).out.error.code, 'EMERGENCY_REASON_REQUIRED')
+    assert.equal(cli(dir, ['undo', cap, '--emergency-recovery', '--reason', 'short', '--confirm', cap]).out.error.code, 'EMERGENCY_REASON_REQUIRED')
+    assert.equal(cli(dir, ['undo', cap, '--emergency-recovery', '--reason', 'chain damaged after crash', '--confirm', 'cap-20261117000000-ffffff']).out.error.code, 'CONFIRMATION_REQUIRED')
+    // A capture that is not operator-signed is refused even in break-glass mode.
+    const r = cli(dir, ['undo', cap, '--emergency-recovery', '--reason', 'chain damaged after crash', '--confirm', cap])
+    assert.deepEqual([r.code, r.out.error.code], [EXIT.UNDO_REFUSED, 'CAPTURE_INVALID'])
+  })
+
+  it('the emergency journal is signed and hash-linked: an edited or removed entry is detected', () => {
+    const dir = workspace()
+    const home = tmp('jrm-cli-glass-')
+    const k = loadOrCreateKeys(home)
+    appendEmergencyRecord({ repoDir: dir, keys: k, missionId: MISSION, record: { kind: 'emergency_undo', capture_id: 'cap-1', reason: 'first' } })
+    appendEmergencyRecord({ repoDir: dir, keys: k, missionId: MISSION, record: { kind: 'emergency_undo', capture_id: 'cap-2', reason: 'second' } })
+    const ok = verifyEmergencyJournal({ home, publicKey: k.publicKey, missionId: MISSION, repoDir: dir })
+    assert.equal(ok.ok, true, JSON.stringify(ok.findings))
+    assert.deepEqual(ok.entries.map((e) => [e.seq, e.evidence_status]), [[0, 'unverified'], [1, 'unverified']])
+    const file = emergencyJournalPath(home, MISSION, dir)
+    assert.ok(file.startsWith(home), 'kept with the operator key, outside the workspace')
+    const [first, second] = readFileSync(file, 'utf8').trim().split('\n')
+    writeFileSync(file, first.replace('first', 'FIRST') + '\n' + second + '\n')
+    assert.equal(verifyEmergencyJournal({ home, publicKey: k.publicKey, missionId: MISSION, repoDir: dir }).ok, false)
+    writeFileSync(file, second + '\n')
+    const cut = verifyEmergencyJournal({ home, publicKey: k.publicKey, missionId: MISSION, repoDir: dir })
+    assert.ok(cut.findings.some((f) => /sequence gap|previous-hash/.test(f)))
   })
 })

@@ -60,5 +60,6 @@ export function loadTarget(repoDir) {
     if (!HEALTH_URL_RE.test(h.url)) throw new ConfigError('TARGET_INVALID', 'health.url must be http://<host>[:port]/<path> (letters, digits, / _ -)')
     health = { service: h.service, url: h.url }
   }
-  return { target, health }
+  // health travels with the target so the fingerprint binds it (fidelity/fingerprint.js).
+  return { target: { ...target, health }, health }
 }

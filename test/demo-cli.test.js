@@ -19,6 +19,8 @@ import { stringify } from 'yaml'
 import { measureDatabase } from '../src/rehearsal/measure.js'
 import { down, psql, up, writeNoPortsOverride } from '../src/rehearsal/compose.js'
 import { EXIT } from '../src/cli/codes.js'
+import { verifyEmergencyJournal } from '../src/undo/emergency.js'
+import { loadPublicKey } from '../src/receipts/keys.js'
 
 const enabled = process.platform === 'linux' || process.env.JRM_DOCKER_TESTS === '1'
 const DEMO = new URL('../demo/', import.meta.url).pathname
@@ -67,6 +69,9 @@ describe('Demo CLI: the whole mission through `justrunme`, with exit codes', { s
       const r = await psql(realTarget, { input: readFileSync(path.join(repoDir, 'demo/migrations', f)) })
       assert.equal(r.code, 0, r.stderr)
     }
+    // A second database user that can read everything: same data, different rights.
+    const role = await psql(realTarget, { sql: 'CREATE ROLE demo_reader LOGIN; GRANT SELECT ON ALL TABLES IN SCHEMA public TO demo_reader;' })
+    assert.equal(role.code, 0, role.stderr)
   })
 
   after(async () => {
@@ -113,15 +118,58 @@ describe('Demo CLI: the whole mission through `justrunme`, with exit codes', { s
     assert.equal(auth.code, EXIT.OK, JSON.stringify(auth.out))
     assert.equal(auth.out.result.selection.mode, 'selected')
 
+    // The database user and the health probe are part of the environment identity.
+    const targetFile = path.join(repoDir, 'justrunme.target.json')
+    const targetText = readFileSync(targetFile, 'utf8')
+    for (const [change, component] of [[{ db_user: 'demo_reader' }, 'base.target.db_user'], [{ health: { service: 'db', url: 'http://localhost/health' } }, 'base.target.health']]) {
+      writeFileSync(targetFile, JSON.stringify({ ...JSON.parse(targetText), ...change }))
+      const drift = cli('run')
+      assert.deepEqual([drift.code, drift.out.error.code], [EXIT.RUN_REFUSED, 'FIDELITY_MISMATCH'], JSON.stringify(drift.out))
+      // Objects are compared leaf by leaf: health shows up as base.target.health.service / .url.
+      assert.ok(drift.out.error.detail.some((d) => d.component === component || d.component.startsWith(component + '.')), JSON.stringify(drift.out.error.detail))
+    }
+    writeFileSync(targetFile, targetText)
+
     const run = cli('run')
     assert.equal(run.code, EXIT.OK, JSON.stringify(run.out))
     assert.ok((await measureReal()).columns.orders.some((c) => c.startsWith('status ')))
     assert.equal(cli('run').code, EXIT.RUN_REFUSED, 'authorization is single use')
     assert.equal(cli('verify').code, EXIT.OK)
+    const capture = run.out.result.capture_id
 
-    const undo = cli('undo', run.out.result.capture_id)
+    // Break-glass: a damaged chain refuses a normal undo; emergency recovery restores,
+    // verifies, records to the separate journal, leaves the chain untouched, exits 17.
+    const chainFile = path.join(repoDir, '.justrunme/missions/mission-demo-cli/receipts.jsonl')
+    const good = readFileSync(chainFile)
+    const damaged = Buffer.from(good)
+    damaged[30] = damaged[30] ^ 1
+    writeFileSync(chainFile, damaged)
+    const normal = cli('undo', capture)
+    assert.deepEqual([normal.code, normal.out.error.code], [EXIT.UNDO_REFUSED, 'CHAIN_INVALID'])
+    assert.equal(cli('undo', capture, '--emergency-recovery', '--confirm', capture).out.error.code, 'EMERGENCY_REASON_REQUIRED')
+    assert.equal(cli('undo', capture, '--emergency-recovery', '--reason', 'chain damaged, restore production').out.error.code, 'CONFIRMATION_REQUIRED')
+    const glass = cli('undo', capture, '--emergency-recovery', '--reason', 'chain damaged, restore production', '--confirm', capture)
+    assert.equal(glass.code, EXIT.EMERGENCY_RECOVERED, JSON.stringify(glass.out))
+    assert.equal(glass.out.ok, false, 'never reported as a normal success')
+    assert.equal(glass.out.result.status, 'RECOVERED')
+    assert.equal(glass.out.result.evidence_status, 'unverified')
+    assert.equal(glass.out.result.verification.status, 'PASS')
+    assert.match(glass.out.result.emergency_record, /^sha256:/)
+    assert.deepEqual(readFileSync(chainFile), damaged, 'the damaged chain is neither repaired nor extended')
+    const restored = await measureReal()
+    assert.deepEqual(restored.tables, before.tables)
+    assert.ok(!restored.columns.orders.some((c) => c.startsWith('status ')))
+    const journal = verifyEmergencyJournal({ home, publicKey: loadPublicKey(home), missionId: 'mission-demo-cli', repoDir })
+    assert.equal(journal.ok, true, JSON.stringify(journal.findings))
+    assert.deepEqual([journal.count, journal.entries[0].kind, journal.entries[0].evidence_status, journal.entries[0].recovery_status], [1, 'emergency_undo', 'unverified', 'RECOVERED'])
+
+    // With the chain intact again, break-glass is refused and the normal undo works.
+    writeFileSync(chainFile, good)
+    assert.equal(cli('undo', capture, '--emergency-recovery', '--reason', 'not needed any more', '--confirm', capture).out.error.code, 'EMERGENCY_NOT_NEEDED')
+    const undo = cli('undo', capture)
     assert.equal(undo.code, EXIT.OK, JSON.stringify(undo.out))
     assert.equal(undo.out.result.status, 'RECOVERED')
+    assert.equal(undo.out.result.evidence_status, 'recorded')
     const after = await measureReal()
     assert.deepEqual(after.tables, before.tables)
     assert.ok(!after.columns.orders.some((c) => c.startsWith('status ')))

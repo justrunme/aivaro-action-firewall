@@ -33,6 +33,8 @@ const OPTIONS = {
   receipt: { type: 'string' },
   seq: { type: 'string' },
   resource: { type: 'string', multiple: true },
+  'emergency-recovery': { type: 'boolean', default: false },
+  confirm: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 }
 
@@ -101,6 +103,7 @@ export async function main(argv) {
     if (opts.help) return { exit: EXIT.OK, text: opts.text, output: { command, ok: true, exit_code: EXIT.OK, result: { usage: USAGE } } }
     if (!command) throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
     if (opts.mission !== undefined && !MISSION_RE.test(opts.mission)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'invalid --mission')
+    if ((opts['emergency-recovery'] || opts.confirm !== undefined) && command !== 'undo') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--emergency-recovery and --confirm exist only for undo')
     const repoDir = path.resolve(opts.repo ?? process.cwd())
     const r = await dispatch(command, rest, repoDir, opts)
     exit = r.exit

@@ -14,6 +14,7 @@ import { verifyRecovery } from './verify.js'
 import { appendReceipt, findLast, verifyChain } from '../receipts/chain.js'
 import { hashValue } from '../util/canonical.js'
 import { errorSummary } from '../privacy/redact.js'
+import { appendEmergencyRecord } from './emergency.js'
 
 export const SUPPORTED_RESOURCES = ['files', 'config_files', 'postgres', 'containers']
 
@@ -34,15 +35,21 @@ export class UndoRefused extends Error {
  * @param {{ service: string, url: string } | null} [a.health]
  * @param {string[]} [a.resources] subset to restore; anything unsupported is refused
  */
-export async function undoMission({ repoDir, missionId, captureId, target, keys, health = null, resources }) {
+export async function undoMission({ repoDir, missionId, captureId, target, keys, health = null, resources, emergency = null }) {
   const publicKey = keys?.publicKey
   const unsupported = (resources ?? []).filter((r) => !SUPPORTED_RESOURCES.includes(r))
   if (unsupported.length > 0) throw new UndoRefused('UNSUPPORTED_RESOURCE', `undo is not supported for: ${unsupported.join(', ')}`)
   const { manifest, problem } = loadManifest(repoDir, missionId, captureId, publicKey)
   if (problem) throw new UndoRefused('CAPTURE_INVALID', problem)
-  // Nothing is restored on a chain that could not record the undo and its verification.
+  // Nothing is restored on a chain that could not record the undo and its verification,
+  // except as an explicit break-glass recovery (emergency.js), and only when needed.
   const chain = verifyChain({ repoDir, home: keys.home, publicKey, missionId })
-  if (!chain.ok) throw new UndoRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}; nothing was restored`)
+  if (emergency) {
+    if (typeof emergency.reason !== 'string' || emergency.reason.trim().length < 8) throw new UndoRefused('EMERGENCY_REASON_REQUIRED', 'emergency recovery needs a written reason')
+    if (chain.ok) throw new UndoRefused('EMERGENCY_NOT_NEEDED', 'the receipt chain verifies; use a normal undo')
+  } else if (!chain.ok) {
+    throw new UndoRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}; nothing was restored (break-glass: --emergency-recovery)`)
+  }
 
   const real = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
   const dir = captureDir(repoDir, missionId, captureId)
@@ -92,7 +99,32 @@ export async function undoMission({ repoDir, missionId, captureId, target, keys,
     restored_ok: results.every((r) => r.status === 'succeeded'),
     verification,
     status,
+    evidence_status: emergency ? 'unverified' : 'recorded',
     receipts: { undo: null, verification: null },
+  }
+
+  if (emergency) {
+    // Break-glass: evidence goes to the separate signed journal, never into the damaged chain.
+    try {
+      outcome.emergency_record = appendEmergencyRecord({
+        repoDir,
+        keys,
+        missionId,
+        record: {
+          kind: 'emergency_undo',
+          capture_id: captureId,
+          manifest_hash: hashValue(manifest),
+          reason: emergency.reason,
+          chain_findings: chain.findings.slice(0, 5).map((f) => f.problem),
+          resources: results.map((r) => ({ resource: r.resource, status: r.status, detail: r.detail })),
+          verification: { status: verification.status, checks: verification.checks.length, failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource })) },
+          recovery_status: status,
+        },
+      }).hash
+    } catch {
+      outcome.receipt_error = 'JOURNAL_FAILED'
+    }
+    return outcome
   }
 
   // R4.5, R5.5, R5.6: signed undo receipt, then the verification receipt right after it.

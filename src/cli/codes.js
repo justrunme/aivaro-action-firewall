@@ -21,6 +21,7 @@ export const EXIT = Object.freeze({
   REHEARSAL_REFUSED: 25, // rehearse refused before running anything (SELF_REFERENCE, UNBINDABLE_STEP, CHAIN_INVALID)
   RUN_INCOMPLETE: 15, // run: completed, but steps that need approval were skipped
   REHEARSAL_UNCLEAN: 16, // rehearse: copy not fully removed (containers, volumes, network or worktree left)
+  EMERGENCY_RECOVERED: 17, // undo --emergency-recovery: RECOVERED and verified, evidence_status "unverified" (journal, not chain)
   INTEGRITY: 30, // verify or replay found a broken chain, a policy violation or a bad selection;
   //               or a command did its work but could not record it (error.code RESULT_UNRECORDED)
   CHAIN_LOCKED: 31, // the receipt chain lock is held or stuck; see `justrunme lock inspect`

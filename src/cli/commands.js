@@ -217,17 +217,36 @@ export async function undoCmd({ repoDir, opts, captureId }) {
   const missionId = missionOf(repoDir, opts)
   const { target, health } = targetOf(repoDir)
   const keys = operatorKeys()
-  preflight(repoDir, missionId)
+  // Break-glass recovery: explicit flag, a written reason, and the capture id typed again.
+  const emergency = opts['emergency-recovery'] === true
+  if (emergency) {
+    if (typeof opts.reason !== 'string' || opts.reason.trim().length < 8) throw new CliError(EXIT.USAGE, 'EMERGENCY_REASON_REQUIRED', '--emergency-recovery needs --reason "<why>" (at least 8 characters)')
+    if (opts.confirm !== captureId) throw new CliError(EXIT.USAGE, 'CONFIRMATION_REQUIRED', '--emergency-recovery needs --confirm <the same capture id>')
+  } else {
+    preflight(repoDir, missionId)
+  }
   let r
   try {
-    r = await undoMission({ repoDir, missionId, captureId, target, keys, health, resources: opts.resource })
+    r = await undoMission({ repoDir, missionId, captureId, target, keys, health, resources: opts.resource, emergency: emergency ? { reason: opts.reason } : null })
   } catch (err) {
     if (err instanceof UndoRefused) refused(EXIT.UNDO_REFUSED, err)
     throw err
   }
-  const result = { mission_id: r.mission_id, capture_id: r.capture_id, status: r.status, resources: r.resources, verification: { status: r.verification.status, checks: r.verification.checks.length, failed: r.verification.failed }, receipts: r.receipts, receipt_error: r.receipt_error }
+  const result = {
+    mission_id: r.mission_id,
+    capture_id: r.capture_id,
+    status: r.status,
+    evidence_status: r.evidence_status,
+    resources: r.resources,
+    verification: { status: r.verification.status, checks: r.verification.checks.length, failed: r.verification.failed },
+    receipts: r.receipts,
+    ...(emergency ? { emergency_record: r.emergency_record ?? null } : {}),
+    receipt_error: r.receipt_error,
+  }
   unrecorded(result)
-  return { exit: r.status === 'RECOVERED' ? EXIT.OK : EXIT.RECOVERY_FAILED, result }
+  if (r.status !== 'RECOVERED') return { exit: EXIT.RECOVERY_FAILED, result }
+  // Never exit 0 for a break-glass recovery: CI must not read it as a normal undo.
+  return { exit: emergency ? EXIT.EMERGENCY_RECOVERED : EXIT.OK, result }
 }
 
 /** Chain, ordering policy, and a replay of every recorded selection. */

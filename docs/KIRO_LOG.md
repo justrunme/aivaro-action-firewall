@@ -595,3 +595,14 @@ Not taken, recorded:
 - Health and db user are not part of the fingerprint; the target file is protected by the hook only.
 - Key directory permissions are not tightened when the directory already exists.
 - `--mission` is ignored by commands that read the contract.
+
+### Operator decisions after the review: break-glass undo, security limit, fingerprint
+
+- Break-glass recovery (`src/undo/emergency.js`, `undo --emergency-recovery`).
+  - It needs the flag (undo only), a written reason (8+ characters) and `--confirm` with the capture id typed again.
+  - It is refused while the chain verifies (`EMERGENCY_NOT_NEEDED`) and for a capture that is not operator-signed.
+  - It restores, always runs the recovery verification, and never reads, repairs, reanchors or extends the damaged chain.
+  - Evidence goes to a separate journal in `JUSTRUNME_HOME/emergency/` (outside the workspace, denied to the agent by the hook). Each entry is signed and hash-linked and carries `evidence_status: "unverified"`.
+  - Exit 17 when restored and verified, 14 when not, 30 if the journal itself cannot be written. Never 0.
+- Security limit stated plainly in README: JustRunMe is not a sandbox; plan steps run as the OS user and can read the key directory.
+- Fingerprint: `base.target` now includes `db_user` and `health`; changing either after authorization blocks the run (`FIDELITY_MISMATCH`, component named).

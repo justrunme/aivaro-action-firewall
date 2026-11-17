@@ -26,6 +26,10 @@ export async function computeFingerprint({ repoDir, target, contract, contractHa
         project: target.project,
         db_service: target.dbService,
         db_name: target.dbName,
+        // The user decides which rights the plan runs with; the health probe decides
+        // what recovery verification checks. Changing either changes the environment.
+        db_user: target.dbUser,
+        health: target.health ?? null,
         compose_file_hash: 'sha256:' + sha256Hex(readFileSync(target.composeFile)),
       },
       git_head: source.git_head,

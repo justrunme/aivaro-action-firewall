@@ -51,13 +51,18 @@ Limits that matter today:
 - The CLI is the operator's tool. With the gate on, the agent cannot run it:
   shell calls that were not rehearsed are denied, and a plan whose steps name
   JustRunMe on their command line is refused before rehearsal runs anything.
-  Plan steps run without `JUSTRUNME_HOME` in their environment. A rehearsed
-  script that imports JustRunMe code or reads the default key directory is not
-  detected: plan steps run as your OS user.
+  Plan steps run without `JUSTRUNME_HOME` in their environment.
+- **Security limit: JustRunMe is not a sandbox.** Plan steps (during rehearsal
+  and the real run) execute as your OS user. A step or a script it calls can
+  read the operator key directory, import JustRunMe code, or reach anything else
+  your user can reach; nothing detects that. Signatures and receipts prove what
+  was decided and recorded, not that rehearsed code was harmless. Run JustRunMe
+  under a dedicated OS user or in a VM if plans come from an untrusted agent.
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
-- Rehearsed and authorized code runs as your OS user. JustRunMe binds and
-  checks what runs; it does not sandbox it.
+- The environment identity in the fingerprint covers the Compose project, db
+  service, name and user, the health probe and the Compose file hash: changing
+  any of them after rehearsal blocks the run.
 
 Do not rely on this repository to protect real data yet.
 
@@ -96,6 +101,7 @@ The hook protects it like the contract.
 | 14 | `undo`: not RECOVERED |
 | 15 | `run`: completed, but steps that need approval were skipped |
 | 16 | `rehearse`: the copy was not fully removed (it holds a dump of the real database) |
+| 17 | `undo --emergency-recovery`: restored and verified, but `evidence_status: "unverified"` (never 0) |
 | 20 | `compare` refused |
 | 21 | `authorize` refused |
 | 22 | `run` refused |
@@ -104,6 +110,19 @@ The hook protects it like the contract.
 | 25 | `rehearse` refused before running anything |
 | 30 | `verify` / `replay` / `status`: chain, policy or selection does not check out; or a command did its work but could not record it (`RESULT_UNRECORDED`, result included) |
 | 31 | the receipt chain lock is held or stuck (`justrunme lock inspect`) |
+
+Break-glass recovery. A normal `undo` refuses to restore when the receipt chain
+does not verify. If the chain is damaged and production must be restored anyway:
+
+```
+justrunme undo <capture_id> --emergency-recovery --reason "<why>" --confirm <capture_id>
+```
+
+It is refused while the chain still verifies (`EMERGENCY_NOT_NEEDED`) and for a
+capture that is not operator-signed. It restores, always runs the recovery
+verification, never touches or repairs the chain, and records a signed,
+hash-linked entry with `evidence_status: "unverified"` in a separate journal
+under `JUSTRUNME_HOME/emergency/`. Exit 17 even when everything was restored.
 
 Every non-zero exit carries `error.code` (for example `COMPARISON_REQUIRED`,
 `PLAN_NOT_SELECTED`, `FIDELITY_MISMATCH`, `BASE_MISMATCH`) in the JSON output.
