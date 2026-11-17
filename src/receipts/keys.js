@@ -46,6 +46,20 @@ export function loadOrCreateKeys(home) {
   return { privateKey, publicKey: createPublicKey(privateKey), home }
 }
 
+/**
+ * Load an existing key pair without creating one (used by the hook: the gate must
+ * not invent an operator identity on its own).
+ * @returns {{ privateKey: any, publicKey: any, home: string } | null}
+ */
+export function loadExistingKeys(home) {
+  try {
+    const privateKey = createPrivateKey(readFileSync(path.join(home, PRIVATE_FILE)))
+    return { privateKey, publicKey: createPublicKey(privateKey), home }
+  } catch {
+    return null
+  }
+}
+
 /** @returns {import('node:crypto').KeyObject | null} */
 export function loadPublicKey(home) {
   try {

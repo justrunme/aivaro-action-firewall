@@ -9,6 +9,8 @@ import { stringify } from 'yaml'
 import { parseContract } from '../src/contract/parser.js'
 import { evaluate } from '../src/hook/evaluate.js'
 import { hashScript } from '../src/hook/allowlist.js'
+import { loadOrCreateKeys } from '../src/receipts/keys.js'
+import { verifyChain, chainPath } from '../src/receipts/chain.js'
 import { analyzeShell } from '../src/hook/bypass.js'
 import { tokenizeShell } from '../src/hook/shell.js'
 
@@ -326,11 +328,15 @@ describe('hook: property tests (R10.1, R10.6)', () => {
 })
 
 describe('hook process: exit codes as Kiro sees them (R10.5, R10.6, R10.8)', () => {
+  // Operator key directory shared by these tests; the hook signs each decision with it.
+  const operatorHome = mkdtempSync(path.join(os.tmpdir(), 'jrm-hook-operator-'))
+  dirs.push(operatorHome)
+  const operatorKeys = loadOrCreateKeys(operatorHome)
   function run(dir, input, { gate = 'on', home } = {}) {
     const env = { ...process.env }
     delete env.JUSTRUNME_GATE
     if (gate !== null) env.JUSTRUNME_GATE = gate
-    env.JUSTRUNME_HOME = home ?? path.join(dir, '..', 'no-key-home')
+    env.JUSTRUNME_HOME = home ?? operatorHome
     return spawnSync(process.execPath, [HOOK], { cwd: dir, input, env, encoding: 'utf8' })
   }
   const ev = (o) => JSON.stringify({ hook_event_name: 'PreToolUse', cwd: '.', ...o })
@@ -366,12 +372,88 @@ describe('hook process: exit codes as Kiro sees them (R10.5, R10.6, R10.8)', () 
     mkdirSync(path.join(dir, '.justrunme'), { recursive: true })
     const auth = { ...ctx.authorization, issued_at: new Date().toISOString(), expires_at: new Date(Date.now() + 120000).toISOString() }
     writeFileSync(path.join(dir, '.justrunme/authorization.json'), JSON.stringify(auth))
-    const home = mkdtempSync(path.join(os.tmpdir(), 'jrm-keyhome-'))
-    dirs.push(home)
     const call = ev({ tool_name: 'execute_bash', tool_input: { command: 'node demo/migrations/run.js' } })
-    const r = run(dir, call, { home })
+    const r = run(dir, call)
     assert.equal(r.status, 2)
     assert.equal(JSON.parse(r.stderr.trim()).category, 'AUTHORIZATION_INVALID')
+  })
+
+  // T16.1: hook decisions in the signed chain.
+  const verifyHookChain = (dir) => verifyChain({ repoDir: dir, home: operatorHome, publicKey: operatorKeys.publicKey, missionId: CONTRACT.id })
+
+  it('T16.1: every decision with an active contract is a signed hook_decision receipt', () => {
+    const dir = workspace()
+    const deny = run(dir, ev({ tool_name: 'execute_bash', tool_input: { command: 'rm -rf demo' } }))
+    const allow = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'package.json' } }))
+    assert.equal(deny.status, 2)
+    assert.equal(allow.status, 0)
+    assert.match(JSON.parse(deny.stderr.trim()).receipt_hash, /^sha256:[0-9a-f]{64}$/)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.deepEqual(v.receipts.map((r) => [r.kind, r.verdict, r.subject.tool]), [
+      ['hook_decision', 'deny', 'execute_bash'],
+      ['hook_decision', 'allow', 'read_file'],
+    ])
+    // Only a hash of the tool input is recorded, never the input itself.
+    assert.ok(!readFileSync(chainPath(dir, CONTRACT.id), 'utf8').includes('rm -rf demo'))
+  })
+
+  it('T16.1: 24 hook processes deciding at the same time produce one gap-free chain', async () => {
+    const dir = workspace()
+    const env = { ...process.env, JUSTRUNME_GATE: 'on', JUSTRUNME_HOME: operatorHome }
+    const { spawn } = await import('node:child_process')
+    const one = (i) =>
+      new Promise((resolve) => {
+        const child = spawn(process.execPath, [HOOK], { cwd: dir, env })
+        const input = i % 2 === 0 ? { tool_name: 'read_file', tool_input: { path: `f${i}` } } : { tool_name: 'execute_bash', tool_input: { command: `echo ${i}` } }
+        child.on('close', (code) => resolve({ i, code }))
+        child.stdin.end(ev(input))
+      })
+    const results = await Promise.all(Array.from({ length: 24 }, (_, i) => one(i)))
+    for (const { i, code } of results) assert.equal(code, i % 2 === 0 ? 0 : 2, `process ${i}`)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.equal(v.count, 24)
+    assert.deepEqual(v.receipts.map((r) => r.seq), Array.from({ length: 24 }, (_, i) => i))
+    assert.equal(v.receipts.filter((r) => r.verdict === 'allow').length, 12)
+  })
+
+  it('T16.1: no allow without a record: a broken chain makes the hook deny everything', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const file = chainPath(dir, CONTRACT.id)
+    const bytes = readFileSync(file)
+    bytes[30] = bytes[30] ^ 1
+    writeFileSync(file, bytes)
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } }))
+    assert.equal(r.status, 2)
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'RECEIPT_FAILED')
+  })
+
+  it('T16.1: without an installed operator key the gate denies (it never creates one itself)', () => {
+    const dir = workspace()
+    const empty = mkdtempSync(path.join(os.tmpdir(), 'jrm-hook-nokey-'))
+    dirs.push(empty)
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } }), { home: empty })
+    assert.equal(r.status, 2)
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'NO_OPERATOR_KEY')
+    assert.equal(existsSync(path.join(empty, 'operator.key')), false)
+  })
+
+  it('T16.1: a lock held by a live writer makes the hook wait and then deny, never write past it', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const lock = chainPath(dir, CONTRACT.id) + '.lock'
+    writeFileSync(lock, 'held\n') // fresh lock: not stale
+    const started = Date.now()
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } }))
+    assert.equal(r.status, 2)
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'RECEIPT_FAILED')
+    assert.ok(Date.now() - started >= 7000, 'waited for the lock')
+    assert.equal(verifyHookChain(dir).count, 1)
+    rmSync(lock)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    assert.equal(verifyHookChain(dir).count, 2)
   })
 
   it('fails closed on malformed stdin, empty stdin, missing contract and invalid contract', () => {

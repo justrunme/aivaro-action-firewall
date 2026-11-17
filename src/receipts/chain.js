@@ -16,18 +16,28 @@
  * Ordering rules between events (policy) are checked by policy.js.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { canonicalJson, sha256Hex } from '../util/canonical.js'
 import { redactDeep } from '../privacy/redact.js'
 import { STATE_DIR } from '../fidelity/source.js'
 import { publicKeyHex, signValue, verifyValue } from './keys.js'
+import { withLock } from './lock.js'
 
-export const KINDS = ['rehearsal', 'authorization_issued', 'authorization_refused', 'run_result', 'run_refused', 'undo', 'verification']
+export const KINDS = ['rehearsal', 'authorization_issued', 'authorization_refused', 'run_result', 'run_refused', 'undo', 'verification', 'hook_decision']
 const MISSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/
 
 export const chainPath = (repoDir, missionId) => path.join(repoDir, STATE_DIR, 'missions', missionId, 'receipts.jsonl')
-const headPath = (home, missionId) => path.join(home, 'heads', `${missionId}.json`)
+// One anchor per (workspace, mission): two workspaces may use the same mission id.
+const headPath = (home, missionId, repoDir) => {
+  let where = path.resolve(repoDir)
+  try {
+    where = realpathSync(where)
+  } catch {
+    // workspace missing: the resolved path still names the anchor deterministically
+  }
+  return path.join(home, 'heads', `${missionId}-${sha256Hex(where).slice(0, 16)}.json`)
+}
 export const genesisHash = (missionId) => 'sha256:' + sha256Hex(`justrunme:genesis:v1:${missionId}`)
 export const receiptHash = (receipt) => 'sha256:' + sha256Hex(canonicalJson(receipt))
 
@@ -61,6 +71,13 @@ export function appendReceipt({ repoDir, keys, missionId, kind, verdict, subject
   if (!MISSION_RE.test(missionId)) throw new Error('invalid mission id')
   if (!KINDS.includes(kind)) throw new Error(`unknown receipt kind ${kind}`)
   if (!keys?.home) throw new Error('receipts need the operator key directory for the head anchor')
+  const file = chainPath(repoDir, missionId)
+  mkdirSync(path.dirname(file), { recursive: true })
+  // Read, verify, append and move the head as one step, even with parallel writers.
+  return withLock(`${file}.lock`, () => appendLocked({ repoDir, keys, missionId, kind, verdict, subject, refs, now }))
+}
+
+function appendLocked({ repoDir, keys, missionId, kind, verdict, subject, refs, now }) {
   // Refuse to extend a chain that does not verify: never paper over tampering.
   const check = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId })
   if (!check.ok) throw new Error(`receipt chain for ${missionId} does not verify: ${check.findings[0].problem}`)
@@ -80,11 +97,13 @@ export function appendReceipt({ repoDir, keys, missionId, kind, verdict, subject
   }
   const receipt = { ...body, signature: signValue(keys.privateKey, body) }
   const file = chainPath(repoDir, missionId)
-  mkdirSync(path.dirname(file), { recursive: true })
   appendFileSync(file, canonicalJson(receipt) + '\n', { mode: 0o600 })
   const head = { mission_id: missionId, seq: receipt.seq, hash: receiptHash(receipt) }
-  mkdirSync(path.dirname(headPath(keys.home, missionId)), { recursive: true, mode: 0o700 })
-  writeFileSync(headPath(keys.home, missionId), JSON.stringify({ ...head, signature: signValue(keys.privateKey, head) }) + '\n', { mode: 0o600 })
+  mkdirSync(path.dirname(headPath(keys.home, missionId, repoDir)), { recursive: true, mode: 0o700 })
+  // Write-then-rename so a reader never sees a half-written anchor.
+  const anchor = headPath(keys.home, missionId, repoDir)
+  writeFileSync(`${anchor}.tmp-${process.pid}`, JSON.stringify({ ...head, signature: signValue(keys.privateKey, head) }) + '\n', { mode: 0o600 })
+  renameSync(`${anchor}.tmp-${process.pid}`, anchor)
   return { receipt, hash: head.hash }
 }
 
@@ -120,7 +139,7 @@ export function verifyChain({ repoDir, home, publicKey, missionId }) {
   })
 
   // Head anchor: detects a chain that was cut off or replaced wholesale.
-  const anchorFile = headPath(home, missionId)
+  const anchorFile = headPath(home, missionId, repoDir)
   if (existsSync(anchorFile)) {
     let head = null
     try {
