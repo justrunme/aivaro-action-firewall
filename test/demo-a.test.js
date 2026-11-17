@@ -24,6 +24,8 @@ import { rehearse, reportPath } from '../src/rehearsal/engine.js'
 import { measureDatabase } from '../src/rehearsal/measure.js'
 import { down, psql, up, writeNoPortsOverride } from '../src/rehearsal/compose.js'
 import { authorizeMission, runMission } from '../src/run/mission.js'
+import { verifyChain } from '../src/receipts/chain.js'
+import { checkPolicy } from '../src/receipts/policy.js'
 
 const enabled = process.platform === 'linux' || process.env.JRM_DOCKER_TESTS === '1'
 const DEMO = new URL('../demo/', import.meta.url).pathname
@@ -185,6 +187,22 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
       authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }),
       (e) => e.code === 'FIDELITY_MISMATCH' && e.detail.some((d) => d.component === 'base.postgres.pumpkin_patch.tables.orders.checksum')
     )
+  })
+
+  it('R13.4: the block, the refusals and the real run are all in one signed chain that verifies', () => {
+    const v = verifyChain({ repoDir, home, publicKey: keys.publicKey, missionId: 'mission-demo-a' })
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.equal(checkPolicy(v.receipts).ok, true, JSON.stringify(checkPolicy(v.receipts).findings))
+    const story = v.receipts.map((r) => `${r.kind}:${r.verdict}`)
+    assert.equal(story[0], 'rehearsal:DATA LOSS')
+    assert.ok(v.receipts.some((r) => r.kind === 'authorization_refused' && r.subject.code === 'DATA_LOSS'))
+    assert.ok(v.receipts.some((r) => r.kind === 'authorization_refused' && r.subject.code === 'REPORT_INVALID'))
+    assert.ok(v.receipts.some((r) => r.kind === 'run_refused' && r.subject.code === 'FIDELITY_MISMATCH'))
+    const runs = v.receipts.filter((r) => r.kind === 'run_result')
+    assert.equal(runs.length, 1)
+    assert.equal(runs[0].verdict, 'completed')
+    assert.ok(story.indexOf('rehearsal:SAFE') < story.indexOf('authorization_issued:allow'))
+    assert.ok(story.indexOf('authorization_issued:allow') < story.indexOf('run_result:completed'))
   })
 
   const worktrees = () => execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repoDir }).toString().split('\n').filter((l) => l.startsWith('worktree ')).length

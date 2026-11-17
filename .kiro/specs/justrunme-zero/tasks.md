@@ -159,7 +159,14 @@ T15 notes (as built, tests in `test/capture-files.test.js` and `test/demo-b.test
 | T16.6 | (P2) Implement `src/approval/webauthn.js` (challenge issuance; assertion verification) | R6.3, R6.4, R6.5, R6.8 | test/approval.test.js — invalid assertion rejected; valid passes |
 | T16.7 | Implement `src/approval/gate.js` (irreversible flag + threshold check; local one-time approval bound to payload hash, nonce, expiry) | R6.1, R6.2, R6.6, R6.7 | test/approval.test.js — escalation, replay rejected, expiry rejected, payload mismatch rejected |
 
-- [ ] T16.1 · [ ] T16.2 · [ ] T16.3 · [ ] T16.4 · [ ] T16.5 · [ ] T16.6 (P2) · [ ] T16.7
+- [x] T16.1 · [x] T16.2 · [x] T16.3 · [x] T16.4 · [x] T16.5 · [ ] T16.6 (P2) · [ ] T16.7
+
+T16 notes (as built, tests in `test/receipts.test.js`, `test/demo-a.test.js`, `test/demo-b.test.js`):
+- Storage is a per-mission JSONL file (`src/receipts/chain.js`), not SQLite: one canonical JSON receipt per line with `seq`, `prev_hash`, operator public key and Ed25519 signature. A line must equal the canonical form of its parsed receipt, so whitespace or escape changes are caught as well.
+- A signed head anchor per mission lives in the operator key directory (outside the workspace) and catches a cut-off or deleted chain. Appending to a chain that does not verify is refused.
+- Receipts are written for rehearsal, authorization issued or refused, run result or refused, undo and verification. Undo and verification receipts close R4.5, R5.5 and R5.6; Demo A's chain closes R13.4.
+- `src/receipts/policy.js` checks the story: authorization only after a SAFE rehearsal of the same plan, each authorization used by one run of that plan, undo only for a recorded run, verification directly after its undo.
+- Not done: hook decisions are still unsigned lines in `.justrunme/audit.jsonl` (several hook processes may run at once and the chain has no lock yet); T16.7 local approval for irreversible actions.
 
 ---
 

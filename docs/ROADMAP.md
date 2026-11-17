@@ -13,6 +13,8 @@ the contest.
 | Phone passkey approval | WebAuthn assertion bound to the action payload hash | P2 | R6.8 |
 | Fidelity override with signed justification | Operator overrides a fingerprint mismatch with a signed reason | P2 | R3.4 |
 | Ghost Agent | Proposes adversarial scenarios (interrupt, re-run, schema change) that JustRunMe runs in the disposable copy. A deterministic rule set comes first; an LLM-driven version needs credentials and is excluded from judge mode | P3 | none |
+| Pruning of `<db>_jrm_prev_<t>` databases | Undo keeps the replaced database for inspection; a command to list and drop old ones with a retention limit (explicit operator action, never automatic) | P2 | none |
+| Signed hook decisions | Put PreToolUse allow and deny decisions into the receipt chain, with a lock for concurrent hook processes | P2 | R7.1 |
 | Recovery suggestion | Suggest a restore plan after a failed run. Undo itself always needs an explicit operator command | P3 | none |
 | Multi-agent missions | Several agents working under one contract | P3 | none |
 | Extension catalogue | Pluggable agent capabilities | P3 | none |

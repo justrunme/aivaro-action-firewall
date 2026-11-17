@@ -42,7 +42,8 @@ export function loadOrCreateKeys(home) {
     chmodSync(priv, 0o600)
   }
   const privateKey = createPrivateKey(readFileSync(priv))
-  return { privateKey, publicKey: createPublicKey(privateKey) }
+  // home travels with the keys: receipt head anchors live next to them.
+  return { privateKey, publicKey: createPublicKey(privateKey), home }
 }
 
 /** @returns {import('node:crypto').KeyObject | null} */

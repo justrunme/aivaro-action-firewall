@@ -30,6 +30,8 @@ import { captureDir } from '../src/capture/capture.js'
 import { undoMission, UndoRefused } from '../src/undo/undo.js'
 import { verifyRecovery } from '../src/undo/verify.js'
 import { loadManifest } from '../src/capture/capture.js'
+import { verifyChain } from '../src/receipts/chain.js'
+import { checkPolicy } from '../src/receipts/policy.js'
 
 const enabled = process.platform === 'linux' || process.env.JRM_DOCKER_TESTS === '1'
 const DEMO = new URL('../demo/', import.meta.url).pathname
@@ -135,7 +137,7 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
   })
 
   it('R14.2, R14.3, R4.3: undo restores files, config and Postgres; every check is asserted', async () => {
-    const r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, publicKey: keys.publicKey, health: HEALTH })
+    const r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, keys, health: HEALTH })
     assert.deepEqual(r.resources.map((x) => x.resource), ['config_files', 'containers', 'postgres', 'files'])
     assert.ok(r.resources.every((x) => x.status === 'succeeded'), JSON.stringify(r.resources))
     assert.equal(r.verification.status, 'PASS', JSON.stringify(r.verification.failed))
@@ -161,7 +163,7 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
   })
 
   it('R4.3: running undo again gives the same verified state', async () => {
-    const r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, publicKey: keys.publicKey, health: HEALTH })
+    const r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, keys, health: HEALTH })
     assert.equal(r.status, 'RECOVERED', JSON.stringify(r.verification.failed))
     assert.deepEqual((await measureReal()).tables, baseline.db.tables)
   })
@@ -189,7 +191,7 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
 
     // (a) a dump that no longer matches its checksum is refused before anything is touched.
     writeFileSync(dumpFile, goodDump.subarray(0, Math.floor(goodDump.length / 2)))
-    let r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, publicKey: keys.publicKey, resources: ['postgres'] })
+    let r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, keys, resources: ['postgres'] })
     const pg = r.resources.find((x) => x.resource === 'postgres')
     assert.equal(pg.status, 'failed')
     assert.match(pg.detail, /checksum; live database untouched/)
@@ -203,7 +205,7 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
     const { signature, ...body } = m
     body.postgres[0].sha256 = 'sha256:' + (await import('../src/util/canonical.js')).sha256Hex(broken)
     writeFileSync(manifestFile, JSON.stringify({ ...body, signature: signValue(keys.privateKey, body) }))
-    r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, publicKey: keys.publicKey, resources: ['postgres'] })
+    r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, keys, resources: ['postgres'] })
     assert.equal(r.resources[0].status, 'failed')
     assert.match(r.resources[0].detail, /loading the dump failed.*live database untouched/)
     assert.deepEqual(await measureReal(), liveBefore)
@@ -211,19 +213,33 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
     // (c) with the original capture back in place, the retry recovers fully.
     writeFileSync(dumpFile, goodDump)
     writeFileSync(manifestFile, goodManifest)
-    r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, publicKey: keys.publicKey, health: HEALTH })
+    r = await undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, keys, health: HEALTH })
     assert.equal(r.status, 'RECOVERED', JSON.stringify(r.verification.failed))
     assert.deepEqual((await measureReal()).tables, baseline.db.tables)
   })
 
+  it('R7.1 to R7.3: the whole mission is one signed chain that verifies and follows the ordering rules', () => {
+    const v = verifyChain({ repoDir, home, publicKey: keys.publicKey, missionId: 'mission-demo-b' })
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.equal(checkPolicy(v.receipts).ok, true, JSON.stringify(checkPolicy(v.receipts).findings))
+    const story = v.receipts.map((r) => `${r.kind}:${r.verdict}`)
+    // rehearsal SAFE -> authorization -> failed real run -> undo -> PASS, then the later undo / verification pairs.
+    assert.deepEqual(story.slice(0, 5), ['rehearsal:SAFE', 'authorization_issued:allow', 'run_result:failed', 'undo:undo', 'verification:PASS'])
+    const run = v.receipts.find((r) => r.kind === 'run_result')
+    assert.deepEqual(run.subject.steps.map((s) => s.status), ['ok', 'failed'])
+    // The failed restore attempts are on record too, with verification FAIL.
+    assert.ok(story.includes('verification:FAIL'))
+    assert.equal(story.at(-1), 'verification:PASS')
+  })
+
   it('R4.6: undo refuses unsupported resource types and an unsigned capture', async () => {
     await assert.rejects(
-      undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, publicKey: keys.publicKey, resources: ['email'] }),
+      undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, keys, resources: ['email'] }),
       (e) => e instanceof UndoRefused && e.code === 'UNSUPPORTED_RESOURCE'
     )
     const other = loadOrCreateKeys(mkdtempSync(path.join(os.tmpdir(), 'jrm-demo-b-other-')))
     await assert.rejects(
-      undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, publicKey: other.publicKey }),
+      undoMission({ repoDir, missionId: 'mission-demo-b', captureId, target, keys: other }),
       (e) => e.code === 'CAPTURE_INVALID'
     )
   })
