@@ -67,9 +67,19 @@ export function analyzeShell(command) {
     }
   }
 
-  const [program, ...args] = token.argv
+  return analyzeArgv(token.argv, raw)
+}
+
+/**
+ * Same classification for an argv list that is already split (contract plan steps).
+ *
+ * @param {string[]} argv
+ * @param {string} [raw]
+ */
+export function analyzeArgv(argv, raw = argv.join(' ')) {
+  const [program, ...args] = argv
   const name = baseName(program)
-  const simple = (extra) => ({ kind: 'simple', argv: token.argv, raw, scripts: [], category: null, detail: '', ...extra })
+  const simple = (extra) => ({ kind: 'simple', argv, raw, scripts: [], category: null, detail: '', ...extra })
 
   if (ALWAYS_INLINE.has(name)) {
     return simple({ category: 'INLINE_INTERPRETER', detail: `${name} runs code or another command that cannot be bound` })
