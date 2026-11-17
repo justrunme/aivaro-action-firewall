@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symlinkSync, rmSync, existsSync, utimesSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import fc from 'fast-check'
@@ -9,6 +9,10 @@ import { stringify } from 'yaml'
 import { parseContract } from '../src/contract/parser.js'
 import { evaluate } from '../src/hook/evaluate.js'
 import { hashScript } from '../src/hook/allowlist.js'
+import { loadOrCreateKeys } from '../src/receipts/keys.js'
+import { verifyChain, chainPath, anchorPath, reanchorChain, recoverLock, inspectChainLock } from '../src/receipts/chain.js'
+import { checkPolicy } from '../src/receipts/policy.js'
+import { withLock } from '../src/receipts/lock.js'
 import { analyzeShell } from '../src/hook/bypass.js'
 import { tokenizeShell } from '../src/hook/shell.js'
 
@@ -326,11 +330,15 @@ describe('hook: property tests (R10.1, R10.6)', () => {
 })
 
 describe('hook process: exit codes as Kiro sees them (R10.5, R10.6, R10.8)', () => {
+  // Operator key directory shared by these tests; the hook signs each decision with it.
+  const operatorHome = mkdtempSync(path.join(os.tmpdir(), 'jrm-hook-operator-'))
+  dirs.push(operatorHome)
+  const operatorKeys = loadOrCreateKeys(operatorHome)
   function run(dir, input, { gate = 'on', home } = {}) {
     const env = { ...process.env }
     delete env.JUSTRUNME_GATE
     if (gate !== null) env.JUSTRUNME_GATE = gate
-    env.JUSTRUNME_HOME = home ?? path.join(dir, '..', 'no-key-home')
+    env.JUSTRUNME_HOME = home ?? operatorHome
     return spawnSync(process.execPath, [HOOK], { cwd: dir, input, env, encoding: 'utf8' })
   }
   const ev = (o) => JSON.stringify({ hook_event_name: 'PreToolUse', cwd: '.', ...o })
@@ -366,12 +374,327 @@ describe('hook process: exit codes as Kiro sees them (R10.5, R10.6, R10.8)', () 
     mkdirSync(path.join(dir, '.justrunme'), { recursive: true })
     const auth = { ...ctx.authorization, issued_at: new Date().toISOString(), expires_at: new Date(Date.now() + 120000).toISOString() }
     writeFileSync(path.join(dir, '.justrunme/authorization.json'), JSON.stringify(auth))
-    const home = mkdtempSync(path.join(os.tmpdir(), 'jrm-keyhome-'))
-    dirs.push(home)
     const call = ev({ tool_name: 'execute_bash', tool_input: { command: 'node demo/migrations/run.js' } })
-    const r = run(dir, call, { home })
+    const r = run(dir, call)
     assert.equal(r.status, 2)
     assert.equal(JSON.parse(r.stderr.trim()).category, 'AUTHORIZATION_INVALID')
+  })
+
+  // T16.1: hook decisions in the signed chain.
+  const verifyHookChain = (dir) => verifyChain({ repoDir: dir, home: operatorHome, publicKey: operatorKeys.publicKey, missionId: CONTRACT.id })
+
+  it('T16.1: every decision with an active contract is a signed hook_decision receipt', () => {
+    const dir = workspace()
+    const deny = run(dir, ev({ tool_name: 'execute_bash', tool_input: { command: 'rm -rf demo' } }))
+    const allow = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'package.json' } }))
+    assert.equal(deny.status, 2)
+    assert.equal(allow.status, 0)
+    assert.match(JSON.parse(deny.stderr.trim()).receipt_hash, /^sha256:[0-9a-f]{64}$/)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.deepEqual(v.receipts.map((r) => [r.kind, r.verdict, r.subject.tool]), [
+      ['hook_decision', 'deny', 'execute_bash'],
+      ['hook_decision', 'allow', 'read_file'],
+    ])
+    // Only a hash of the tool input is recorded, never the input itself.
+    assert.ok(!readFileSync(chainPath(dir, CONTRACT.id), 'utf8').includes('rm -rf demo'))
+  })
+
+  it('T16.1: 24 hook processes deciding at the same time produce one gap-free chain', async () => {
+    const dir = workspace()
+    const env = { ...process.env, JUSTRUNME_GATE: 'on', JUSTRUNME_HOME: operatorHome }
+    const { spawn } = await import('node:child_process')
+    const one = (i) =>
+      new Promise((resolve) => {
+        const child = spawn(process.execPath, [HOOK], { cwd: dir, env })
+        const input = i % 2 === 0 ? { tool_name: 'read_file', tool_input: { path: `f${i}` } } : { tool_name: 'execute_bash', tool_input: { command: `echo ${i}` } }
+        child.on('close', (code) => resolve({ i, code }))
+        child.stdin.end(ev(input))
+      })
+    const results = await Promise.all(Array.from({ length: 24 }, (_, i) => one(i)))
+    for (const { i, code } of results) assert.equal(code, i % 2 === 0 ? 0 : 2, `process ${i}`)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.equal(v.count, 24)
+    assert.deepEqual(v.receipts.map((r) => r.seq), Array.from({ length: 24 }, (_, i) => i))
+    assert.equal(v.receipts.filter((r) => r.verdict === 'allow').length, 12)
+  })
+
+  it('T16.1: no allow without a record: a broken chain makes the hook deny everything', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const file = chainPath(dir, CONTRACT.id)
+    const bytes = readFileSync(file)
+    bytes[30] = bytes[30] ^ 1
+    writeFileSync(file, bytes)
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } }))
+    assert.equal(r.status, 2)
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'RECEIPT_FAILED')
+  })
+
+  it('T16.1: without an installed operator key the gate denies (it never creates one itself)', () => {
+    const dir = workspace()
+    const empty = mkdtempSync(path.join(os.tmpdir(), 'jrm-hook-nokey-'))
+    dirs.push(empty)
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } }), { home: empty })
+    assert.equal(r.status, 2)
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'NO_OPERATOR_KEY')
+    assert.equal(existsSync(path.join(empty, 'operator.key')), false)
+  })
+
+  // Review points on PR 8.
+  const lockOf = (dir) => chainPath(dir, CONTRACT.id) + '.lock'
+  const tokenFor = (pid) => `${pid} ${os.hostname()} ${'a'.repeat(16)}\n`
+
+  it('PR 8 review 1: a lock of a LIVE owner is never broken, however old the file is', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    // The test runner itself is a live process: use its pid as the owner.
+    writeFileSync(lockOf(dir), tokenFor(process.pid))
+    const hourAgo = new Date(Date.now() - 3600 * 1000)
+    utimesSync(lockOf(dir), hourAgo, hourAgo)
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } }))
+    assert.equal(r.status, 2)
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'RECEIPT_FAILED')
+    assert.equal(readFileSync(lockOf(dir), 'utf8'), tokenFor(process.pid), 'the live owner still holds its lock')
+    assert.equal(verifyHookChain(dir).count, 1)
+    rmSync(lockOf(dir))
+  })
+
+  it('PR 8 review 1: a lock of a DEAD owner on this host is removed and the decision proceeds', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const gone = spawnSync(process.execPath, ['-e', 'console.log(process.pid)'], { encoding: 'utf8' })
+    const deadPid = Number(gone.stdout.trim())
+    writeFileSync(lockOf(dir), tokenFor(deadPid))
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    assert.equal(existsSync(lockOf(dir)), false)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true)
+    assert.equal(v.count, 2)
+  })
+
+  it('PR 8 review 1: a lock whose owner cannot be determined (other host, garbage) is never removed', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    for (const token of [`1 some-other-host ${'b'.repeat(16)}\n`, 'garbage\n']) {
+      writeFileSync(lockOf(dir), token)
+      assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 2)
+      assert.equal(readFileSync(lockOf(dir), 'utf8'), token)
+    }
+    rmSync(lockOf(dir))
+  })
+
+  it('PR 8 review 2: an append interrupted between receipt and anchor fails closed until an explicit reanchor', async () => {
+    const { reanchorChain } = await import('../src/receipts/chain.js')
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const anchorFile = anchorPath(operatorHome, CONTRACT.id, dir)
+    const anchorBefore = readFileSync(anchorFile)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    // Simulate a crash after the receipt line was written but before the anchor moved.
+    writeFileSync(anchorFile, anchorBefore)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, false)
+    assert.equal(v.findings[0].code, 'ANCHOR_BEHIND')
+    // Fail closed: nothing is allowed while the chain is in this state.
+    const blocked = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } }))
+    assert.equal(blocked.status, 2)
+    assert.equal(JSON.parse(blocked.stderr.trim()).category, 'RECEIPT_FAILED')
+    // Recovery is an explicit operator act with a reason, and is itself a signed receipt.
+    assert.throws(() => reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: '' }), /written reason/)
+    const r = reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'hook crashed during append; receipt 1 reviewed' })
+    assert.deepEqual(r.accepted_seqs, [1])
+    const after = verifyHookChain(dir)
+    assert.equal(after.ok, true, JSON.stringify(after.findings))
+    assert.equal(after.receipts.at(-1).kind, 'chain_reanchored')
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 0)
+  })
+
+  it('PR 8 review 2: reanchor refuses a cut-off tail and a tampered receipt', async () => {
+    const { reanchorChain } = await import('../src/receipts/chain.js')
+    const dir = workspace()
+    for (const p of ['a', 'b', 'c']) assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: p } })).status, 0)
+    const file = chainPath(dir, CONTRACT.id)
+    const original = readFileSync(file, 'utf8')
+    writeFileSync(file, original.trimEnd().split('\n').slice(0, 2).join('\n') + '\n') // tail removed: anchor ahead
+    assert.throws(() => reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'attempted cover-up' }), /refused/)
+    const bytes = Buffer.from(original)
+    bytes[40] = bytes[40] ^ 1
+    writeFileSync(file, bytes)
+    assert.throws(() => reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'attempted cover-up' }), /refused/)
+  })
+
+  // Second review of PR 8 (commit 2107f76).
+  it('PR 8 review 2.1: reanchor writes its receipt before moving the anchor; a crash in between is REANCHOR_PENDING', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const anchorFile = anchorPath(operatorHome, CONTRACT.id, dir)
+    const stale = readFileSync(anchorFile)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    writeFileSync(anchorFile, stale) // interrupted append: anchor behind
+    const r = reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'hook crashed during append; receipt 1 reviewed' })
+    assert.equal(r.completed_pending, false)
+    const reanchor = verifyHookChain(dir).receipts.at(-1)
+    assert.equal(reanchor.kind, 'chain_reanchored')
+    assert.equal(reanchor.subject.previous_anchor_seq, 0)
+    assert.match(reanchor.subject.previous_anchor_hash, /^sha256:[0-9a-f]{64}$/)
+
+    // Crash between the two steps of the reanchor: receipt written, anchor not moved.
+    writeFileSync(anchorFile, stale)
+    const pending = verifyHookChain(dir)
+    assert.equal(pending.ok, false)
+    assert.deepEqual(pending.findings.map((f) => f.code), ['REANCHOR_PENDING'])
+    assert.equal(pending.receipts.at(-1).kind, 'chain_reanchored', 'the intent is already signed and on record')
+    const blocked = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } }))
+    assert.equal(blocked.status, 2)
+    assert.equal(JSON.parse(blocked.stderr.trim()).category, 'RECEIPT_FAILED')
+
+    // Explicit completion: anchor moves onto the existing receipt, no second receipt.
+    const done = reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'completing interrupted reanchor' })
+    assert.equal(done.completed_pending, true)
+    assert.deepEqual(done.accepted_seqs, [1])
+    const after = verifyHookChain(dir)
+    assert.equal(after.ok, true, JSON.stringify(after.findings))
+    assert.equal(after.count, 3)
+    assert.equal(after.receipts.filter((x) => x.kind === 'chain_reanchored').length, 1)
+    assert.throws(() => reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'nothing left to do here' }), /nothing to reanchor/)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 0)
+  })
+
+  it('PR 8 review 2.1: in every reachable state of a reanchor, the chain verifies only with the chain_reanchored receipt present', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const anchorFile = anchorPath(operatorHome, CONTRACT.id, dir)
+    const file = chainPath(dir, CONTRACT.id)
+    const staleAnchor = readFileSync(anchorFile)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    writeFileSync(anchorFile, staleAnchor)
+    const linesBefore = readFileSync(file)
+    reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'hook crashed during append; receipt 1 reviewed' })
+    const linesAfter = readFileSync(file)
+    const newAnchor = readFileSync(anchorFile)
+    // Every combination of {chain before/after the receipt} x {anchor before/after the move}.
+    for (const [lines, anchor] of [[linesBefore, staleAnchor], [linesAfter, staleAnchor], [linesBefore, newAnchor], [linesAfter, newAnchor]]) {
+      writeFileSync(file, lines)
+      writeFileSync(anchorFile, anchor)
+      const v = verifyHookChain(dir)
+      if (v.ok) assert.equal(v.receipts.at(-1).kind, 'chain_reanchored')
+    }
+    // The only verifying state is the completed one.
+    writeFileSync(file, linesBefore)
+    writeFileSync(anchorFile, newAnchor)
+    assert.equal(verifyHookChain(dir).findings[0].code, 'ANCHOR_AHEAD')
+  })
+
+  it('PR 8 review 2.2: an empty lock blocks the hook until an explicit, hash-bound, recorded recovery', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    writeFileSync(lockOf(dir), '') // what a crash between create and write used to leave
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 2)
+    const seen = inspectChainLock({ repoDir: dir, missionId: CONTRACT.id })
+    assert.deepEqual({ exists: seen.exists, bytes: seen.bytes, owner: seen.owner }, { exists: true, bytes: 0, owner: 'unknown' })
+
+    const args = { repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id }
+    assert.throws(() => recoverLock({ ...args, expectedSha256: seen.sha256, reason: '' }), /written reason/)
+    assert.throws(() => recoverLock({ ...args, reason: 'empty lock after crash' }), /pass the sha256/)
+    assert.throws(() => recoverLock({ ...args, expectedSha256: 'sha256:' + '0'.repeat(64), reason: 'empty lock after crash' }), /changed since it was inspected/)
+    assert.equal(readFileSync(lockOf(dir), 'utf8'), '', 'a refused recovery leaves the lock as it was')
+
+    const r = recoverLock({ ...args, expectedSha256: seen.sha256, reason: 'empty lock after crash' })
+    assert.equal(existsSync(lockOf(dir)), false)
+    assert.equal(r.removed.removed_sha256, seen.sha256)
+    assert.ok(existsSync(path.join(path.dirname(lockOf(dir)), r.removed.kept_as)), 'removed lock kept as evidence')
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    const last = v.receipts.at(-1)
+    assert.equal(last.kind, 'lock_recovered')
+    assert.deepEqual([last.subject.removed_sha256, last.subject.kept_as], [seen.sha256, r.removed.kept_as])
+    assert.equal(checkPolicy(v.receipts).ok, true)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+
+    // Swapping the kept evidence breaks verification.
+    writeFileSync(path.join(path.dirname(lockOf(dir)), r.removed.kept_as), 'something else\n')
+    assert.deepEqual(verifyHookChain(dir).findings.map((f) => f.code), ['LOCK_RECOVERY_UNRECORDED'])
+  })
+
+  it('PR 8 review 2.2: recovery never removes the lock of a live local owner', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    writeFileSync(lockOf(dir), tokenFor(process.pid))
+    const seen = inspectChainLock({ repoDir: dir, missionId: CONTRACT.id })
+    assert.equal(seen.owner, 'alive')
+    assert.throws(() => recoverLock({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, expectedSha256: seen.sha256, reason: 'operator thinks it is stuck' }), /live process/)
+    assert.equal(readFileSync(lockOf(dir), 'utf8'), tokenFor(process.pid))
+    rmSync(lockOf(dir))
+  })
+
+  it('PR 8 review 2.2: a crash that leaves both a bad lock and an anchor behind is recovered in explicit steps, each recorded', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const anchorFile = anchorPath(operatorHome, CONTRACT.id, dir)
+    const stale = readFileSync(anchorFile)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    writeFileSync(anchorFile, stale)
+    writeFileSync(lockOf(dir), 'garbage\n')
+    const args = { repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id }
+    const seen = inspectChainLock(args)
+    // Step 1: the lock is removed, but the receipt cannot be written to a chain that does not verify.
+    assert.throws(() => recoverLock({ ...args, expectedSha256: seen.sha256, reason: 'garbage lock after crash' }), /reanchorChain/)
+    assert.equal(existsSync(lockOf(dir)), false)
+    assert.deepEqual(verifyHookChain(dir).findings.map((f) => f.code).sort(), ['ANCHOR_BEHIND', 'LOCK_RECOVERY_UNRECORDED'])
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 2)
+    // Step 2: reanchor. Step 3: record the pending removal (no lock left, so no hash).
+    reanchorChain({ ...args, reason: 'hook crashed during append; receipt 1 reviewed' })
+    assert.deepEqual(verifyHookChain(dir).findings.map((f) => f.code), ['LOCK_RECOVERY_UNRECORDED'])
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 2)
+    const r = recoverLock({ ...args, reason: 'garbage lock after crash' })
+    assert.equal(r.removed, null)
+    assert.equal(r.recorded.length, 1)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.deepEqual(v.receipts.slice(-2).map((x) => x.kind), ['chain_reanchored', 'lock_recovered'])
+    assert.throws(() => recoverLock({ ...args, reason: 'garbage lock after crash' }), /no lock to recover/)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 0)
+  })
+
+  it('PR 8 review 2.2: a held lock always has its full owner token (never empty) and no temp files remain', () => {
+    const dir = workspace()
+    const lock = path.join(dir, 'probe.lock')
+    for (let i = 0; i < 50; i++) {
+      withLock(lock, () => assert.match(readFileSync(lock, 'utf8'), /^\d+ \S+ [0-9a-f]{16}\n$/))
+    }
+    assert.equal(existsSync(lock), false)
+    assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith('probe.lock')), [])
+  })
+
+  it('PR 8 review 3: decisions without a contract are marked unsigned diagnostics, and no chain is created', () => {
+    const dir = workspace({ contract: null })
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } }))
+    assert.equal(r.status, 2)
+    const out = JSON.parse(r.stderr.trim())
+    assert.equal(out.category, 'NO_CONTRACT')
+    assert.equal(out.signed, false)
+    assert.equal(out.receipt_hash, null)
+    const line = JSON.parse(readFileSync(path.join(dir, '.justrunme/audit.jsonl'), 'utf8').trim().split('\n').at(-1))
+    assert.equal(line.evidence, 'unsigned_diagnostic')
+    assert.equal(existsSync(path.join(dir, '.justrunme/missions')), false)
+  })
+
+  it('T16.1: a lock held by a live writer makes the hook wait and then deny, never write past it', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const lock = chainPath(dir, CONTRACT.id) + '.lock'
+    writeFileSync(lock, 'held\n') // fresh lock: not stale
+    const started = Date.now()
+    const r = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } }))
+    assert.equal(r.status, 2)
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'RECEIPT_FAILED')
+    assert.ok(Date.now() - started >= 7000, 'waited for the lock')
+    assert.equal(verifyHookChain(dir).count, 1)
+    rmSync(lock)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    assert.equal(verifyHookChain(dir).count, 2)
   })
 
   it('fails closed on malformed stdin, empty stdin, missing contract and invalid contract', () => {

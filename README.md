@@ -20,7 +20,7 @@ feature until it has a passing end-to-end test.
 | Rehearsal, impact report, fidelity gate | Implemented for `sql_migration` and `shell` steps; Demo A (DATA LOSS blocked, safe replan runs, drift blocked) passes against real Docker and Postgres. No failing-test count yet |
 | Signed run authorization | Implemented: operator Ed25519 key outside the workspace, bound to the fingerprint, single use |
 | Undo and recovery verification | Implemented for files under `allowed_paths`, contract config files and the named Postgres database; Demo B (failed real run, undo, verification of schema, row counts, checksums, files, images and `/health`, negative controls) passes against real Docker and Postgres. Containers and volumes are verified, not restored |
-| Receipts (Ed25519, hash chain) | Implemented for rehearsal, authorization, run, undo and verification, with a head anchor outside the workspace and ordering rules; a one-byte change anywhere fails verification (property test). Hook decisions are not yet in the chain |
+| Receipts (Ed25519, hash chain) | Implemented for rehearsal, authorization, run, undo, verification and every hook decision, with a head anchor outside the workspace and ordering rules; a one-byte change anywhere fails verification (property test); 24 parallel hook processes produce one gap-free chain (test) |
 | MCP server, Kiro Power, `justrunme-operator` agent | Not implemented (T17) |
 | Judge mode (one command, under 60 s) | Not implemented (T19) |
 | Console UI | Not implemented (T18, after Demo A and B work) |
@@ -34,8 +34,19 @@ Limits that matter today:
 - Undo covers only files under `allowed_paths`, the contract's config files
   and the named Postgres database. Anything else a run changes (other files,
   container volumes, network calls) is not restored.
-- Hook decisions are logged unsigned; only operator-side events are in the
-  signed receipt chain.
+- With the gate on, an operator key must be installed (`JUSTRUNME_HOME`,
+  default `~/.justrunme`); otherwise every call is denied. Hook decisions are
+  signed into the mission chain only while a valid contract exists. Denials
+  without a contract are audit lines marked `unsigned_diagnostic`: they are
+  diagnostics, not evidence.
+- If an append is interrupted between the receipt and its anchor, the gate
+  denies everything until the operator reviews the chain and reanchors it
+  explicitly. The reanchor is itself recorded before the anchor moves; an
+  interrupted reanchor stays denied until it is completed. A lock left by a
+  crash whose owner cannot be determined is never removed automatically; the
+  operator inspects it and removes it by its exact hash, which is recorded.
+  There is no CLI for these yet; they are library calls (`reanchorChain`,
+  `inspectChainLock`, `recoverLock`).
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
 - Rehearsed and authorized code runs as your OS user. JustRunMe binds and

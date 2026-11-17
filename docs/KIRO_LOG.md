@@ -403,3 +403,87 @@ Signed undo and verification receipts (T16); configurable integration test suite
 ### Not done
 
 Hook decisions are not in the chain (unsigned audit lines; concurrent hook processes need a lock first). No pruning of `<db>_jrm_prev_<t>` databases (listed in ROADMAP as P2, explicit operator action only). Judge mode and CLI still to come.
+
+---
+
+## Run 12 — merge of PR 5, 6, 7; T16.1 signed hook decisions
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t16-1-hook-receipts` from `origin/main` at `9d78a55` |
+| Merges | Done by Kiro on the operator's instruction "check and merge sequentially" |
+
+### Merging the stacked pull requests
+
+Before merging, all three were `MERGEABLE` / `CLEAN`, each branch contained the previous one, and `main` had not moved. Merge commits were used instead of squash: squashing 5 would have forced a history rewrite and force-push of 6 and 7. Order: merge 5, retarget 6 to `main`, merge 6, retarget 7, merge 7, each with `--match-head-commit` on the head that CI had tested. After each merge the tree of `main` was compared with the tree of the merged branch: identical each time (`8f44dac`, `9233a4d`, `b34d4c8`). Retargeting did not start new CI runs; because the trees are identical, the earlier green runs cover the merged content. CI on `main` at `9d78a55`: completed, success.
+
+### T16.1 written
+
+- `src/receipts/lock.js`: exclusive lock file per chain (O_EXCL), stale after 30 s, waits at most 8 s.
+- `src/receipts/chain.js`: appends run under the lock; head anchor written by rename; kind `hook_decision`.
+- Bug found by the new tests and fixed: the head anchor was keyed by mission id only, so two workspaces using the same mission id overwrote each other's anchor and failed verification. It is now keyed by mission id and the workspace real path.
+- `src/receipts/policy.js`: hook decisions may sit between an undo and its verification.
+- `src/receipts/keys.js`: `loadExistingKeys` (the hook never creates keys).
+- `src/hook/run.js`: with an active contract, each decision is appended before it takes effect; failure to record means deny.
+
+### Verification (local, macOS)
+
+- `npm test`: 200 pass, 0 fail. New: decisions recorded as signed receipts without the tool input; 24 hook processes started at once (12 allowed reads, 12 denied shell calls) give exit codes as expected and one chain with seq 0 to 23 that verifies; a tampered chain makes the hook deny with `RECEIPT_FAILED`; a missing key gives `NO_OPERATOR_KEY` and no key is created; a held lock makes the hook wait about 8 s and deny without writing; two workspaces with one mission id keep separate anchors.
+- Demo A and Demo B with real Docker after the change: 15 pass, 0 fail (Demo A 8, Demo B 7); 0 containers left; `git diff --check` clean.
+
+### Not done
+
+Counterfactual plan comparison (next), CLI with exit codes, judge mode. Pruning of `<db>_jrm_prev_<t>` stays an explicit operator action (ROADMAP, P2).
+
+---
+
+## Run 13 — PR 8 review points: lock ownership, interrupted append, unsigned diagnostics
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t16-1-hook-receipts` (PR 8), pushed; not merged |
+
+### 1. Stale lock (confirmed problem, fixed)
+
+The first version removed a lock older than 30 s, so a live writer paused longer (SIGSTOP, debugger, swap) would have lost exclusivity. Now a lock is never removed because of its age. The lock file holds `<pid> <host> <nonce>`; a waiter removes it only when the token parses, the host is this host and the pid does not exist (`kill(pid, 0)` gives `ESRCH`). Removal renames the lock to a unique tombstone and compares tokens; a fresh lock caught by mistake is put back with `link()`, which cannot overwrite. The holder re-checks its own token before writing the receipt and before moving the anchor, and releases only its own lock. Unknown owners (other host, unparseable token, pid reused by a live process) are never removed; waiters time out after 8 s and the hook denies. Even if exclusivity were lost in a remaining race, two writers would produce a duplicate `seq` or broken `prev_hash`, which fails verification, so the gate denies rather than accepting an inconsistent chain.
+
+### 2. Interrupted append (fail-closed was already true; explicit recovery added)
+
+Receipt line first, anchor second. A crash in between leaves the anchor one behind: `verifyChain` now reports `ANCHOR_BEHIND` (distinct from `ANCHOR_AHEAD` for a cut-off tail and `ANCHOR_MISMATCH`), every append is refused and the hook denies every gated call. `reanchorChain` is the only way forward: operator key, a written reason, accepted only when anchor-behind is the sole finding, the anchored receipt matches the file and every later receipt is linked and signed by the operator; it records a signed `chain_reanchored` receipt listing the accepted seqs. A partial last line is never accepted automatically.
+
+### 3. NO_CONTRACT (made explicit)
+
+Audit lines now carry `evidence: "unsigned_diagnostic"` unless a signed receipt exists (`"signed_receipt"`), and the hook's stderr carries `signed: false`. No mission chain is created without a contract.
+
+### Verification (local, macOS)
+
+`npm test`: 206 pass, 0 fail. New tests: a live owner's lock with a one-hour-old mtime is not removed and the hook denies after waiting; a dead owner's lock is removed and the decision proceeds into a verifying chain; locks from another host or with garbage content are not removed; an interrupted append (anchor reset to the previous seq) makes the hook deny with `RECEIPT_FAILED`, reanchor without a reason is refused, reanchor with a reason accepts seq 1 and adds `chain_reanchored`, after which the hook allows again; reanchor is refused for a cut-off tail and for a tampered receipt; a decision without a contract is `signed: false`, marked `unsigned_diagnostic`, and creates no chain.
+
+---
+
+## Run 14 — PR 8 second review: recorded reanchor, recovery of an unknown lock
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t16-1-hook-receipts` (PR 8); not merged |
+
+### P1: a reanchor could end without its receipt (confirmed, fixed)
+
+`reanchorChain` moved the anchor first and wrote `chain_reanchored` second, so a crash in between left a chain that verified without any record of the recovery. The order is now intent, then commit: the signed `chain_reanchored` receipt is appended first (with `previous_anchor_seq`, `previous_anchor_hash`, `accepted_seqs`, reason), and the anchor is moved onto that receipt second. A crash between the two leaves the anchor behind with a matching reanchor receipt at the end. `verifyChain` reports this as `REANCHOR_PENDING` (only when the last receipt is a `chain_reanchored` whose previous anchor seq and hash equal the anchor, and whose `accepted_seqs` are exactly the receipts in between); the hook keeps denying. Calling `reanchorChain` again completes it: it moves the anchor only, writes no second receipt and returns `completed_pending: true`. A test sets the chain and anchor to all four combinations of before/after; the only verifying state contains the `chain_reanchored` receipt.
+
+### P2: a crash could leave an empty lock forever (confirmed, fixed in two parts)
+
+1. Creation: the owner token is written to a private temp file, which is then hard-linked to the lock name. `link()` fails if the name exists, so it is the atomic create-if-absent, and the lock has its full content from the first moment. A crash leaves at most a stray temp file, which is not a lock.
+2. Explicit recovery for locks whose owner cannot be determined (empty, garbage, another host, older versions): `inspectChainLock` shows SHA-256, size and owner state (`alive`, `dead`, `unknown`). `recoverLock` needs the operator key, a written reason and the exact inspected hash; it refuses a live local owner and a lock whose content changed, renames the lock to `<lock>.recovered-*` (kept as evidence) and writes a signed `lock_recovered` receipt. The kept file is the intent and the receipt is the commit: a kept file without a matching receipt is `LOCK_RECOVERY_UNRECORDED` and the hook denies. If the chain cannot take the receipt yet (the same crash left the anchor behind), the steps are: `recoverLock` (removes and keeps the lock, reports that the receipt is pending), `reanchorChain`, `recoverLock` again without a hash (records the removal). Nothing removes an unknown lock automatically.
+
+`policy.js`: `hook_decision`, `chain_reanchored` and `lock_recovered` are chain maintenance and may appear between an undo and its verification.
+
+### Verification (local, macOS)
+
+`test/hook.test.js`: 61 pass, 0 fail. New tests: reanchor crash between receipt and anchor gives `REANCHOR_PENDING`, hook denies, second call completes without a second receipt, hook allows; all four before/after states verify only with the reanchor receipt; an empty lock blocks the hook, recovery without a reason, without a hash or with a wrong hash is refused and leaves the lock untouched, recovery with the inspected hash removes it, keeps the file, records `lock_recovered`, passes policy and the hook allows; changing the kept file afterwards fails verification; a live owner's lock is never recovered; a garbage lock plus anchor behind is recovered in three recorded steps; 50 acquisitions always see a full owner token and leave no temp files. `npm test`: 212 pass, 0 fail (Docker demos skipped on macOS). Docker Demo A and B with `JRM_DOCKER_TESTS=1`: 15 pass, 0 fail, 0 skipped (173 s). `git diff --check`: clean.

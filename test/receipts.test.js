@@ -104,6 +104,17 @@ describe('receipt chain integrity (R7.1 to R7.4)', () => {
     assert.ok(v.findings.some((f) => /different key/.test(f.problem)))
   })
 
+  it('two workspaces with the same mission id keep separate head anchors', () => {
+    const keys = loadOrCreateKeys(tmp('jrm-rcpt-shared-'))
+    const a = tmp('jrm-rcpt-ws-')
+    const b = tmp('jrm-rcpt-ws-')
+    appendReceipt({ repoDir: a, keys, missionId: M, kind: 'verification', verdict: 'PASS' })
+    appendReceipt({ repoDir: b, keys, missionId: M, kind: 'verification', verdict: 'PASS' })
+    appendReceipt({ repoDir: b, keys, missionId: M, kind: 'verification', verdict: 'PASS' })
+    assert.equal(verifyChain({ repoDir: a, home: keys.home, publicKey: keys.publicKey, missionId: M }).ok, true)
+    assert.equal(verifyChain({ repoDir: b, home: keys.home, publicKey: keys.publicKey, missionId: M }).count, 2)
+  })
+
   it('a deleted chain with an existing head anchor is reported', () => {
     const s = story()
     unlinkSync(s.file)
