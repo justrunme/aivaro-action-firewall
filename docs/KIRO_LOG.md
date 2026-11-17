@@ -563,3 +563,7 @@ Verification (local, macOS): `test/compare.test.js` 24 pass; `npm test` 236 pass
 - No ANSI colour in any mode, rather than gating it on `NO_COLOR` and TTY: simpler, and nothing to strip in CI logs.
 - One exit code per command for refusals (20 to 24) plus `error.code` for the reason, instead of one exit code per reason: exit codes stay few and stable, the JSON carries the detail.
 - The CLI is operator-side. With the gate on, the agent cannot call it: the hook denies unrehearsed shell commands (tested for five spellings), and authorization refuses plan steps that invoke JustRunMe.
+
+### Verification (local, macOS)
+
+`npm test`: 249 pass, 0 fail (Docker demos skipped). Docker with `JRM_DOCKER_TESTS=1`: Demo A, Demo B and Demo CLI 16 pass, 0 fail, 0 skipped (225 s). Demo CLI runs the whole mission through `justrunme` only: rehearse DATA LOSS (exit 10), replan SAFE (0), authorize before compare (21 `COMPARISON_REQUIRED`), compare (0), authorize the dangerous plan (21 `DATA_LOSS`), authorize (0, `selected`), run (0), second run (22), verify (0), undo (0, `RECOVERED`, tables and columns back to the pre-run state), verify (0), replay (0).
