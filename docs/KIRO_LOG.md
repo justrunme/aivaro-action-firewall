@@ -403,3 +403,36 @@ Signed undo and verification receipts (T16); configurable integration test suite
 ### Not done
 
 Hook decisions are not in the chain (unsigned audit lines; concurrent hook processes need a lock first). No pruning of `<db>_jrm_prev_<t>` databases (listed in ROADMAP as P2, explicit operator action only). Judge mode and CLI still to come.
+
+---
+
+## Run 12 — merge of PR 5, 6, 7; T16.1 signed hook decisions
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t16-1-hook-receipts` from `origin/main` at `9d78a55` |
+| Merges | Done by Kiro on the operator's instruction "check and merge sequentially" |
+
+### Merging the stacked pull requests
+
+Before merging, all three were `MERGEABLE` / `CLEAN`, each branch contained the previous one, and `main` had not moved. Merge commits were used instead of squash: squashing 5 would have forced a history rewrite and force-push of 6 and 7. Order: merge 5, retarget 6 to `main`, merge 6, retarget 7, merge 7, each with `--match-head-commit` on the head that CI had tested. After each merge the tree of `main` was compared with the tree of the merged branch: identical each time (`8f44dac`, `9233a4d`, `b34d4c8`). Retargeting did not start new CI runs; because the trees are identical, the earlier green runs cover the merged content. CI on `main` at `9d78a55`: completed, success.
+
+### T16.1 written
+
+- `src/receipts/lock.js`: exclusive lock file per chain (O_EXCL), stale after 30 s, waits at most 8 s.
+- `src/receipts/chain.js`: appends run under the lock; head anchor written by rename; kind `hook_decision`.
+- Bug found by the new tests and fixed: the head anchor was keyed by mission id only, so two workspaces using the same mission id overwrote each other's anchor and failed verification. It is now keyed by mission id and the workspace real path.
+- `src/receipts/policy.js`: hook decisions may sit between an undo and its verification.
+- `src/receipts/keys.js`: `loadExistingKeys` (the hook never creates keys).
+- `src/hook/run.js`: with an active contract, each decision is appended before it takes effect; failure to record means deny.
+
+### Verification (local, macOS)
+
+- `npm test`: 200 pass, 0 fail. New: decisions recorded as signed receipts without the tool input; 24 hook processes started at once (12 allowed reads, 12 denied shell calls) give exit codes as expected and one chain with seq 0 to 23 that verifies; a tampered chain makes the hook deny with `RECEIPT_FAILED`; a missing key gives `NO_OPERATOR_KEY` and no key is created; a held lock makes the hook wait about 8 s and deny without writing; two workspaces with one mission id keep separate anchors.
+- Demo A and Demo B with real Docker after the change: 15 pass, 0 fail (Demo A 8, Demo B 7); 0 containers left; `git diff --check` clean.
+
+### Not done
+
+Counterfactual plan comparison (next), CLI with exit codes, judge mode. Pruning of `<db>_jrm_prev_<t>` stays an explicit operator action (ROADMAP, P2).
