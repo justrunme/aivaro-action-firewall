@@ -29,10 +29,10 @@ export function assertTarget(t) {
 
 /**
  * Override that drops every published port of the listed services (Compose `!reset`).
- * With `isolate`, the project's default network is also `internal`: its containers
- * have no route to the internet, to the host or to published ports of other stacks.
- * A rehearsal copy holds a dump of the real database and runs SQL the agent wrote,
- * so it gets nothing to talk to.
+ * With `isolate`, the project's default network is also `internal`: Docker gives its
+ * containers no default route and no published ports. A rehearsal copy holds a dump
+ * of the real database and runs SQL the agent wrote, so it gets nothing to talk to
+ * (assertIsolated checks the outcome; a test reads the routing table).
  */
 export function writeNoPortsOverride(services, { isolate = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'jrm-override-'))
@@ -108,6 +108,25 @@ export async function psql(t, { sql, input, singleTransaction = false }) {
 export async function dump(t) {
   assertTarget(t)
   return runOk('docker', ['exec', '-i', await containerOf(t, t.dbService), 'pg_dump', '-U', t.dbUser, '-d', t.dbName, '--no-owner', '--no-privileges'], { timeoutMs: 120000, env: t.env })
+}
+
+/**
+ * Proves, from Docker itself, that the database container of a rehearsal copy has
+ * no way out: it is not in host or shared network mode and every network it is
+ * attached to is `internal`. The override file asks for this; a Compose file that
+ * names its own networks or a network mode could silently defeat it, so the
+ * engine checks the result before any agent SQL runs and fails closed.
+ * @param {Target} t
+ */
+export async function assertIsolated(t) {
+  const id = await containerOf(t, t.dbService)
+  const fields = (await runOk('docker', ['inspect', '--format', '{{.HostConfig.NetworkMode}} {{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}', id], { env: t.env })).trim().split(/\s+/).filter(Boolean)
+  const [mode, ...networks] = fields
+  if (mode === 'host' || String(mode).startsWith('container:')) throw new Error(`the rehearsal copy is not isolated: network mode ${mode}`)
+  for (const name of networks) {
+    const internal = (await runOk('docker', ['network', 'inspect', '--format', '{{.Internal}}', name], { env: t.env })).trim()
+    if (internal !== 'true') throw new Error(`the rehearsal copy is not isolated: network ${name} is not internal`)
+  }
 }
 
 /** Same target, connected to another database of the same server (for CREATE / RENAME DATABASE). */

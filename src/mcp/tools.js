@@ -16,12 +16,14 @@
  * (JUSTRUNME_GATE=on and the hook's protected paths).
  */
 
-import { realpathSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
 import os from 'node:os'
+import path from 'node:path'
 import * as z from 'zod/v4'
 import * as cmd from '../cli/commands.js'
 import { ATTEMPT_LIMIT, explainReport } from '../explain/remediation.js'
-import { PLAN_ID_RE, PlanRefused, loadBase, proposePlan } from '../mission/plans.js'
+import { AGENT_TOOLS } from './names.js'
+import { PLAN_ID_RE, PlanRefused, loadBase, loadStoredPlan, proposePlan } from '../mission/plans.js'
 import { redactDeep } from '../privacy/redact.js'
 import { loadReport, reportSignatureProblem } from '../rehearsal/engine.js'
 import { keyHome, loadPublicKey } from '../receipts/keys.js'
@@ -95,6 +97,18 @@ function verifiedReport(repoDir, missionId, id) {
   return report
 }
 
+/** The text of the plan's SQL files as they are now; empty if they cannot be read (then no new object name is shown). */
+function sqlTextOf(repoDir, id) {
+  try {
+    return loadStoredPlan(repoDir, id).contract.plan.map((s) => readFileSync(path.join(repoDir, s.args[0]), 'utf8')).join('\n')
+  } catch {
+    return ''
+  }
+}
+
+/** The next step is named only if the agent can take it: until request_approval exists the agent hands over to the operator. */
+const nextActionFor = (payload) => (payload.next_action === 'REQUEST_APPROVAL' && !AGENT_TOOLS.includes('request_approval') ? { ...payload, next_action: 'ASK_OPERATOR' } : payload)
+
 const guard = (fn) => async (ctx, args) => {
   try {
     return await fn(ctx, args)
@@ -109,7 +123,7 @@ export const TOOLS = [
     name: 'rehearse',
     title: 'Rehearse a migration plan',
     description:
-      'Rehearse an ordered list of SQL migration files (inside the mission\'s allowed_paths) on a disposable copy of the database and measure the effect. Nothing real is changed. Returns SAFE, or DENIED with the measured evidence, the constraints a revised plan must meet, and the next action. Revise the SQL files and call rehearse again after a denial.',
+      'Rehearse an ordered list of SQL migration files (inside the mission\'s allowed_paths) on a disposable, network-isolated copy of the database and measure the effect. The real database is only read to make the copy; it is not changed. Returns SAFE, or DENIED with the measured evidence, the constraints a revised plan must meet, and the next action. Revise the SQL files and call rehearse again after a denial.',
     inputSchema: z.strictObject({ migrations: z.array(z.string().min(1).max(200)).min(1).max(5).describe('Relative paths of .sql files, applied in this order') }),
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     run: guard(async ({ repoDir }, { migrations }) => {
@@ -122,7 +136,7 @@ export const TOOLS = [
       const r = await viaCli(cmd.rehearseCmd, { repoDir, opts: { plan: plan.plan_id } })
       if (!r.ok) return { ...r.refusal, plan_id: plan.plan_id }
       const report = verifiedReport(repoDir, base.contract.id, plan.plan_id)
-      return { ...explainReport(report, { used: before + 1 }), files: plan.files, rehearsal_exit: r.exit, cleanup_clean: report.cleanup?.clean ?? null }
+      return { ...nextActionFor(explainReport(report, { used: before + 1 }, { sqlText: sqlTextOf(repoDir, plan.plan_id) })), files: plan.files, rehearsal_exit: r.exit, cleanup_clean: report.cleanup?.clean ?? null }
     }),
   },
   {
@@ -134,7 +148,7 @@ export const TOOLS = [
     run: guard(async ({ repoDir }, { plan_id }) => {
       const base = loadBase(repoDir)
       const report = verifiedReport(repoDir, base.contract.id, plan_id)
-      return { ...explainReport(report, { used: attemptsUsed(repoDir, base.contract.id) }), rehearsed_at: report.rehearsed_at, duration_ms: report.duration_ms, report_hash: hashValue(report) }
+      return { ...nextActionFor(explainReport(report, { used: attemptsUsed(repoDir, base.contract.id) }, { sqlText: sqlTextOf(repoDir, plan_id) })), rehearsed_at: report.rehearsed_at, duration_ms: report.duration_ms, report_hash: hashValue(report) }
     }),
   },
   {

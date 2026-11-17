@@ -12,8 +12,9 @@
  * A SQL file is applied inside a disposable database copy whose network has no
  * route out (src/rehearsal/compose.js, isolate); it reaches the real database only
  * after a rehearsal, a measured verdict and a signed approval. Inside that
- * container the SQL runs as the database superuser, so it can run programs there;
- * the container cannot reach anything else.
+ * container the SQL runs as the database superuser, so it can run programs there.
+ * The engine confirms through Docker that the container sits on internal networks
+ * only (assertIsolated); what that rules out and what it does not is in README.
  *
  * The mission must not let an agent write the Compose file the rehearsal starts
  * (assertMissionNarrow).
@@ -96,6 +97,22 @@ const NEVER_AGENT_WRITABLE = ['justrunme.mission.yaml', 'justrunme.target.json',
  * allowed_paths of an operator mission is safe for agent plans only if no entry
  * covers one of the files above or the target's Compose file.
  */
+/** realpath of the deepest existing ancestor plus the tail that does not exist yet (a link anywhere in the path is followed). */
+function realResolve(abs) {
+  let head = abs
+  const tail = []
+  for (;;) {
+    try {
+      return path.join(realpathSync(head), ...tail.reverse())
+    } catch {
+      const parent = path.dirname(head)
+      if (parent === head) return abs
+      tail.push(path.basename(head))
+      head = parent
+    }
+  }
+}
+
 export function assertMissionNarrow(repoDir, allowedPaths) {
   const root = realpathSync(repoDir)
   const protectedPaths = [...NEVER_AGENT_WRITABLE]
@@ -104,10 +121,13 @@ export function assertMissionNarrow(repoDir, allowedPaths) {
   } catch {
     // No target file yet: the fixed list still applies; rehearse refuses later with NO_TARGET.
   }
+  // Links are followed and case is ignored on both sides, so neither a symbolic link
+  // (sql/ pointing at demo/) nor Demo/ on a case-insensitive file system gets around the list.
+  const resolved = (p) => realResolve(path.resolve(root, p)).toLowerCase()
   for (const a of allowedPaths) {
-    const allowed = path.resolve(root, a)
+    const allowed = resolved(a)
     for (const p of protectedPaths) {
-      const guarded = path.resolve(root, p)
+      const guarded = resolved(p)
       // Covers it from above (allowed_paths: demo/ over demo/docker-compose.yml) or sits inside it (.kiro/hooks/ inside .kiro).
       if (inside(guarded, allowed) || inside(allowed, guarded)) {
         throw new PlanRefused('MISSION_TOO_BROAD', `allowed_paths entry ${a} covers ${p}, which an agent must never be able to write; narrow the mission before an agent proposes plans`)

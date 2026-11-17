@@ -10,6 +10,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, readFileSyn
 import os from 'node:os'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
+import { executeSteps } from '../src/rehearsal/steps.js'
 import { MAX_SQL_BYTES, PlanRefused, loadStoredPlan, plansDir, proposePlan } from '../src/mission/plans.js'
 
 const MISSION = {
@@ -90,6 +91,26 @@ describe('agent plans (T21)', () => {
     }
     // The narrow mission used everywhere else is accepted, and so is one that names the migrations directory of another layout.
     assert.doesNotThrow(() => proposePlan({ repoDir: workspace(), migrations: ['demo/migrations/003_a.sql'] }))
+  })
+
+  it('follows links and ignores case when it checks allowed_paths against the Compose file and the gate', () => {
+    // sql -> demo: the entry looks harmless, but writing there is writing demo/docker-compose.yml.
+    const linked = workspace({ ...MISSION, allowed_paths: ['sql/'] })
+    symlinkSync(path.join(linked, 'demo'), path.join(linked, 'sql'))
+    refused(() => proposePlan({ repoDir: linked, migrations: ['demo/migrations/003_a.sql'] }), 'MISSION_TOO_BROAD')
+    // Case: Demo/ is demo/ on a case-insensitive file system.
+    refused(() => proposePlan({ repoDir: workspace({ ...MISSION, allowed_paths: ['Demo/'] }), migrations: ['demo/migrations/003_a.sql'] }), 'MISSION_TOO_BROAD')
+    refused(() => proposePlan({ repoDir: workspace({ ...MISSION, allowed_paths: ['.KIRO/hooks/'] }), migrations: ['demo/migrations/003_a.sql'] }), 'MISSION_TOO_BROAD')
+  })
+
+  it('a migration swapped for a link after the plan was checked is not read by the step', async () => {
+    const dir = workspace()
+    writeFileSync(path.join(dir, 'real.sql'), 'SELECT 1;\n')
+    symlinkSync(path.join(dir, 'secrets/stolen.sql'), path.join(dir, 'swapped.sql'))
+    const target = { project: 'jrm-never-started', composeFile: path.join(dir, 'demo/docker-compose.yml'), dbService: 'db', dbUser: 'u', dbName: 'd' }
+    const [r] = await executeSteps({ plan: [{ id: 'm1', tool: 'sql_migration', args: ['swapped.sql'], reversibility: true }], cwd: dir, target, mode: 'rehearsal' })
+    assert.equal(r.status, 'failed')
+    assert.match(r.detail, /symbolic link/)
   })
 
   it('reloads a stored plan only while it is still exactly what would be built today', () => {

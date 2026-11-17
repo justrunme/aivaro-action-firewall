@@ -62,6 +62,22 @@ describe('structured remediation (T22)', () => {
     assert.doesNotMatch(text.replace(denied.remediation.caution, ''), /will be safe|is safe|guarantee|proven|certainly/i)
   })
 
+  it('narrows what leaves the copy: error text to its first line, new object names only when the plan\'s SQL contains them', () => {
+    const before = measured({ orders: 12, patches: 3 })
+    const after = { ...before, columns: { ...before.columns, orders: ['id integer', 'status text', 'zz_leaked_value text'], exfil_9f3a: ['x text'] }, tables: { ...before.tables, exfil_9f3a: { rows: 7, checksum: 'c' } } }
+    const steps = [{ id: 'm1', status: 'failed', detail: 'ERROR:  value "secret-customer-name" is wrong\nLINE 1: select\nmore detail' }]
+    const report = { plan_id: 'plan-0123456789ab', base_hash: 'sha256:x', steps, ...buildImpact({ before, after, protectedTables: ['orders'], steps }) }
+    const sql = 'ALTER TABLE orders ADD COLUMN status text;\nDO $$ BEGIN EXECUTE format($f$CREATE TABLE %I (x text)$f$, (SELECT name FROM customers LIMIT 1)); END $$;'
+    const r = explainReport(report, { used: 1 }, { sqlText: sql })
+    assert.deepEqual(r.impact.failed_steps[0].detail, 'ERROR:  value "secret-customer-name" is wrong'.slice(0, 160))
+    assert.ok(!JSON.stringify(r).includes('LINE 1') && !JSON.stringify(r).includes('more detail'))
+    assert.deepEqual(r.impact.schema_delta.added_columns, ['orders.status'], 'a column named in the SQL is shown, one that is not is not')
+    assert.ok(!('exfil_9f3a' in r.impact.tables) && !JSON.stringify(r).includes('exfil_9f3a') && !JSON.stringify(r).includes('zz_leaked_value'))
+    assert.equal(r.impact.unnamed_new_objects, 2)
+    // Without the SQL text no new name is shown at all.
+    assert.equal(explainReport(report, { used: 1 }).impact.schema_delta.added_columns.length, 0)
+  })
+
   it('property: DENIED exactly when the verdict is not SAFE, and every denial names at least one constraint', () => {
     const rows = fc.integer({ min: 0, max: 50 })
     fc.assert(

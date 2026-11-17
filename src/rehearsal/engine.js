@@ -22,7 +22,7 @@ import { computeFingerprint } from '../fidelity/fingerprint.js'
 import { baseHash } from '../fidelity/gate.js'
 import { STATE_DIR } from '../fidelity/source.js'
 import { createWorkspaceCopy } from './workspace.js'
-import { down, dump, psql, up, writeNoPortsOverride } from './compose.js'
+import { assertIsolated, down, dump, psql, up, writeNoPortsOverride } from './compose.js'
 import { measureDatabase } from './measure.js'
 import { buildImpact } from './impact.js'
 import { executeSteps } from './steps.js'
@@ -122,6 +122,8 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
   let failure = null
   try {
     await up(rehearsalTarget, [target.dbService])
+    // Before the real data is loaded and before any plan step runs.
+    await assertIsolated(rehearsalTarget)
     const data = await dump(realTarget)
     const load = await psql(rehearsalTarget, { input: data })
     if (load.code !== 0) throw new Error('loading the database copy failed')

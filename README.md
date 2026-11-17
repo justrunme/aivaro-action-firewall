@@ -59,14 +59,28 @@ Limits that matter today:
   was decided and recorded, not that rehearsed code was harmless. Run JustRunMe
   under a dedicated OS user or in a VM if plans come from an untrusted agent.
 - Plans an agent proposes through the MCP server are rehearsed in a disposable
-  database copy that has no network route (an `internal` Compose network; a test
-  reads the copy's routing table). The SQL runs there as the database superuser
-  and can run programs inside that container, nothing outside it. The copy holds
-  a dump of the real database, and SQL error text (three lines, 300 characters)
-  is returned to the agent, so an agent can read small amounts of real data
-  through error messages. A masked or sampled copy would close that; it does not
-  exist yet. The agent can also record a signed plan selection with `compare`;
-  that steers which plan the operator is asked about and authorizes nothing.
+  database copy on an `internal` Docker network. Before any real data is loaded
+  the engine asks Docker to confirm that every network of the copy is internal
+  and refuses to continue otherwise, and a test reads the copy's routing table
+  (no default route, against a non-isolated control). The SQL runs there as the
+  database superuser and can run programs inside that container. What is not
+  tested: a host service listening on the bridge address, IPv6, DNS, Docker
+  Desktop behaviour; and the Compose file's own `include`, `env_file` or bind
+  mounts are not examined.
+- **Open: the rehearsal copy holds a dump of the real database and the agent
+  writes the SQL that runs in it, so the agent has channels to read real data.**
+  Error text reaches it (cut to the first line, 160 characters), and so do
+  numbers (row counts of tables it creates, `content_changed`, the number of
+  attempts). The names of objects the plan created are shown only if the plan's
+  own SQL text contains them, which stops names built from data at run time but
+  not the numeric channels. A masked or sampled copy would close this; it does
+  not exist yet.
+- A rehearsal cannot prove that agent-written SQL behaves the same on the real
+  database: SQL can tell the copy from the real database (for example by its
+  routing table) and act differently. The human who approves a run reads the SQL
+  that will run (next PR); nothing else binds the behaviour.
+- The agent can record a signed plan selection with `compare`; that steers which
+  plan the operator is asked about and authorizes nothing.
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
 - The environment identity in the fingerprint covers the Compose project, db

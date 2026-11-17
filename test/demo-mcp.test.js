@@ -100,7 +100,8 @@ describe('Demo MCP: an agent is told why its plan was denied and revises it', { 
     const second = await server.call('rehearse', { migrations: ['demo/migrations/003_add_order_status.sql'] })
     assert.equal(second.isError, false, JSON.stringify(second.payload))
     const safe = second.payload
-    assert.deepEqual([safe.status, safe.verdict, safe.reason, safe.remediation, safe.next_action], ['SAFE', 'SAFE', null, null, 'REQUEST_APPROVAL'])
+    // request_approval does not exist yet (next PR), so the agent is not pointed at it: it hands over to the operator.
+    assert.deepEqual([safe.status, safe.verdict, safe.reason, safe.remediation, safe.next_action], ['SAFE', 'SAFE', null, null, 'ASK_OPERATOR'])
     assert.notEqual(safe.plan_id, denied.plan_id)
     assert.deepEqual(safe.attempts, { used: 2, limit: 8 })
     assert.deepEqual(await measureReal(), before)
@@ -133,7 +134,7 @@ describe('Demo MCP: an agent is told why its plan was denied and revises it', { 
     assert.equal(r.isError, false, JSON.stringify(r.payload))
     const detail = r.payload.impact.failed_steps[0]?.detail ?? ''
     assert.match(detail, /ROUTES=/, `the probe did not report its routes: ${JSON.stringify(r.payload.impact.failed_steps)}`)
-    assert.doesNotMatch(detail, /default via/, 'the rehearsal copy must have no default route')
+    assert.doesNotMatch(detail, /default/, 'the rehearsal copy must have no default route')
     assert.equal(r.payload.cleanup_clean, true)
 
     // Control: the same SQL on the stack that is not isolated does show a default route, so the probe can tell the two apart.
