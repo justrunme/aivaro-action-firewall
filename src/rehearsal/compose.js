@@ -14,7 +14,11 @@ import { run, runOk } from '../util/exec.js'
 
 const PROJECT_RE = /^[a-z0-9][a-z0-9_-]{0,62}$/
 
-/** @typedef {{ project: string, composeFile: string, dbService: string, dbUser: string, dbName: string, overrideFile?: string }} Target */
+/**
+ * `env`, when present, is the whole environment of every docker process started for
+ * this target (the judge pins one local daemon this way); absent means the caller's.
+ * @typedef {{ project: string, composeFile: string, dbService: string, dbUser: string, dbName: string, overrideFile?: string, env?: NodeJS.ProcessEnv }} Target
+ */
 
 export function assertTarget(t) {
   if (!PROJECT_RE.test(t.project)) throw new Error(`invalid compose project name: ${t.project}`)
@@ -52,7 +56,7 @@ async function containerOf(t, service) {
   const key = containerKey(t, service)
   const known = containerIds.get(key)
   if (known) return known
-  const id = (await runOk('docker', [...baseArgs(t), 'ps', '-q', service])).trim().split('\n')[0]
+  const id = (await runOk('docker', [...baseArgs(t), 'ps', '-q', service], { env: t.env })).trim().split('\n')[0]
   if (!/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`service ${service} of project ${t.project} is not running`)
   containerIds.set(key, id)
   return id
@@ -65,13 +69,13 @@ const forget = (t) => {
 /** @param {Target} t */
 export async function up(t, services) {
   forget(t)
-  await runOk('docker', [...baseArgs(t), 'up', '-d', '--wait', '--wait-timeout', '90', ...services], { timeoutMs: 180000 })
+  await runOk('docker', [...baseArgs(t), 'up', '-d', '--wait', '--wait-timeout', '90', ...services], { timeoutMs: 180000, env: t.env })
 }
 
 /** Remove containers, networks and volumes of the project; never throws. */
 export async function down(t) {
   forget(t)
-  return run('docker', [...baseArgs(t), 'down', '-v', '--remove-orphans', '--timeout', '5'], { timeoutMs: 120000 })
+  return run('docker', [...baseArgs(t), 'down', '-v', '--remove-orphans', '--timeout', '5'], { timeoutMs: 120000, env: t.env })
 }
 
 /**
@@ -90,13 +94,13 @@ export async function psql(t, { sql, input, singleTransaction = false }) {
   const args = ['exec', '-i', container, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', t.dbUser, '-d', t.dbName, '-At', '-F', '\t']
   if (singleTransaction) args.push('-1')
   if (sql !== undefined) args.push('-c', sql)
-  return run('docker', args, { input, timeoutMs: 120000 })
+  return run('docker', args, { input, timeoutMs: 120000, env: t.env })
 }
 
 /** Plain-SQL dump of the target database. */
 export async function dump(t) {
   assertTarget(t)
-  return runOk('docker', ['exec', '-i', await containerOf(t, t.dbService), 'pg_dump', '-U', t.dbUser, '-d', t.dbName, '--no-owner', '--no-privileges'], { timeoutMs: 120000 })
+  return runOk('docker', ['exec', '-i', await containerOf(t, t.dbService), 'pg_dump', '-U', t.dbUser, '-d', t.dbName, '--no-owner', '--no-privileges'], { timeoutMs: 120000, env: t.env })
 }
 
 /** Same target, connected to another database of the same server (for CREATE / RENAME DATABASE). */
@@ -113,17 +117,17 @@ export async function httpStatusInService(t, service, url) {
   if (!HEALTH_SERVICE_RE.test(service)) throw new Error('invalid service name')
   if (!HEALTH_URL_RE.test(url)) throw new Error('invalid health url')
   const code = `fetch(${JSON.stringify(url)}).then(r=>console.log(r.status)).catch(()=>console.log(0))`
-  const r = await run('docker', [...baseArgs(t), 'exec', '-T', service, 'node', '-e', code], { timeoutMs: 20000 })
+  const r = await run('docker', [...baseArgs(t), 'exec', '-T', service, 'node', '-e', code], { timeoutMs: 20000, env: t.env })
   const n = Number.parseInt(r.stdout.trim(), 10)
   return Number.isFinite(n) ? n : 0
 }
 
 /** Image ID (content digest) per running service. */
 export async function imageDigests(t) {
-  const ids = (await runOk('docker', [...baseArgs(t), 'ps', '-q'])).split('\n').filter(Boolean)
+  const ids = (await runOk('docker', [...baseArgs(t), 'ps', '-q'], { env: t.env })).split('\n').filter(Boolean)
   const images = {}
   for (const id of ids) {
-    const out = (await runOk('docker', ['inspect', '--format', '{{index .Config.Labels "com.docker.compose.service"}}\t{{.Image}}', id])).trim()
+    const out = (await runOk('docker', ['inspect', '--format', '{{index .Config.Labels "com.docker.compose.service"}}\t{{.Image}}', id], { env: t.env })).trim()
     const [service, image] = out.split('\t')
     images[service] = image
   }

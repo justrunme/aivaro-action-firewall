@@ -52,6 +52,37 @@ export function childEnv(env, home) {
   return out
 }
 
+/** A socket on this machine (a forwarded socket cannot be told apart; the README says so). */
+export const isLocalEndpoint = (host) => typeof host === 'string' && /^(unix|npipe):\/\/\/\S+$/.test(host)
+
+/**
+ * The endpoint of the context the Docker CLI would use, from
+ * `docker context ls --format '{{.Current}}\t{{.DockerEndpoint}}'`. The CLI has
+ * already applied DOCKER_HOST, DOCKER_CONTEXT and the configured current context.
+ */
+export function currentEndpoint(listing) {
+  const current = String(listing)
+    .split('\n')
+    .map((l) => l.trim().split('\t'))
+    .filter(([flag, endpoint]) => flag === 'true' && endpoint)
+  return current.length === 1 ? current[0][1] : null
+}
+
+/**
+ * Resolve the daemon once, refuse anything but a local socket, and return the
+ * environment that pins it: every docker process of the judge gets this
+ * DOCKER_HOST and no DOCKER_CONTEXT, so none of them can reach another daemon.
+ */
+async function pinLocalDocker(env) {
+  const base = childEnv(env, os.tmpdir())
+  const r = await run('docker', ['context', 'ls', '--format', '{{.Current}}\t{{.DockerEndpoint}}'], { timeoutMs: 20000, env: base })
+  if (r.code !== 0) throw new JudgeEnvironmentError('DOCKER_UNAVAILABLE', 'Docker is not available; the judge demo needs a running Docker daemon (the rest of JustRunMe does not)')
+  const endpoint = currentEndpoint(r.stdout)
+  if (!isLocalEndpoint(endpoint)) throw new JudgeEnvironmentError('REMOTE_DOCKER', 'the active Docker context does not point at a local socket; the judge demo runs only against a local Docker')
+  const { DOCKER_CONTEXT: _context, ...rest } = base
+  return { ...rest, DOCKER_HOST: endpoint }
+}
+
 /** Names that identify what this judge run created, for removal when it ends early. */
 export const projectNames = (suffix) => ({ stack: `jrm-judge-${suffix}`, rehearsalPrefix: `jrm-reh-judge${suffix}-` })
 
@@ -75,7 +106,7 @@ export async function createBackend({ env = process.env } = {}) {
   const suffix = randomBytes(4).toString('hex')
   const missionId = `judge-${suffix}`
   const names = projectNames(suffix)
-  const cleanEnv = childEnv(env, os.tmpdir())
+  const cleanEnv = await pinLocalDocker(env)
   const version = await run('docker', ['version', '--format', '{{.Server.Version}}'], { timeoutMs: 20000, env: cleanEnv })
   if (version.code !== 0) throw new JudgeEnvironmentError('DOCKER_UNAVAILABLE', 'Docker is not available; the judge demo needs a running Docker daemon (the rest of JustRunMe does not)')
 
@@ -92,7 +123,7 @@ export async function createBackend({ env = process.env } = {}) {
   }
   const cleanup = async () => {
     for (const c of children) c.kill('SIGKILL')
-    if (real && !stackDown) stackDown = (await down(real)).code === 0
+    if (real && real.env && !stackDown) stackDown = (await down(real)).code === 0
     await sweepRehearsalCopies(names.rehearsalPrefix, cleanEnv)
     for (const d of [repoDir, home, overrideFile && path.dirname(overrideFile)]) if (d) rmSync(d, { recursive: true, force: true })
   }
@@ -114,7 +145,8 @@ export async function createBackend({ env = process.env } = {}) {
     home = mkdtempSync(path.join(os.tmpdir(), 'jrm-judge-keys-'))
     overrideFile = writeNoPortsOverride(['db', 'app'])
     real = { project: names.stack, composeFile: path.join(repoDir, 'demo/docker-compose.yml'), dbService: 'db', dbUser: 'demo_user', dbName: 'pumpkin_patch', overrideFile }
-    const runEnv = childEnv(env, home)
+    const runEnv = { ...cleanEnv, JUSTRUNME_HOME: home }
+    real.env = runEnv
 
     mkdirSync(path.join(repoDir, 'demo/migrations'), { recursive: true })
     copyFileSync(path.join(DEMO_DIR, 'docker-compose.yml'), path.join(repoDir, 'demo/docker-compose.yml'))

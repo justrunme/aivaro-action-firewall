@@ -139,7 +139,11 @@ with the demo-only credentials. Every child process gets only `PATH`, `HOME`,
 `TMPDIR`, `LANG` and the `DOCKER_*` settings (the Docker client needs them), a
 throwaway `JUSTRUNME_HOME`, and git settings that ignore your git configuration;
 database and cloud credentials in your shell are not passed on (a test sets
-canary values and checks the output). A remote `DOCKER_HOST` is refused. It takes
+canary values and checks the output). The Docker daemon is resolved once through
+the Docker CLI (so `DOCKER_HOST`, `DOCKER_CONTEXT` and the configured context all
+count); anything but a local socket is refused, and every docker process of the
+judge then runs with that one socket as `DOCKER_HOST` and no `DOCKER_CONTEXT`. A
+local socket that is itself forwarded to another machine cannot be told apart. It takes
 no `--repo` or `--mission`, and a test checks that it creates nothing in a
 `JUSTRUNME_HOME` you set or in `~/.justrunme`.
 
