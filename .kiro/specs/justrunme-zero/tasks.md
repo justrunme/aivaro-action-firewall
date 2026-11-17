@@ -244,7 +244,15 @@ T18 notes (CLI, not the Console; tests in `test/cli.test.js` and `test/demo-cli.
 
 | T19.4 | (P2) Chaos Twin: one fault at a named migration marker in the demo, classification reported, repeatable | R16.1 to R16.4 | test/chaos.test.js (Linux, Docker) |
 
-- [ ] T19.1 · [ ] T19.2 · [ ] T19.3 · [ ] T19.4 (P2)
+- [~] T19.1 · [~] T19.2 · [x] T19.3 · [ ] T19.4 (P2)
+
+T19 notes (`justrunme judge`, modules in `src/judge/`, tests in `test/judge.test.js` and `test/demo-judge.test.js`):
+- Operator order: the judge is a one-command demo against a real Postgres, not only a replay. It builds a throwaway workspace, key and Compose project, then drives the CLI through: rehearse the dangerous plan (DATA LOSS, rows lost measured), authorize it (DENY, `DATA_LOSS`), rehearse the safe plan on the same base, compare, authorize (ALLOW, selection `selected`), run, undo, verify, replay. Then it removes the containers and checks the chain again with no Docker and an empty `PATH`, changes one byte of the chain (verification must fail, exit 30) and puts it back.
+- Report: `judge.status` PASS or FAIL, counts (receipts verified, mismatches, policy violations), per-step results with the expected and observed exit code and named checks, the story (measured loss, denial, selection, run, undo), the receipt list with hashes, the operator public key. Exit 0 PASS, 40 FAIL, 41 Docker missing or demo database not prepared.
+- A step that does not match stops the run; every later step is reported `skipped`, and a skipped step is never a pass.
+- The 60 s budget is judged only when the Postgres image was already on the machine. A first run that downloads it is timed and reported, not judged (`budget_enforced: false`).
+- `[~]` T19.1: R8.1 asks for judge mode on a mission ID. `justrunme verify` and `justrunme replay` re-check any recorded mission (chain, policy, selections); `judge` runs its own demo mission and does not take a mission ID. `[~]` T19.2: the offline phase needs no Docker and no `PATH` (tested); "no network calls" is not asserted by a network probe.
+- T19.4 (Chaos Twin) is not started.
 
 ---
 

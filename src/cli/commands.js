@@ -22,6 +22,8 @@ import { plansOnBase } from '../compare/gate.js'
 import { AuthorizationRefused, signatureProblem } from '../authorize/authorization.js'
 import { authorizationPath, authorizeMission, runMission } from '../run/mission.js'
 import { UndoRefused, undoMission } from '../undo/undo.js'
+import { JudgeEnvironmentError, createBackend } from '../judge/env.js'
+import { runJudge } from '../judge/index.js'
 import { EXIT, verdictExit } from './codes.js'
 import { ConfigError, loadTarget } from './target.js'
 
@@ -99,6 +101,22 @@ function verifiedChain(args) {
   if (first.ok || !first.findings.every((f) => f.code === 'ANCHOR_BEHIND')) return first
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250)
   return verifyChain(args)
+}
+
+/**
+ * The one-command demo. It builds its own throwaway workspace, key and database, so
+ * it takes neither --repo nor --mission and never reads the operator's key directory.
+ */
+export async function judgeCmd({ opts }) {
+  if (opts.repo !== undefined || opts.mission !== undefined) throw new CliError(EXIT.USAGE, 'USAGE', 'judge builds its own workspace; it takes no --repo or --mission')
+  let report
+  try {
+    report = await runJudge({ create: () => createBackend() })
+  } catch (err) {
+    if (err instanceof JudgeEnvironmentError) throw new CliError(EXIT.JUDGE_ENVIRONMENT, err.code, err.message)
+    throw err
+  }
+  return { exit: report.judge.status === 'PASS' ? EXIT.OK : EXIT.JUDGE_FAILED, result: report }
 }
 
 export function keysInit() {

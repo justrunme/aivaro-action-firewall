@@ -24,6 +24,8 @@ export const EXIT = Object.freeze({
   EMERGENCY_RECOVERED: 17, // undo --emergency-recovery: RECOVERED and verified, evidence_status "unverified" (journal, not chain)
   INTEGRITY: 30, // verify or replay found a broken chain, a policy violation or a bad selection;
   //               or a command did its work but could not record it (error.code RESULT_UNRECORDED)
+  JUDGE_FAILED: 40, // judge: a step did not match, or the 60 s budget was exceeded
+  JUDGE_ENVIRONMENT: 41, // judge: Docker unavailable or the demo database could not be prepared
   CHAIN_LOCKED: 31, // the receipt chain lock is held or stuck; see `justrunme lock inspect`
 })
 

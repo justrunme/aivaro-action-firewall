@@ -606,3 +606,29 @@ Not taken, recorded:
   - Exit 17 when restored and verified, 14 when not, 30 if the journal itself cannot be written. Never 0.
 - Security limit stated plainly in README: JustRunMe is not a sandbox; plan steps run as the OS user and can read the key directory.
 - Fingerprint: `base.target` now includes `db_user` and `health`; changing either after authorization blocks the run (`FIDELITY_MISMATCH`, component named).
+
+---
+
+## Run 17 — T19 `justrunme judge`
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t19-judge`, from `main` at `2bdc373` (PR 10 merged by the operator) |
+
+### Written
+
+- `src/judge/scenario.js`: the scenario as ordered steps against a backend. It drives the CLI only: rehearse the dangerous plan, authorize it (denied), rehearse the safe plan on the same base, compare, authorize, run, undo, verify, replay; then verify again after the containers are gone with an empty `PATH`, change one byte of the chain (verification must fail with exit 30) and put it back. Each step lists named checks next to its exit code, including direct reads of the real database (the dangerous rehearsal did not touch it, the run added the column and lost no row, the undo restored tables and columns). The first mismatch stops the run; later steps are `skipped`, never passed.
+- `src/judge/report.js`: PASS/FAIL report (R8.4): counts of receipts verified, mismatches, policy violations; findings `STEP_FAILED`, `STEP_SKIPPED`, `OVER_BUDGET`; the story, the receipt list with hashes, the operator public key, the limits.
+- `src/judge/env.js`: the Docker backend. Throwaway workspace, key directory and Compose project `jrm-judge-<id>`; the image is checked for presence first; child processes get only `PATH`, `HOME`, `DOCKER_*`, `TMPDIR`, `LANG` and `JUSTRUNME_HOME` pointing at the throwaway key directory.
+- `src/judge/index.js`: timing around the whole run (setup and teardown included), cleanup on Ctrl-C and SIGTERM.
+- `justrunme judge` in the CLI (`--text` prints a step list), exit 40 on a failed judge, 41 when Docker is missing.
+- `src/rehearsal/compose.js`: `psql` and `dump` use `docker exec -i <container>` instead of `docker compose exec`. A mission ran about 80 compose execs at 0.25 s overhead each. The container id is looked up once per process and dropped when this process runs `up` or `down` on the project.
+
+### Decisions
+
+- The judge is a live demo with its own database, not only a replay of an existing mission. `verify` and `replay` keep that role. `justrunme judge` takes no `--repo` or `--mission`.
+- The 60 s budget is judged only when the Postgres image is already local. A first run that downloads it is timed, reported with `budget_enforced: false`, and not failed for that reason.
+- Measured on the author's Mac before the exec change: 55.6 s. After: 44.1 s. The Postgres container start (about 6 s per start, three starts) did not move with health-check interval, `fsync=off` or `--no-sync` (measured, then dropped), so the judge keeps the demo compose file as it is.
+- Not done: `judge <mission-id>` as in R8.1, a network probe for "no network calls" (T19.2), Chaos Twin (T19.4).

@@ -38,13 +38,39 @@ function baseArgs(t) {
   return args
 }
 
+/**
+ * `docker compose exec` costs about 0.25 s more than `docker exec` on the same
+ * container, and one mission runs it dozens of times. The container id of a
+ * service is looked up once per process and forgotten whenever this process
+ * brings the project up or down. If the container was replaced behind our back,
+ * `docker exec` fails on the stale id; nothing runs against another container.
+ */
+const containerIds = new Map()
+const containerKey = (t, service) => `${t.project}\u0000${t.composeFile}\u0000${service}`
+
+async function containerOf(t, service) {
+  const key = containerKey(t, service)
+  const known = containerIds.get(key)
+  if (known) return known
+  const id = (await runOk('docker', [...baseArgs(t), 'ps', '-q', service])).trim().split('\n')[0]
+  if (!/^[0-9a-f]{12,64}$/.test(id)) throw new Error(`service ${service} of project ${t.project} is not running`)
+  containerIds.set(key, id)
+  return id
+}
+
+const forget = (t) => {
+  for (const key of [...containerIds.keys()]) if (key.startsWith(t.project + '\u0000')) containerIds.delete(key)
+}
+
 /** @param {Target} t */
 export async function up(t, services) {
+  forget(t)
   await runOk('docker', [...baseArgs(t), 'up', '-d', '--wait', '--wait-timeout', '90', ...services], { timeoutMs: 180000 })
 }
 
 /** Remove containers, networks and volumes of the project; never throws. */
 export async function down(t) {
+  forget(t)
   return run('docker', [...baseArgs(t), 'down', '-v', '--remove-orphans', '--timeout', '5'], { timeoutMs: 120000 })
 }
 
@@ -52,8 +78,16 @@ export async function down(t) {
  * Run SQL in the target database. `input` is fed on stdin (used for files and dumps).
  * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
  */
-export function psql(t, { sql, input, singleTransaction = false }) {
-  const args = [...baseArgs(t), 'exec', '-T', t.dbService, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', t.dbUser, '-d', t.dbName, '-At', '-F', '\t']
+export async function psql(t, { sql, input, singleTransaction = false }) {
+  assertTarget(t)
+  let container
+  try {
+    container = await containerOf(t, t.dbService)
+  } catch (err) {
+    // Same contract as before: psql resolves with a non-zero code instead of throwing.
+    return { code: 1, stdout: '', stderr: String(err.message), timedOut: false }
+  }
+  const args = ['exec', '-i', container, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', t.dbUser, '-d', t.dbName, '-At', '-F', '\t']
   if (singleTransaction) args.push('-1')
   if (sql !== undefined) args.push('-c', sql)
   return run('docker', args, { input, timeoutMs: 120000 })
@@ -61,7 +95,8 @@ export function psql(t, { sql, input, singleTransaction = false }) {
 
 /** Plain-SQL dump of the target database. */
 export async function dump(t) {
-  return runOk('docker', [...baseArgs(t), 'exec', '-T', t.dbService, 'pg_dump', '-U', t.dbUser, '-d', t.dbName, '--no-owner', '--no-privileges'], { timeoutMs: 120000 })
+  assertTarget(t)
+  return runOk('docker', ['exec', '-i', await containerOf(t, t.dbService), 'pg_dump', '-U', t.dbUser, '-d', t.dbName, '--no-owner', '--no-privileges'], { timeoutMs: 120000 })
 }
 
 /** Same target, connected to another database of the same server (for CREATE / RENAME DATABASE). */
