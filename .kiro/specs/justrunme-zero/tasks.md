@@ -37,8 +37,33 @@ Completed in this session (task 11 — spec, steering, scaffold):
 | T12.4 | Add `npm audit --audit-level=high` step | — | CI: audit job |
 | T12.5 | Pin all images to tags (e.g. `postgres:16.3-alpine`); add digest pinning TODO for T14 | R12.1 | CI: docker-compose syntax check |
 | T12.6 | Validate all JSON in `.kiro/` parses cleanly (`jq`) | — | CI: lint-specs validate-json step |
+| T12.7 | Rewrite README for JustRunMe with an honest status table | — | CI: brand-name check |
+| T12.8 | Remove `exports` and `bin` entries that point to files not yet written | — | `npm test` |
+| T12.9 | Confirm hook trigger names against kiro.dev/docs/hooks; `AgentStop` replaced by documented `Stop` | R10.1 | smoke: stop-checklist trigger |
+| T12.10 | CI: ubuntu only, run full `npm test`, check whitespace against the PR base, check banned product names in README and `docs/` only | — | CI |
+| T12.11 | Spec update: contract fields, allowlist binding (R3.6, R3.7), fingerprint (R3.1), recovery verification (R5.7), Demo A and B acceptance (R13, R14), passkey moved to P2 (R6.7, R6.8) | R3, R5, R6, R13, R14 | smoke: R1 to R14 present |
 
-- [ ] T12.1 · [ ] T12.2 · [ ] T12.3 · [ ] T12.4 · [ ] T12.5 · [ ] T12.6
+Provenance check for the six files restored from PR #1: done with `gh pr view 1` and `git log`; same repository, same author (see `scope.md`, Code Origin).
+
+- [x] T12.1 · [x] T12.2 · [~] T12.3 · [~] T12.4 · [x] T12.5 · [~] T12.6 · [x] T12.7 · [x] T12.8 · [x] T12.9 · [~] T12.10 · [x] T12.11
+
+`[~]` rows (T12.3, T12.4, T12.6, T12.10) are implemented in `ci.yml` and not yet confirmed green on GitHub Actions; mark `[x]` after CI passes on the T12 pull request.
+
+## Plan and deadlines
+
+Priority is one working vertical scenario: Rehearse, Detect, Replan, Run, Undo, Verify. Console work does not start until Demo A (R13) and Demo B (R14) pass.
+
+| Milestone | Result | Deadline |
+|-----------|--------|----------|
+| T12 | Clean repository, docs, CI | 19 Nov |
+| T13, T14 | Real rehearsal and `DATA LOSS` block, allowlist (Demo A) | 23 Nov |
+| T15, T16 | Undo, recovery verification, receipts, local approval (Demo B) | 27 Nov |
+| T17 | Working Kiro integration | 29 Nov |
+| T19 | Judge mode, one command | 1 Dec |
+| T18 | Minimal Console | 2 Dec |
+| T20 | Video and submission | 3 Dec |
+
+Kiro integration is checked early: T13.7 confirms in a real Kiro session that the hook gets events and exit 2 stops a call. Passkey and phone approval are P2.
 
 ---
 
@@ -52,8 +77,10 @@ Completed in this session (task 11 — spec, steering, scaffold):
 | T13.4 | Implement `src/hook/bypass.js` (inline interpreter, undeclared script, MCP re-entry detection) | R10.2, R10.3, R10.4 | test/hook.test.js — each bypass category blocked |
 | T13.5 | Implement `src/hook/pretooluse.js` (entry point; contract check; calls bypass.js; exit 2) | R1.4, R1.5, R10.1, R10.5 | test/hook.test.js — allowed call passes; blocked call exits 2 |
 | T13.6 | Write `.kiro/hooks/pretooluse.json` (PreToolUse hook running the hook script) | R10.1 | smoke: hook JSON valid |
+| T13.7 | Default-deny hook evaluation: parse failure, missing contract and missing authorization all exit 2; replayed `PreToolUse` event fixtures for allowed and blocked calls | R10.6, R10.7, R10.8 | test/hook.test.js |
+| T13.8 | Manual check in a real Kiro session: hook receives events and exit 2 stops the tool call; result recorded in `docs/KIRO_LOG.md` | R10.8 | manual, logged |
 
-- [ ] T13.1 · [ ] T13.2 · [ ] T13.3 · [ ] T13.4 · [ ] T13.5 · [ ] T13.6
+- [ ] T13.1 · [ ] T13.2 · [ ] T13.3 · [ ] T13.4 · [ ] T13.5 · [ ] T13.6 · [ ] T13.7 · [ ] T13.8
 
 ---
 
@@ -68,8 +95,11 @@ Completed in this session (task 11 — spec, steering, scaffold):
 | T14.5 | Implement `src/fidelity/fingerprint.js` (git HEAD, tree hash, pg row counts, schema hash, image digests) | R3.1 | test/fidelity.test.js — determinism PBT |
 | T14.6 | Implement `src/fidelity/gate.js` (compare two fingerprints; return gate decision + diff) | R3.2, R3.3, R3.4, R3.5 | test/fidelity.test.js — mismatch detected; pass recorded |
 | T14.7 | Add Docker image digest pinning to `demo/docker-compose.yml` | R12 | CI: compose syntax check |
+| T14.8 | Verdict `SAFE` or `DATA LOSS` in the impact report; failing-test count; block on `DATA LOSS` | R2.6, R2.7 | test/rehearsal.test.js |
+| T14.9 | Run allowlist: entries bind action, script content hash, fingerprint, mission ID, expiry; hook consults it | R3.6, R3.7 | test/fidelity.test.js, test/hook.test.js: script edited after rehearsal is blocked |
+| T14.10 | Demo A end to end with a scripted agent: dangerous migration, `DATA LOSS`, block, replan, `SAFE`, run | R13.1 to R13.4 | test/demo-a.test.js (Linux, Docker) |
 
-- [ ] T14.1 · [ ] T14.2 · [ ] T14.3 · [ ] T14.4 · [ ] T14.5 · [ ] T14.6 · [ ] T14.7
+- [ ] T14.1 · [ ] T14.2 · [ ] T14.3 · [ ] T14.4 · [ ] T14.5 · [ ] T14.6 · [ ] T14.7 · [ ] T14.8 · [ ] T14.9 · [ ] T14.10
 
 ---
 
@@ -85,8 +115,12 @@ Completed in this session (task 11 — spec, steering, scaffold):
 | T15.6 | Implement `src/undo/engine.js` (restore in reverse order; collect failures; emit undo receipt) | R4.3, R4.4, R4.5, R4.6 | test/undo.test.js — reverse order verified; unsupported type rejected |
 | T15.7 | Property-based test: undo idempotence (calling undo twice returns same result) | R4.3 | test/undo.test.js — fast-check property |
 | T15.8 | Implement `src/undo/verify.js` (checksum diff, pg row counts, schema hash, health poll, test suite) | R5.1–R5.6 | test/undo.test.js — verification pass and fail cases |
+| T15.9 | Verification fails loudly: non-zero exit; negative control that corrupts one value must yield `FAIL` | R5.7, R14.4 | test/undo.test.js |
+| T15.10 | Demo B end to end: intentional failure, `justrunme undo`, row counts, content checksums, schema hash, file checksums and `/health` each asserted | R14.1 to R14.5 | test/demo-b.test.js (Linux, Docker) |
 
-- [ ] T15.1 · [ ] T15.2 · [ ] T15.3 · [ ] T15.4 · [ ] T15.5 · [ ] T15.6 · [ ] T15.7 · [ ] T15.8
+Volume backup is not part of v1 undo claims; Docker coverage is image tag and Compose service state only until a volume restore has an integration test.
+
+- [ ] T15.1 · [ ] T15.2 · [ ] T15.3 · [ ] T15.4 · [ ] T15.5 · [ ] T15.6 · [ ] T15.7 · [ ] T15.8 · [ ] T15.9 · [ ] T15.10
 
 ---
 
@@ -99,10 +133,10 @@ Completed in this session (task 11 — spec, steering, scaffold):
 | T16.3 | Implement `src/receipts/chain.js` (SQLite append + hash chain verify) | R7.2, R7.3, R7.4 | test/receipts.test.js — chain verifies; mutation breaks chain (PBT) |
 | T16.4 | Property-based test: appending N receipts then verifying always passes | R7.2 | test/receipts.test.js — fast-check property |
 | T16.5 | Property-based test: mutating any single row breaks chain at that position | R7.3 | test/receipts.test.js — fast-check property |
-| T16.6 | Implement `src/approval/webauthn.js` (challenge issuance; assertion verification) | R6.3, R6.4, R6.5 | test/approval.test.js — invalid assertion rejected; valid passes |
-| T16.7 | Implement `src/approval/gate.js` (irreversible flag + threshold check → route to webauthn) | R6.1, R6.2, R6.6 | test/approval.test.js — threshold breach escalates correctly |
+| T16.6 | (P2) Implement `src/approval/webauthn.js` (challenge issuance; assertion verification) | R6.3, R6.4, R6.5, R6.8 | test/approval.test.js — invalid assertion rejected; valid passes |
+| T16.7 | Implement `src/approval/gate.js` (irreversible flag + threshold check; local one-time approval bound to payload hash, nonce, expiry) | R6.1, R6.2, R6.6, R6.7 | test/approval.test.js — escalation, replay rejected, expiry rejected, payload mismatch rejected |
 
-- [ ] T16.1 · [ ] T16.2 · [ ] T16.3 · [ ] T16.4 · [ ] T16.5 · [ ] T16.6 · [ ] T16.7
+- [ ] T16.1 · [ ] T16.2 · [ ] T16.3 · [ ] T16.4 · [ ] T16.5 · [ ] T16.6 (P2) · [ ] T16.7
 
 ---
 
@@ -181,3 +215,5 @@ milestone that adds resources and permissions blocks after the MCP server exists
 | test/judge.test.js | R8.1, R8.2, R8.3, R8.4 |
 | test/privacy.test.js | R11.1, R11.2, R11.3 |
 | demo/integration.test.js | R12.1, R12.2, R12.3 |
+| test/demo-a.test.js | R13.1, R13.2, R13.3, R13.4, R2.6, R2.7 |
+| test/demo-b.test.js | R14.1, R14.2, R14.3, R14.4, R14.5, R5.7 |

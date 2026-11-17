@@ -11,12 +11,6 @@
     "test:smoke": "node --test test/smoke.test.js",
     "test:demo": "node --test demo/integration.test.js"
   },
-  "exports": {
-    ".": "./src/core/index.js"
-  },
-  "bin": {
-    "justrunme": "./src/cli/index.js"
-  },
   "dependencies": {},
   "devDependencies": {},
   "keywords": [

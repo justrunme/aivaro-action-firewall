@@ -187,3 +187,49 @@ Removed duplicate Kiro-generated `demo/migrations/002_seed.sql`; retained the or
 ### CI repair — 2026-11-17 00:18 CET
 
 Manual: first PR head `7d5e706` passed Ubuntu, Windows, and Linux Docker integration; lint failed on three naming-rule mentions in `product.md` despite their negative context. Reworded them to explicit `Never use` prohibitions or a plain limitation; no test was weakened or skipped. CI rerun required on next head.
+
+---
+
+## Run 7 — T12 repository hygiene and spec alignment
+
+| Field | Value |
+|-------|-------|
+| Date / time | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Session type | T12, docs, CI and spec alignment; no `src/` code |
+| Branch | `kiro/t12-hygiene`, created from `kiro/spec-justrunme` at `d56c928` |
+| Commits / pushes | None made by Kiro |
+
+### Provenance of the six files restored from closed PR #1
+
+Checked with `gh pr view 1` and `git log`: PR #1 is closed, in this same repository (`justrunme/justrunme-zero`), authored by the repository owner, commits `3fa6a1e` and `ca90b8c` on `kiro/spec-action-firewall`. The six files are therefore not third-party code. No file was rewritten because of provenance.
+
+### Hook trigger check
+
+`kiro.dev/docs/hooks` and `kiro.dev/docs/hooks/types` show `"trigger": "Stop"` in the hook JSON examples, with the UI label "Agent Stop". `AgentStop` does not appear in those pages. `stop-checklist.json` and its smoke test were changed from `AgentStop` to `Stop`. The documented `PreToolUse` event carries `tool_name` and `tool_input`, MCP tools are named `mcp_<server>_<tool>`, and exit code 2 blocks the call. Not yet confirmed in a live Kiro session; that is task T13.8.
+
+### Changed
+
+- `README.md`: rewritten for JustRunMe with a status table that marks everything unimplemented as such.
+- `package.json`: removed `exports` and `bin` pointing to files that do not exist.
+- `.github/workflows/ci.yml`: ubuntu only; runs full `npm test`; whitespace check against the PR base; brand check limited to banned product names in `README.md` and `docs/` (excluding this log); R1 to R14 prefix check.
+- `.kiro/hooks/stop-checklist.json`, `test/smoke.test.js`: trigger name and R13, R14 assertions.
+- `.kiro/steering/scope.md`, `.kiro/specs/justrunme-zero/{requirements,design,tasks}.md`: contract fields, allowlist binding, content-level fingerprint, fail-closed hook, loud recovery verification, Demo A and Demo B acceptance (R13, R14), passkey moved to P2, new deadlines.
+
+### Verification (local, macOS)
+
+- `npm test` before changes: 83 pass, 0 fail.
+- `npm test` after changes: 85 pass, 0 fail.
+- `git diff --check`: clean.
+- JSON parse of `.kiro/hooks/*.json` and `package.json`: OK.
+- `ci.yml` parsed by Ruby YAML: jobs `test`, `demo-integration`, `lint-specs`; matrix is ubuntu only.
+- Not run: GitHub Actions, the Docker demo integration test (`npm run test:demo`), `npm audit`.
+
+### Run 7 follow-up — review fixes
+
+Applied after operator review, same branch, still uncommitted:
+
+- `ci.yml`: both install steps use `npm ci --ignore-scripts` (a local `npm ci --dry-run` reported the lockfile in sync). The whitespace check now compares against `github.event.before` for pushes and the PR base for pull requests, with a merge-base fallback for a first push or an unreachable `before`.
+- `requirements.md` R10.7: a dangerous shell construct is allowed only if it ran in rehearsal, the rehearsal environment matched the real run's declared resources, and it touches only declared resources; otherwise blocked. It is stated as a gate on declared actions, not isolation.
+- `README.md`: added a sentence that no enforcement mechanism exists yet.
+- Verification: see the report in the session; GitHub Actions not run.

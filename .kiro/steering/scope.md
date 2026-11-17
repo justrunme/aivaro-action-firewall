@@ -11,7 +11,9 @@
 | Undo Mission | Pre-run capture of tracked files, `pg_dump`, container config; one-command restore |
 | Recovery Verification | Checksums, row counts, schema hash, health endpoint, test suite pass/fail |
 | Irreversible Action Flags | Explicit flag in impact report; require out-of-band approval |
-| Out-of-Band Approval | WebAuthn passkey assertion bound to SHA-256 of exact action payload |
+| Out-of-Band Approval (P1) | Local one-time approval bound to SHA-256 of the exact action payload plus nonce and expiry (R6.7) |
+| Run Allowlist | Only rehearsed actions run; entries bind canonical action, script content hash, fingerprint, mission ID and expiry (R3.6) |
+| Demo A and Demo B | Acceptance scenarios R13 and R14; these have priority over every other feature |
 | Ed25519 Receipts | Per-action signed receipt: hash, verdict, timestamp, public key, mission ID |
 | Mission Replay / Judge Mode | Re-verify receipts and fidelity; < 60 s; no production credentials |
 | Kiro PreToolUse Hook | `JUSTRUNME_GATE=on` gates every tool call against the active contract |
@@ -25,7 +27,8 @@
 |------|--------|
 | Cloud sync / remote policy store | v2+ |
 | Multi-tenant key management | Out of scope for single-operator bootstrap |
-| GUI / web UI | CLI and MCP only |
+| WebAuthn passkey / phone approval (P2) | Deferred; not claimed until implemented and tested (R6.8) |
+| Console beyond a minimal static page | A minimal local Console (mission, impact diff, undo checklist, replay timeline from receipts) starts only after Demo A and Demo B pass (T18). No framework. |
 | Universal "undo anything" | Undo covers only: tracked git files, Postgres databases named in the contract, Docker Compose services, and config files listed in the contract. Network calls, email, payment charges, and other external side effects are **not** undoable. |
 | Claiming undo for untested resource types | Never claim undo works for a resource type until the restore path has an integration test that verifies it |
 | Auto-commit or auto-push | Kiro never commits or pushes |
@@ -34,7 +37,9 @@
 ## Code Origin
 
 - **Never copy code from other repositories**, including but not limited to: `aivaro`, `agent-approval`, `aivaro-agent-crew`, or any private Aivaro workspace.
-- All production source in this repository must be written fresh in this session or by a future Kiro session. Referencing closed PR #1 as a design input is permitted; copying its source verbatim is not.
+- All production source in this repository must be written fresh in this session or by a future Kiro session.
+- Provenance of closed PR #1 (checked in T12 with `gh pr view 1` and `git log`): it is in this same repository, authored by the repository owner, commits `3fa6a1e` and `ca90b8c` on branch `kiro/spec-action-firewall`. Files restored from it are therefore not third-party code. Any other source must still be written fresh, and anything whose origin cannot be shown through git history is rewritten and the decision logged in `docs/KIRO_LOG.md`.
+- Naming rules apply to public product and feature names. Internal technical words such as goal, snapshot or checkpoint in code or specs are not violations by themselves; CI checks only the banned product names in user-facing material (README and `docs/`).
 - If a utility (e.g. a crypto helper) looks identical to code in another repo, rewrite it from scratch with a comment explaining the approach.
 
 ## Claims Policy

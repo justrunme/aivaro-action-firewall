@@ -177,8 +177,13 @@ test/
 ### 3.1 Mission Contract (YAML)
 
 ```yaml
+# File: justrunme.mission.yaml (repository root)
 id: "mission-2026-001"
-description: "Apply database migration and restart app"
+objective: "Apply database migration and restart app"
+allowed_paths: ["demo/migrations/", "demo/src/"]
+protected_tables: ["orders", "patches"]
+time_limit_seconds: 300
+irreversible_actions: ["step-3"]
 plan:
   - id: "step-1"
     tool: "shell"
@@ -218,9 +223,32 @@ impact_thresholds:
   "images": {
     "app": "ghcr.io/justrunme/demo-app:0.1.0",
     "db": "postgres:16.3-alpine"
-  }
+  },
+  "uncommitted_hash": "sha256:...",
+  "contract_hash": "sha256:...",
+  "plan_hash": "sha256:..."
 }
 ```
+
+`postgres.<db>.table_checksums` holds one SHA-256 per table over rows in
+primary-key order, in addition to `row_counts` and `schema_hash`.
+
+### 3.2a Run Allowlist Entry
+
+```json
+{
+  "mission_id": "mission-2026-001",
+  "fingerprint_hash": "sha256:...",
+  "expires_at": "2026-11-16T20:30:00Z",
+  "action": { "tool": "shell", "argv": ["node", "demo/migrations/run.js"] },
+  "script_hashes": { "demo/migrations/run.js": "sha256:..." }
+}
+```
+
+The hook allows a call only if the normalized action equals `action`, every
+file in `script_hashes` still hashes to the recorded value, the current
+fingerprint equals `fingerprint_hash`, and the entry has not expired. Anything
+else, including a parse error, exits 2 (R3.6, R3.7, R10.6).
 
 ### 3.3 Impact Report
 

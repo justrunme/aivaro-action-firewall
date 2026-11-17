@@ -4,7 +4,7 @@
     {
       "name": "Stop checklist",
       "description": "Verifies tasks.md reflects actual work done and reminds the agent to clean up temporary files before ending the session",
-      "trigger": "AgentStop",
+      "trigger": "Stop",
       "action": {
         "type": "agent",
         "prompt": "The agent session is ending. Before closing:\n1. Open .kiro/specs/justrunme-zero/tasks.md and confirm every task you completed this session is marked [x], every task you started but did not finish is marked [~], and no task you did not touch was changed.\n2. Remove any temporary files or scripts you created (scratch files, debug scripts, throwaway fixtures outside os.tmpdir()).\n3. Confirm you did not execute git commit, git push, git merge, or any deployment command during this session.\n4. If npm test was run, state whether it passed or failed.\n5. Report the list of files you created or modified this session.\n6. Check that no file you wrote contains an absolute home-directory path, a real email address, or a real credential."

@@ -212,10 +212,11 @@ describe('hook definitions', () => {
     assert.ok(typeof hook.action.command === 'string' && hook.action.command.includes('npm test'))
   })
 
-  it('stop-checklist uses AgentStop trigger and references justrunme-zero tasks.md', () => {
+  it('stop-checklist uses the documented Stop trigger and references justrunme-zero tasks.md', () => {
     const def = JSON.parse(readFileSync(path.join(root, '.kiro/hooks/stop-checklist.json'), 'utf8'))
     const hook = def.hooks[0]
-    assert.equal(hook.trigger, 'AgentStop')
+    // kiro.dev/docs/hooks lists "Stop" as the JSON trigger name (UI label: Agent Stop)
+    assert.equal(hook.trigger, 'Stop')
     // The stop prompt must reference the JustRunMe spec path, not the old firewall path
     const promptText = JSON.stringify(hook.action)
     assert.ok(
@@ -233,7 +234,7 @@ describe('requirements.md content', () => {
   const content = readRoot('.kiro/specs/justrunme-zero/requirements.md')
 
   // All twelve top-level requirement groups must be present
-  const topLevelIds = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12']
+  const topLevelIds = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14']
   for (const id of topLevelIds) {
     it(`contains ${id} requirement section`, () => {
       assert.ok(
