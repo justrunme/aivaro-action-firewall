@@ -16,7 +16,7 @@ import { compareFingerprints } from '../fidelity/gate.js'
 import { STATE_DIR } from '../fidelity/source.js'
 import { AuthorizationRefused, issueAuthorization, signatureProblem } from '../authorize/authorization.js'
 import { executeSteps } from '../rehearsal/steps.js'
-import { loadReport, planId } from '../rehearsal/engine.js'
+import { loadReport, planId, reportSignatureProblem } from '../rehearsal/engine.js'
 
 export const authorizationPath = (repoDir) => path.join(repoDir, STATE_DIR, 'authorization.json')
 
@@ -29,6 +29,9 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
   } catch {
     throw new AuthorizationRefused('NO_REHEARSAL', 'this plan has not been rehearsed')
   }
+  const problem = reportSignatureProblem(report, keys.publicKey)
+  if (problem) throw new AuthorizationRefused('REPORT_INVALID', problem)
+  if (report.plan_id !== planId(contract)) throw new AuthorizationRefused('REPORT_INVALID', 'report is for a different plan')
   const currentFingerprint = await computeFingerprint({ repoDir, target: realTargetOf(repoDir, target), contract, contractHash })
   const auth = issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds })
   mkdirSync(path.join(repoDir, STATE_DIR), { recursive: true })
@@ -36,7 +39,8 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
   return auth
 }
 
-export async function runMission({ repoDir, contract, contractHash, target, publicKey, now = Date.now() }) {
+export async function runMission({ repoDir, contract, contractHash, target, keys, now = Date.now() }) {
+  const publicKey = keys?.publicKey
   const file = authorizationPath(repoDir)
   if (!existsSync(file)) throw new AuthorizationRefused('NO_AUTHORIZATION', 'no authorization for a real run')
   const auth = JSON.parse(readFileSync(file, 'utf8'))
@@ -57,5 +61,10 @@ export async function runMission({ repoDir, contract, contractHash, target, publ
   // Consume before executing: a crash mid-run must not leave a reusable authorization.
   renameSync(file, path.join(repoDir, STATE_DIR, `authorization.used-${auth.signature.slice(0, 16)}.json`))
   const steps = await executeSteps({ plan: contract.plan, cwd: repoDir, target: realTarget, mode: 'real' })
-  return { mission_id: contract.id, plan_id: auth.plan_id, steps, ok: steps.every((s) => s.status === 'ok' || s.status === 'skipped_needs_approval') }
+  return {
+    mission_id: contract.id,
+    plan_id: auth.plan_id,
+    steps,
+    ok: steps.every((s) => s.status === 'ok' || s.status === 'skipped_needs_approval'),
+  }
 }

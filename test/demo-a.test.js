@@ -13,14 +13,14 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync } from 'node:child_process'
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { stringify } from 'yaml'
 import { parseContract } from '../src/contract/parser.js'
 import { loadOrCreateKeys } from '../src/receipts/keys.js'
-import { rehearse } from '../src/rehearsal/engine.js'
+import { rehearse, reportPath } from '../src/rehearsal/engine.js'
 import { measureDatabase } from '../src/rehearsal/measure.js'
 import { down, psql, up, writeNoPortsOverride } from '../src/rehearsal/compose.js'
 import { authorizeMission, runMission } from '../src/run/mission.js'
@@ -101,7 +101,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     const c = writeContract('demo/migrations/003_consolidate_orders.sql')
     assert.equal(c.ok, true)
     const realBefore = await measureReal()
-    dangerReport = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target })
+    dangerReport = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
     assert.equal(dangerReport.verdict, 'DATA LOSS')
     assert.deepEqual(dangerReport.tables.orders.rows_before, 3)
     assert.deepEqual(dangerReport.tables.orders.rows_after, 2)
@@ -118,15 +118,27 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     const realBefore = await measureReal()
     const c = writeContract('demo/migrations/003_consolidate_orders.sql')
     await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'DATA_LOSS' && e.detail.length > 0)
-    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, publicKey: keys.publicKey }), (e) => e.code === 'NO_AUTHORIZATION')
+    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'NO_AUTHORIZATION')
     assert.deepEqual(await measureReal(), realBefore)
+  })
+
+  it('PR #5 condition 1: a report edited to say SAFE is rejected (report signature)', async () => {
+    const c = writeContract('demo/migrations/003_consolidate_orders.sql')
+    const file = reportPath(repoDir, c.contract.id, dangerReport.plan_id)
+    const forged = JSON.parse(readFileSync(file, 'utf8'))
+    forged.verdict = 'SAFE'
+    forged.evidence = []
+    writeFileSync(file, JSON.stringify(forged))
+    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'REPORT_INVALID')
+    writeFileSync(file, JSON.stringify(dangerReport)) // restore the genuine report
+    assert.equal(existsSync(path.join(repoDir, '.justrunme/authorization.json')), false)
   })
 
   it('R13.3: the replanned additive migration rehearses SAFE and runs for real', async () => {
     unlinkSync(path.join(repoDir, 'demo/migrations/003_consolidate_orders.sql'))
     writeFileSync(path.join(repoDir, 'demo/migrations/003_add_order_status.sql'), SAFE)
     const c = writeContract('demo/migrations/003_add_order_status.sql')
-    safeReport = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target })
+    safeReport = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
     assert.equal(safeReport.verdict, 'SAFE', JSON.stringify(safeReport.evidence))
     assert.deepEqual(safeReport.schema_delta.added_columns, ['orders.status'])
     // R15.2 groundwork: both plans started from the same base state.
@@ -135,19 +147,37 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
 
     const auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
     assert.match(auth.signature, /^[0-9a-f]{128}$/)
-    const result = await runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, publicKey: keys.publicKey })
+
+    // PR #5 condition 1: the authorization does not fit another plan ...
+    const otherPlan = { ...c.contract, plan: [{ ...c.contract.plan[0], args: ['demo/migrations/003_consolidate_orders.sql'] }] }
+    await assert.rejects(runMission({ repoDir, contract: otherPlan, contractHash: 'sha256:' + '0'.repeat(64), target, keys }), (e) => e.code === 'AUTHORIZATION_INVALID')
+    // ... nor another environment with identical data and images.
+    const twin = { ...target, project: `jrm-demoa-twin-${randomBytes(4).toString('hex')}` }
+    const twinReal = { ...realTarget, project: twin.project }
+    try {
+      await up(twinReal, ['db'])
+      for (const f of ['001_init.sql', '002_seed_data.sql']) await psql(twinReal, { input: readFileSync(path.join(repoDir, 'demo/migrations', f)) })
+      await assert.rejects(
+        runMission({ repoDir, contract: c.contract, contractHash: c.hash, target: twin, keys }),
+        (e) => e.code === 'FIDELITY_MISMATCH' && e.detail.some((d) => d.component === 'base.target.project')
+      )
+    } finally {
+      await down(twinReal)
+    }
+
+    const result = await runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
     assert.equal(result.ok, true, JSON.stringify(result.steps))
     const real = await measureReal()
     assert.equal(real.tables.orders.rows, 3)
     assert.ok(real.columns.orders.some((col) => col.startsWith('status ')))
     // Single use: the same authorization cannot run twice.
-    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, publicKey: keys.publicKey }), (e) => e.code === 'NO_AUTHORIZATION')
+    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'NO_AUTHORIZATION')
   })
 
   it('R14.5, R3.3: an UPDATE that keeps the row count still blocks authorization', async () => {
     writeFileSync(path.join(repoDir, 'demo/migrations/004_index.sql'), 'CREATE INDEX orders_patch_idx ON orders (patch_id);\n')
     const c = writeContract('demo/migrations/004_index.sql')
-    const report = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target })
+    const report = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
     assert.equal(report.verdict, 'SAFE')
     const r = await psql(realTarget, { sql: 'UPDATE orders SET quantity = quantity + 1 WHERE id = 1' })
     assert.equal(r.code, 0, r.stderr)
@@ -155,5 +185,40 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
       authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }),
       (e) => e.code === 'FIDELITY_MISMATCH' && e.detail.some((d) => d.component === 'base.postgres.pumpkin_patch.tables.orders.checksum')
     )
+  })
+
+  const worktrees = () => execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repoDir }).toString().split('\n').filter((l) => l.startsWith('worktree ')).length
+  const overrideDirs = () => readdirSync(os.tmpdir()).filter((d) => d.startsWith('jrm-override-')).length
+
+  it('PR #5 condition 2, R2.4: a failing step leaves no container, volume, network or worktree', async () => {
+    writeFileSync(path.join(repoDir, 'demo/migrations/005_broken.sql'), 'ALTER TABLE no_such_table ADD COLUMN x INT;\n')
+    const c = writeContract('demo/migrations/005_broken.sql')
+    const realBefore = await measureReal()
+    const overridesBefore = overrideDirs()
+    const report = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
+    assert.equal(report.verdict, 'FAILED')
+    assert.match(report.steps[0].detail, /no_such_table/)
+    assert.deepEqual(report.cleanup, { containers: 0, volumes: 0, networks: 0, worktree_removed: true, clean: true })
+    assert.equal(worktrees(), 1)
+    assert.equal(overrideDirs(), overridesBefore)
+    assert.deepEqual(await measureReal(), realBefore)
+    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'NOT_SAFE')
+  })
+
+  it('PR #5 condition 2, R2.4: a rehearsal whose Compose copy cannot start cleans up and reports why', async () => {
+    // Uncommitted edit that only breaks the copy: the running real container is not recreated.
+    const composePath = path.join(repoDir, 'demo/docker-compose.yml')
+    const original = readFileSync(composePath, 'utf8')
+    writeFileSync(composePath, original.replace('image: postgres:16.3-alpine', 'image: postgres:0.0-jrm-does-not-exist'))
+    try {
+      const c = writeContract('demo/migrations/004_index.sql')
+      const report = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
+      assert.equal(report.verdict, 'FAILED')
+      assert.equal(report.evidence[0].kind, 'rehearsal_error')
+      assert.equal(report.cleanup.clean, true, JSON.stringify(report.cleanup))
+      assert.equal(worktrees(), 1)
+    } finally {
+      writeFileSync(composePath, original)
+    }
   })
 })

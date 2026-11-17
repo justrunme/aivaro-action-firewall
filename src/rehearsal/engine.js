@@ -10,10 +10,12 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { hashValue } from '../util/canonical.js'
 import { redactDeep } from '../privacy/redact.js'
+import { publicKeyHex, signValue, verifyValue } from '../receipts/keys.js'
+import { run } from '../util/exec.js'
 import { computeFingerprint } from '../fidelity/fingerprint.js'
 import { baseHash } from '../fidelity/gate.js'
 import { STATE_DIR } from '../fidelity/source.js'
@@ -34,14 +36,39 @@ export function loadReport(repoDir, missionId, id) {
 }
 
 /**
+ * Reports are signed by the operator key at rehearsal time, so a report written by
+ * anything else (for example a rehearsed script writing into .justrunme) is rejected.
+ * @returns {string | null} problem
+ */
+export function reportSignatureProblem(report, publicKey) {
+  if (!report || typeof report !== 'object') return 'report is malformed'
+  const { signature, ...body } = report
+  if (body.operator_pubkey !== publicKeyHex(publicKey)) return 'report was signed by a different key'
+  return verifyValue(publicKey, body, signature) ? null : 'report signature is invalid'
+}
+
+/** What is left of a Compose project after `down` (containers, volumes, networks). */
+async function leftovers(project) {
+  const filter = `label=com.docker.compose.project=${project}`
+  const list = async (args) => (await run('docker', args)).stdout.split('\n').filter(Boolean).length
+  return {
+    containers: await list(['ps', '-a', '-q', '--filter', filter]),
+    volumes: await list(['volume', 'ls', '-q', '--filter', filter]),
+    networks: await list(['network', 'ls', '-q', '--filter', filter]),
+  }
+}
+
+/**
  * @param {object} a
  * @param {string} a.repoDir real workspace (git working tree)
  * @param {any} a.contract
  * @param {string} a.contractHash
  * @param {import('./compose.js').Target} a.target real Compose project; composeFile relative to repoDir
+ * @param {{ privateKey: any, publicKey: any }} a.keys operator keys; the report is signed
  * @param {() => number} [a.clock]
  */
-export async function rehearse({ repoDir, contract, contractHash, target, clock = Date.now }) {
+export async function rehearse({ repoDir, contract, contractHash, target, keys, clock = Date.now }) {
+  if (!keys) throw new Error('rehearse needs the operator keys to sign the report')
   const started = clock()
   const realTarget = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
   const fingerprint = await computeFingerprint({ repoDir, target: realTarget, contract, contractHash })
@@ -71,9 +98,13 @@ export async function rehearse({ repoDir, contract, contractHash, target, clock 
   } catch (err) {
     failure = String(err?.message ?? err)
   } finally {
+    // The database dump is held in memory only; nothing to delete on disk.
     await down(rehearsalTarget)
     await copy.remove()
+    rmSync(path.dirname(rehearsalTarget.overrideFile), { recursive: true, force: true })
   }
+  const left = await leftovers(project)
+  const cleanup = { ...left, worktree_removed: !existsSync(copy.dir), clean: left.containers + left.volumes + left.networks === 0 && !existsSync(copy.dir) }
 
   const impact = failure
     ? { verdict: 'FAILED', evidence: [{ kind: 'rehearsal_error', detail: failure }] }
@@ -93,10 +124,13 @@ export async function rehearse({ repoDir, contract, contractHash, target, clock 
     irreversible_actions: contract.irreversible_actions,
     all_reversible: contract.irreversible_actions.length === 0,
     database: failure ? null : { name: target.dbName, before, after },
+    cleanup,
     ...impact,
+    operator_pubkey: publicKeyHex(keys.publicKey),
   })
+  const signed = { ...report, signature: signValue(keys.privateKey, report) }
   const file = reportPath(repoDir, contract.id, id)
   mkdirSync(path.dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(report, null, 2) + '\n')
-  return report
+  writeFileSync(file, JSON.stringify(signed, null, 2) + '\n')
+  return signed
 }

@@ -2,7 +2,8 @@
  * Fidelity fingerprint of the real target (R3.1). Shape is documented in gate.js.
  */
 
-import { hashValue } from '../util/canonical.js'
+import { readFileSync } from 'node:fs'
+import { hashValue, sha256Hex } from '../util/canonical.js'
 import { sourceState } from './source.js'
 import { measureDatabase } from '../rehearsal/measure.js'
 import { imageDigests, psql } from '../rehearsal/compose.js'
@@ -19,6 +20,14 @@ export async function computeFingerprint({ repoDir, target, contract, contractHa
   const db = await measureDatabase((sql) => psql(target, { sql }))
   return {
     base: {
+      // Which environment this is. Without it, a second Compose project with the same
+      // data and images would produce the same fingerprint and accept the authorization.
+      target: {
+        project: target.project,
+        db_service: target.dbService,
+        db_name: target.dbName,
+        compose_file_hash: 'sha256:' + sha256Hex(readFileSync(target.composeFile)),
+      },
       git_head: source.git_head,
       tree_hash: source.tree_hash,
       images: await imageDigests(target),
