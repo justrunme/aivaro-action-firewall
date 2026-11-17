@@ -26,6 +26,7 @@ import { down, psql, up, writeNoPortsOverride } from '../src/rehearsal/compose.j
 import { authorizeMission, runMission } from '../src/run/mission.js'
 import { verifyChain } from '../src/receipts/chain.js'
 import { checkPolicy } from '../src/receipts/policy.js'
+import { comparePlans, verifySelection } from '../src/compare/select.js'
 
 const enabled = process.platform === 'linux' || process.env.JRM_DOCKER_TESTS === '1'
 const DEMO = new URL('../demo/', import.meta.url).pathname
@@ -147,6 +148,17 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     assert.equal(safeReport.base_hash, dangerReport.base_hash)
     assert.notEqual(safeReport.plan_id, dangerReport.plan_id)
 
+    // T17: counterfactual replay of both measured plans; the rule, not an agent, picks.
+    const cmp = comparePlans({ repoDir, keys, missionId: c.contract.id, planIds: [dangerReport.plan_id, safeReport.plan_id] })
+    assert.equal(cmp.comparison.ranking.recommended, safeReport.plan_id)
+    assert.equal(cmp.comparison.ranking.decided_by, 'R15.4.1')
+    assert.deepEqual(cmp.comparison.ranking.removed, [{ plan_id: dangerReport.plan_id, rule: 'R15.4.1', reason: 'verdict DATA LOSS' }])
+    const danger = cmp.comparison.plans.find((p) => p.plan_id === dangerReport.plan_id)
+    assert.equal(danger.rows_lost.orders, 1)
+    const replay = verifySelection({ repoDir, home, publicKey: keys.publicKey, missionId: c.contract.id })
+    assert.equal(replay.ok, true, JSON.stringify(replay.findings))
+    assert.equal(replay.reports_rechecked, 2)
+
     const auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
     assert.match(auth.signature, /^[0-9a-f]{128}$/)
 
@@ -201,7 +213,8 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     const runs = v.receipts.filter((r) => r.kind === 'run_result')
     assert.equal(runs.length, 1)
     assert.equal(runs[0].verdict, 'completed')
-    assert.ok(story.indexOf('rehearsal:SAFE') < story.indexOf('authorization_issued:allow'))
+    assert.ok(story.indexOf('rehearsal:SAFE') < story.indexOf('plan_selected:selected'))
+    assert.ok(story.indexOf('plan_selected:selected') < story.indexOf('authorization_issued:allow'))
     assert.ok(story.indexOf('authorization_issued:allow') < story.indexOf('run_result:completed'))
   })
 

@@ -113,7 +113,7 @@ T14 notes:
 - T14.10 `[~]`: R13.1 to R13.3 pass; R13.4 (signed receipts for the block and the run) waits for T16.
 - T14.7 not done: images are pinned by tag only.
 - Authorization is issued only by the operator side (`authorizeMission`), signed with the operator Ed25519 key outside the workspace, bound to the full fingerprint, and consumed by the real run. The hook re-checks signature and git source state on every call; the database part is re-checked by the runner right before execution.
-- Comparison of stored rehearsals (R15, T18.5) is not implemented; the per-plan reports and `base_hash` it needs exist.
+- Comparison of stored rehearsals (R15) is implemented as a library in T17 (counterfactual replay); the `justrunme compare` command (T18.5) is not.
 
 ---
 
@@ -168,6 +168,28 @@ T16 notes (as built, tests in `test/receipts.test.js`, `test/demo-a.test.js`, `t
 - `src/receipts/policy.js` checks the story: authorization only after a SAFE rehearsal of the same plan, each authorization used by one run of that plan, undo only for a recorded run, verification directly after its undo.
 - T16.1 (done): hook decisions are `hook_decision` receipts in the mission chain. Appends hold an exclusive lock file (`receipts.jsonl.lock`, created by writing the owner token `<pid> <host> <nonce>` to a temp file and `link()`ing it, so a lock is never empty; wait at most 8 s). A lock is never removed because of age: only when its owner is provably dead on this host, with a race-checked rename; the holder re-checks its token before each write. The head anchor is written by rename and keyed by mission and workspace path. An append interrupted between receipt and anchor leaves the chain failing verification (`ANCHOR_BEHIND`), every gated call is denied, and only `reanchorChain` (operator key, written reason, refused for anything except a clean anchor-behind state) recovers. It writes the signed `chain_reanchored` receipt first and moves the anchor second; a crash in between is `REANCHOR_PENDING` (still denied) and a second call completes it without a second receipt. A lock whose owner cannot be determined is never removed automatically: `inspectChainLock` plus `recoverLock` (operator key, reason, exact inspected hash, refused for a live owner) keeps the removed file as evidence and records `lock_recovered`; a kept file without that receipt is `LOCK_RECOVERY_UNRECORDED` and denied. With an active contract the hook denies if the decision cannot be recorded (`RECEIPT_FAILED`) or no operator key is installed (`NO_OPERATOR_KEY`); it never creates a key itself. Only a hash of the tool input is recorded. Without a contract there is no mission chain, so those denials remain unsigned audit lines.
 - Not done: T16.7 local approval for irreversible actions.
+
+---
+
+## T17 (operator order, 17 Nov) — Counterfactual Replay
+
+The operator set the order T16.1, then counterfactual replay, then CLI with exit codes, then the final demo. Replay therefore runs under T17 with IDs T17.R1 to T17.R5; the MCP tasks below keep their IDs T17.1 to T17.5 and follow later. The comparison library delivers the core of T18.5; the `justrunme compare` command itself is CLI work.
+
+| ID | Description | R-IDs | Tests |
+|----|-------------|-------|-------|
+| T17.R1 | Report records its rehearsal conditions (protected tables, thresholds, database, tests measured) | R15.1 | test/compare.test.js, test/demo-a.test.js |
+| T17.R2 | `src/compare/compare.js`: refuse unless every report is operator-signed, is the one the latest rehearsal receipt recorded in a verifying chain, all `base_hash` equal (names differing components, including target identity) and all conditions equal | R15.2 | test/compare.test.js |
+| T17.R3 | `src/compare/rank.js`: fixed rule R15.4.1 to R15.4.5, measured values only, rule that decided, rule that removed each plan | R15.3 to R15.5 | test/compare.test.js (unit + property: order-independent, never recommends a plan that is not SAFE) |
+| T17.R4 | `src/compare/select.js`: signed comparison file, `plan_selected` receipt with refs to each rehearsal receipt, `plan_comparison_refused` on refusal; policy rule for `plan_selected` | R15.4, R7 | test/compare.test.js |
+| T17.R5 | `verifySelection`: replay re-binds plans to rehearsal receipts, re-derives measured values from stored reports and re-runs the rule | R8.3, R15.4 | test/compare.test.js, test/demo-a.test.js |
+
+- [x] T17.R1 · [x] T17.R2 · [x] T17.R3 · [x] T17.R4 · [x] T17.R5
+
+T17 notes:
+- Verdict `FAILED` is removed by R15.4.1 together with `DATA LOSS`: a plan that did not complete has no measured outcome to recommend. This is stricter than the R15.4 text, which names only `DATA LOSS`.
+- Failing tests are not measured during rehearsal yet (`tests_measured: false`); every plan shows `failing_tests: null` and R15.4.2 reports "not applied". Tests measured for some plans but not others is refused as not comparable.
+- Rehearsal duration is wall-clock time and varies with machine load; R15.4.4 uses it as measured, without tolerance.
+- Reports written before T17 have no `conditions` and are refused (`CONDITIONS_UNKNOWN`); rehearse again.
 
 ---
 

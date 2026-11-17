@@ -8,7 +8,10 @@
  *   2. run_result refers to an earlier authorization_issued receipt, and each
  *      authorization is used by at most one run;
  *   3. undo refers to an earlier run_result with the same capture;
- *   4. verification refers to the undo receipt right before it.
+ *   4. verification refers to the undo receipt right before it;
+ *   5. plan_selected refers to an earlier rehearsal receipt for every compared
+ *      plan, with the same report and base, and never recommends a plan whose
+ *      rehearsal was not SAFE.
  * Each break is a POLICY_VIOLATION finding naming the receipt and the rule.
  */
 
@@ -45,6 +48,18 @@ export function checkPolicy(receipts) {
       const run = earlier(r.refs?.run)
       if (!run || run.kind !== 'run_result') violation(r, 'must refer to an earlier run_result receipt')
       else if (run.subject?.capture_id !== r.subject?.capture_id) violation(r, 'undid a capture other than the run\'s')
+    }
+    if (r.kind === 'plan_selected') {
+      const compared = Array.isArray(r.subject?.compared) ? r.subject.compared : []
+      if (compared.length < 2) violation(r, 'must compare at least two plans')
+      for (const c of compared) {
+        const reh = earlier(r.refs?.[`rehearsal:${c.plan_id}`])
+        if (!reh || reh.kind !== 'rehearsal' || reh.subject?.plan_id !== c.plan_id) violation(r, `must refer to an earlier rehearsal receipt of ${c.plan_id}`)
+        else if (reh.subject?.report_hash !== c.report_hash) violation(r, `compared a report of ${c.plan_id} other than the rehearsed one`)
+        else if (reh.subject?.base_hash !== r.subject?.base_hash) violation(r, `${c.plan_id} was rehearsed on another base`)
+        else if (c.plan_id === r.subject?.recommended && reh.verdict !== 'SAFE') violation(r, `recommends ${c.plan_id} whose rehearsal verdict is ${reh.verdict}`)
+      }
+      if (r.subject?.recommended != null && !compared.some((c) => c.plan_id === r.subject.recommended)) violation(r, 'recommends a plan it did not compare')
     }
     if (r.kind === 'verification') {
       const undo = earlier(r.refs?.undo)
