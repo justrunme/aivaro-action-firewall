@@ -24,12 +24,13 @@ import { STATE_DIR } from '../fidelity/source.js'
 import { publicKeyHex, signValue, verifyValue } from './keys.js'
 import { withLock } from './lock.js'
 
-export const KINDS = ['rehearsal', 'authorization_issued', 'authorization_refused', 'run_result', 'run_refused', 'undo', 'verification', 'hook_decision']
+export const KINDS = ['rehearsal', 'authorization_issued', 'authorization_refused', 'run_result', 'run_refused', 'undo', 'verification', 'hook_decision', 'chain_reanchored']
 const MISSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/
 
 export const chainPath = (repoDir, missionId) => path.join(repoDir, STATE_DIR, 'missions', missionId, 'receipts.jsonl')
 // One anchor per (workspace, mission): two workspaces may use the same mission id.
-const headPath = (home, missionId, repoDir) => {
+export const anchorPath = (home, missionId, repoDir) => headPath(home, missionId, repoDir)
+function headPath(home, missionId, repoDir) {
   let where = path.resolve(repoDir)
   try {
     where = realpathSync(where)
@@ -74,15 +75,27 @@ export function appendReceipt({ repoDir, keys, missionId, kind, verdict, subject
   const file = chainPath(repoDir, missionId)
   mkdirSync(path.dirname(file), { recursive: true })
   // Read, verify, append and move the head as one step, even with parallel writers.
-  return withLock(`${file}.lock`, () => appendLocked({ repoDir, keys, missionId, kind, verdict, subject, refs, now }))
+  return withLock(`${file}.lock`, (stillHeld) => appendLocked({ repoDir, keys, missionId, kind, verdict, subject, refs, now, stillHeld }))
 }
 
-function appendLocked({ repoDir, keys, missionId, kind, verdict, subject, refs, now }) {
+function appendLocked({ repoDir, keys, missionId, kind, verdict, subject, refs, now, stillHeld = () => true }) {
   // Refuse to extend a chain that does not verify: never paper over tampering.
   const check = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId })
   if (!check.ok) throw new Error(`receipt chain for ${missionId} does not verify: ${check.findings[0].problem}`)
+  return writeReceipt({ repoDir, keys, missionId, kind, verdict, subject, refs, now, stillHeld })
+}
+
+/*
+ * Crash window: the receipt line is appended first, the anchor moved second. A
+ * crash in between leaves the anchor one receipt behind. verifyChain reports that,
+ * every append (and so every gated tool call) is refused, and only an explicit
+ * operator action (reanchorChain) moves the anchor forward. A crash during the
+ * line write leaves a partial last line, which no automatic step accepts.
+ */
+function writeReceipt({ repoDir, keys, missionId, kind, verdict, subject, refs, now, stillHeld }) {
   const prior = readChain(repoDir, missionId)
   const prev = prior.at(-1)
+  if (subject === undefined || subject === null) subject = {}
   const body = {
     version: 1,
     mission_id: missionId,
@@ -97,11 +110,13 @@ function appendLocked({ repoDir, keys, missionId, kind, verdict, subject, refs, 
   }
   const receipt = { ...body, signature: signValue(keys.privateKey, body) }
   const file = chainPath(repoDir, missionId)
+  if (!stillHeld()) throw new Error('lost the receipt chain lock before writing; nothing written')
   appendFileSync(file, canonicalJson(receipt) + '\n', { mode: 0o600 })
   const head = { mission_id: missionId, seq: receipt.seq, hash: receiptHash(receipt) }
   mkdirSync(path.dirname(headPath(keys.home, missionId, repoDir)), { recursive: true, mode: 0o700 })
   // Write-then-rename so a reader never sees a half-written anchor.
   const anchor = headPath(keys.home, missionId, repoDir)
+  if (!stillHeld()) throw new Error('lost the receipt chain lock after writing the receipt; anchor not moved, chain now fails verification until reanchored')
   writeFileSync(`${anchor}.tmp-${process.pid}`, JSON.stringify({ ...head, signature: signValue(keys.privateKey, head) }) + '\n', { mode: 0o600 })
   renameSync(`${anchor}.tmp-${process.pid}`, anchor)
   return { receipt, hash: head.hash }
@@ -150,8 +165,12 @@ export function verifyChain({ repoDir, home, publicKey, missionId }) {
     if (head) {
       const { signature, ...hb } = head
       if (!verifyValue(publicKey, hb, signature)) findings.push({ seq: null, problem: 'head anchor signature does not verify' })
-      else if (hb.seq !== lines.length - 1 || hb.hash !== prevHash) {
-        findings.push({ seq: null, problem: `chain does not end at the anchored head (anchored seq ${hb.seq}, file has ${lines.length} receipts)` })
+      else if (hb.seq >= lines.length) {
+        findings.push({ seq: null, code: 'ANCHOR_AHEAD', problem: `chain does not end at the anchored head: receipts after seq ${lines.length - 1} are missing (anchored seq ${hb.seq})` })
+      } else if (hb.seq < lines.length - 1) {
+        findings.push({ seq: null, code: 'ANCHOR_BEHIND', problem: `chain does not end at the anchored head: anchor at seq ${hb.seq} but chain has ${lines.length} receipts (interrupted append?); needs an explicit reanchor` })
+      } else if (hb.hash !== prevHash) {
+        findings.push({ seq: null, code: 'ANCHOR_MISMATCH', problem: 'chain does not end at the anchored head: last receipt differs from the anchored one' })
       }
     }
   } else if (lines.length > 0) {
@@ -159,6 +178,51 @@ export function verifyChain({ repoDir, home, publicKey, missionId }) {
   }
 
   return { ok: findings.length === 0, count: lines.length, findings, receipts }
+}
+
+/**
+ * Explicit operator recovery after an interrupted append (anchor behind the chain).
+ *
+ * Accepted only if the only problem is ANCHOR_BEHIND, the anchored receipt is the
+ * one at that seq in the file, and every receipt after it is a correctly linked
+ * receipt signed by this operator key. It then moves the anchor and records a
+ * signed chain_reanchored receipt naming the receipts it accepted. Anything else
+ * (anchor ahead, mismatch, bad line, foreign signature) is refused.
+ *
+ * @returns {{ accepted_seqs: number[], hash: string }}
+ */
+export function reanchorChain({ repoDir, keys, missionId, reason }) {
+  if (typeof reason !== 'string' || reason.trim().length < 8) throw new Error('reanchor needs a written reason')
+  const file = chainPath(repoDir, missionId)
+  return withLock(`${file}.lock`, (stillHeld) => {
+    const v = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId })
+    if (v.ok) throw new Error('chain already verifies; nothing to reanchor')
+    if (v.findings.length !== 1 || v.findings[0].code !== 'ANCHOR_BEHIND') {
+      throw new Error(`reanchor refused: ${v.findings.map((f) => f.problem).join('; ')}`)
+    }
+    const head = JSON.parse(readFileSync(headPath(keys.home, missionId, repoDir), 'utf8'))
+    if (receiptHash(v.receipts[head.seq]) !== head.hash) throw new Error('reanchor refused: anchored receipt is not the one in the chain')
+    const accepted = v.receipts.slice(head.seq + 1).map((r) => r.seq)
+    // Move the anchor to the current end, then record the recovery itself.
+    const last = v.receipts.at(-1)
+    const moved = { mission_id: missionId, seq: last.seq, hash: receiptHash(last) }
+    const anchor = headPath(keys.home, missionId, repoDir)
+    if (!stillHeld()) throw new Error('lost the receipt chain lock; nothing changed')
+    writeFileSync(`${anchor}.tmp-${process.pid}`, JSON.stringify({ ...moved, signature: signValue(keys.privateKey, moved) }) + '\n', { mode: 0o600 })
+    renameSync(`${anchor}.tmp-${process.pid}`, anchor)
+    const { hash } = writeReceipt({
+      repoDir,
+      keys,
+      missionId,
+      kind: 'chain_reanchored',
+      verdict: 'reanchored',
+      subject: { previous_anchor_seq: head.seq, accepted_seqs: accepted, reason },
+      refs: {},
+      now: Date.now(),
+      stillHeld,
+    })
+    return { accepted_seqs: accepted, hash }
+  })
 }
 
 /** Latest receipt (and its hash) matching a predicate. */

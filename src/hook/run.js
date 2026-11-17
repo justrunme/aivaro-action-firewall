@@ -149,10 +149,13 @@ export async function runHook({ stdin, stderr, cwd, now = Date.now, home = keyHo
     tool,
     action_hash: actionHash,
     denial_id: denialId,
-    receipt_hash: receiptHashValue, // null when there is no contract or the receipt failed
+    receipt_hash: receiptHashValue,
+    // Audit lines are diagnostics, never evidence. Only a receipt in the signed
+    // chain is evidence; without a contract (or when recording failed) there is none.
+    evidence: receiptHashValue ? 'signed_receipt' : 'unsigned_diagnostic',
   })
 
   if (result.decision === 'allow') return 0
-  stderr.write(JSON.stringify({ justrunme: 'deny', category: result.category, reason: redact(result.reason), denial_id: denialId, receipt_hash: receiptHashValue }) + '\n')
+  stderr.write(JSON.stringify({ justrunme: 'deny', category: result.category, reason: redact(result.reason), denial_id: denialId, receipt_hash: receiptHashValue, signed: receiptHashValue !== null }) + '\n')
   return 2
 }
