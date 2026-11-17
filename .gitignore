@@ -50,4 +50,7 @@ yarn.lock
 *.db-shm
 *.db-wal
 
+# JustRunMe runtime state (audit log, authorization, rehearsal reports)
+.justrunme/
+
 # .kiro is intentionally NOT ignored

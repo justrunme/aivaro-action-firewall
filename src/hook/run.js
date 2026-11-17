@@ -10,6 +10,9 @@ import path from 'node:path'
 import { parseContract } from '../contract/parser.js'
 import { hashValue } from '../util/canonical.js'
 import { redact } from '../privacy/redact.js'
+import { keyHome, loadPublicKey } from '../receipts/keys.js'
+import { signatureProblem } from '../authorize/authorization.js'
+import { sourceState } from '../fidelity/source.js'
 import { evaluate } from './evaluate.js'
 
 const MAX_STDIN = 1024 * 1024
@@ -29,8 +32,26 @@ async function readAll(stream) {
   return Buffer.concat(chunks).toString('utf8')
 }
 
-function loadContext(cwd, now) {
-  const ctx = { cwd, now, contract: null, contractHash: '', authorization: null }
+/**
+ * Signature, then source binding: the authorization must be signed by the
+ * operator key, and git HEAD, tree and uncommitted changes must be exactly what
+ * they were when it was issued. Database state is re-checked by the runner.
+ */
+function authorizationCheck(auth, home, cwd) {
+  const problem = signatureProblem(auth, loadPublicKey(home))
+  if (problem) return { category: 'AUTHORIZATION_INVALID', reason: problem }
+  let current
+  try {
+    current = hashValue(sourceState(cwd))
+  } catch {
+    return { category: 'FIDELITY_MISMATCH', reason: 'source state cannot be measured (not a git working tree?)' }
+  }
+  if (current !== auth.source_state_hash) return { category: 'FIDELITY_MISMATCH', reason: 'workspace files changed since the authorization was issued' }
+  return null
+}
+
+function loadContext(cwd, now, home) {
+  const ctx = { cwd, now, keyHome: home, contract: null, contractHash: '', authorization: null }
   const contractPath = path.join(cwd, CONTRACT_FILE)
   if (!existsSync(contractPath)) {
     ctx.contractError = `no ${CONTRACT_FILE} in the workspace`
@@ -45,10 +66,19 @@ function loadContext(cwd, now) {
   ctx.contractHash = parsed.hash
   const authPath = path.join(cwd, AUTHORIZATION_FILE)
   if (existsSync(authPath)) {
+    let auth = null
     try {
-      ctx.authorization = JSON.parse(readFileSync(authPath, 'utf8'))
+      auth = JSON.parse(readFileSync(authPath, 'utf8'))
     } catch {
       ctx.authorizationError = 'authorization file is not valid JSON'
+      return ctx
+    }
+    const check = authorizationCheck(auth, home, cwd)
+    if (check) {
+      ctx.authorizationError = check.reason
+      ctx.authorizationCategory = check.category
+    } else {
+      ctx.authorization = auth
     }
   }
   return ctx
@@ -68,13 +98,13 @@ function audit(cwd, line) {
  *           cwd: string, now?: () => number }} io
  * @returns {Promise<0 | 2>}
  */
-export async function runHook({ stdin, stderr, cwd, now = Date.now }) {
+export async function runHook({ stdin, stderr, cwd, now = Date.now, home = keyHome() }) {
   let event = null
   let result
   try {
     const text = await readAll(stdin)
     event = JSON.parse(text)
-    result = evaluate(event, loadContext(cwd, now()))
+    result = evaluate(event, loadContext(cwd, now(), home))
   } catch (err) {
     result = { decision: 'deny', category: 'MALFORMED_EVENT', reason: redact(`hook error: ${err?.message ?? err}`) }
   }

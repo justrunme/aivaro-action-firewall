@@ -264,3 +264,9 @@ The following bypass vectors are explicitly in scope for the hook enforcement ru
 | Hook crashes or receives malformed stdin and the call proceeds | R10.6 — fail closed, exit 2 |
 | UPDATE changes data but keeps the row count, so a count-only fingerprint misses it | R3.1 — per-table content checksum |
 | Restore tool exits 0 but data is not restored | R5.7, R14.4 — verification decides, negative control test |
+| Agent runs a rehearsed relative command with `execute_bash` `cwd` set to another directory (field seen in live Kiro CLI events) | R3.7 — shell cwd must be the workspace root |
+| Agent writes `.justrunme/authorization.json` itself, or a rehearsed script writes it | R3.6 — authorization must carry a valid operator Ed25519 signature; key is outside the workspace and agent tools cannot touch the key directory |
+| Agent edits JustRunMe's own code or dependencies (`src/`, `node_modules/yaml`) when they are inside the workspace | R10.6 — installation paths are protected like the hook files |
+| Authorization reused for a second run | R3.6 — the runner consumes it before executing |
+| Residual, not mitigated: authorized code reads the operator key, because it runs as the same OS user | Out of scope (no OS sandbox); stated in README |
+| Residual, not mitigated: the operator starts Kiro without `JUSTRUNME_GATE=on` | Out of scope; the gate is opt-in by design |

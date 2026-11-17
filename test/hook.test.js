@@ -110,6 +110,17 @@ describe('hook: writes (R1.6)', () => {
     assert.equal(evaluate(write('demo/src/link/evil.js'), context(dir)).category, 'OUT_OF_CONTRACT')
   })
 
+  it('protects the whole JustRunMe installation when it lies inside the workspace', () => {
+    const repoRoot = new URL('..', import.meta.url).pathname
+    const contract = { ...CONTRACT, allowed_paths: ['src/', 'node_modules/', 'package.json', 'demo/'] }
+    const parsed = parseContract(stringify(contract))
+    const c = { cwd: repoRoot, contract: parsed.contract, contractHash: parsed.hash, authorization: null, now: NOW }
+    for (const p of ['src/contract/parser.js', 'src/util/canonical.js', 'node_modules/yaml/dist/index.js', 'package.json']) {
+      assert.equal(evaluate(write(p), c).category, 'PROTECTED_PATH', p)
+    }
+    assert.equal(evaluate(write('demo/src/x.js'), c).decision, 'allow')
+  })
+
   it('never lets the agent write the gate, its inputs or git metadata', () => {
     const ctx = context(workspace())
     for (const p of ['.justrunme/authorization.json', 'justrunme.mission.yaml', '.kiro/hooks/pretooluse.json', '.git/config', 'src/hook/evaluate.js']) {
@@ -250,6 +261,26 @@ describe('hook: bypass categories (R10.2, R10.3, R10.4, R10.7)', () => {
     assert.equal(evaluate(shell(cmd), rawOnly).decision, 'deny')
   })
 
+  it('blocks a rehearsed command run from another working directory (execute_bash cwd)', () => {
+    const other = mkdtempSync(path.join(os.tmpdir(), 'jrm-cwd-'))
+    dirs.push(other)
+    const call = (cwd) => ({ tool_name: 'execute_bash', tool_input: { command: 'node demo/migrations/run.js', cwd } })
+    assert.equal(evaluate(call(other), ctx).category, 'OUT_OF_CONTRACT')
+    assert.equal(evaluate(call('demo'), ctx).category, 'OUT_OF_CONTRACT')
+    assert.equal(evaluate(call(dir), ctx).decision, 'allow')
+    assert.equal(evaluate(call(null), ctx).decision, 'allow')
+    assert.equal(evaluate(call(7), ctx).category, 'MALFORMED_EVENT')
+  })
+
+  it('denies any tool call that touches the operator key directory, reads included', () => {
+    const keyHome = mkdtempSync(path.join(os.tmpdir(), 'jrm-keys-'))
+    dirs.push(keyHome)
+    const c = { ...ctx, keyHome }
+    assert.equal(evaluate({ tool_name: 'read_file', tool_input: { path: path.join(keyHome, 'operator.key') } }, c).category, 'PROTECTED_PATH')
+    assert.equal(evaluate(shell(`cat ${keyHome}/operator.key`), c).category, 'PROTECTED_PATH')
+    assert.equal(evaluate({ tool_name: 'read_file', tool_input: { path: 'package.json' } }, c).decision, 'allow')
+  })
+
   it('analyzeShell reports scripts and categories', () => {
     assert.deepEqual(analyzeShell('node demo/migrations/run.js').scripts, ['demo/migrations/run.js'])
     assert.equal(analyzeShell('docker compose ps').category, null)
@@ -295,10 +326,11 @@ describe('hook: property tests (R10.1, R10.6)', () => {
 })
 
 describe('hook process: exit codes as Kiro sees them (R10.5, R10.6, R10.8)', () => {
-  function run(dir, input, { gate = 'on' } = {}) {
+  function run(dir, input, { gate = 'on', home } = {}) {
     const env = { ...process.env }
     delete env.JUSTRUNME_GATE
     if (gate !== null) env.JUSTRUNME_GATE = gate
+    env.JUSTRUNME_HOME = home ?? path.join(dir, '..', 'no-key-home')
     return spawnSync(process.execPath, [HOOK], { cwd: dir, input, env, encoding: 'utf8' })
   }
   const ev = (o) => JSON.stringify({ hook_event_name: 'PreToolUse', cwd: '.', ...o })
@@ -328,18 +360,18 @@ describe('hook process: exit codes as Kiro sees them (R10.5, R10.6, R10.8)', () 
     assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'package.json' } })).status, 0)
   })
 
-  it('exits 0 for the rehearsed command with an authorization file and 2 after the script changes', () => {
+  it('rejects an unsigned authorization file written into the workspace (self-issued)', () => {
     const dir = workspace()
     const ctx = context(dir, { entries: [migrateEntry(dir)] })
     mkdirSync(path.join(dir, '.justrunme'), { recursive: true })
     const auth = { ...ctx.authorization, issued_at: new Date().toISOString(), expires_at: new Date(Date.now() + 120000).toISOString() }
     writeFileSync(path.join(dir, '.justrunme/authorization.json'), JSON.stringify(auth))
+    const home = mkdtempSync(path.join(os.tmpdir(), 'jrm-keyhome-'))
+    dirs.push(home)
     const call = ev({ tool_name: 'execute_bash', tool_input: { command: 'node demo/migrations/run.js' } })
-    assert.equal(run(dir, call).status, 0)
-    writeFileSync(path.join(dir, 'demo/migrations/run.js'), 'console.log(1)\n')
-    const r = run(dir, call)
+    const r = run(dir, call, { home })
     assert.equal(r.status, 2)
-    assert.equal(JSON.parse(r.stderr.trim()).category, 'SCRIPT_CHANGED')
+    assert.equal(JSON.parse(r.stderr.trim()).category, 'AUTHORIZATION_INVALID')
   })
 
   it('fails closed on malformed stdin, empty stdin, missing contract and invalid contract', () => {

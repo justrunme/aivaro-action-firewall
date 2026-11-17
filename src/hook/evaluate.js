@@ -9,8 +9,15 @@
 
 import { realpathSync } from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { analyzeShell } from './bypass.js'
 import { authorizationProblem, checkWindow, matchEntry } from './allowlist.js'
+
+// Root of the JustRunMe installation that is running this hook. If it lies inside
+// the workspace, its code and dependencies are protected like the gate itself:
+// the hook imports src/contract, src/util and node_modules/yaml.
+const PACKAGE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
+const PACKAGE_PROTECTED = ['src', 'node_modules', 'package.json', 'package-lock.json']
 
 const SHELL_TOOLS = new Set(['execute_bash', 'executebash', 'shell', 'bash', 'run_command', 'control_bash_process'])
 const WRITE_TOOLS = new Set(['fs_write', 'fs_append', 'str_replace', 'delete_file', 'smart_relocate', 'semantic_rename', 'write', 'edit', 'create', 'delete'])
@@ -65,6 +72,26 @@ function touchesProtectedTable(text, tables) {
   })
 }
 
+function protectedRoots(root) {
+  const roots = PROTECTED_PATHS.map((p) => ({ label: p, abs: path.join(root, p) }))
+  const pkg = realResolve(PACKAGE_ROOT)
+  if (inside(pkg, root)) {
+    for (const p of PACKAGE_PROTECTED) roots.push({ label: path.relative(root, path.join(pkg, p)) || p, abs: path.join(pkg, p) })
+  }
+  return roots
+}
+
+/** The operator key directory is never readable or writable through agent tools. */
+function touchesKeyHome(input, ctx) {
+  if (!ctx.keyHome) return false
+  const home = realResolve(path.resolve(ctx.keyHome)).toLowerCase()
+  const spelled = path.resolve(ctx.keyHome).toLowerCase()
+  const root = realpathSync(ctx.cwd)
+  const command = typeof input.command === 'string' ? input.command.toLowerCase() : ''
+  return collectPaths(input).some((p) => inside(realResolve(path.resolve(root, p)).toLowerCase(), home)) ||
+    (command !== '' && (command.includes(home) || command.includes(spelled) || command.includes('.justrunme/operator') || command.includes('operator.key')))
+}
+
 function checkWrite(input, ctx) {
   const paths = collectPaths(input)
   if (paths.length === 0) return { decision: 'deny', category: 'OUT_OF_CONTRACT', reason: 'write target path cannot be determined' }
@@ -73,9 +100,10 @@ function checkWrite(input, ctx) {
   for (const p of paths) {
     const target = realResolve(path.resolve(root, p))
     if (!inside(target, root)) return { decision: 'deny', category: 'OUT_OF_CONTRACT', reason: 'write target is outside the workspace' }
-    for (const prot of PROTECTED_PATHS) {
-      if (inside(target.toLowerCase(), path.join(root, prot).toLowerCase())) {
-        return { decision: 'deny', category: 'PROTECTED_PATH', reason: `write to protected path ${prot}` }
+    for (const prot of protectedRoots(root)) {
+      // Case-insensitive so that macOS and Windows file systems cannot be used to dodge the check.
+      if (inside(target.toLowerCase(), prot.abs.toLowerCase())) {
+        return { decision: 'deny', category: 'PROTECTED_PATH', reason: `write to protected path ${prot.label}` }
       }
     }
     if (!allowed.some((a) => inside(target, a))) {
@@ -102,11 +130,12 @@ export function evaluate(event, ctx) {
 
   const name = event.tool_name.toLowerCase()
   const kind = classify(name)
+  if (touchesKeyHome(input, ctx)) return deny('PROTECTED_PATH', 'access to the operator key directory')
   if (kind === 'read' || kind === 'noop') return { decision: 'allow', category: 'ALLOWED', reason: `${kind} tool` }
   if (kind === 'unknown') return deny('UNKNOWN_TOOL', `tool ${event.tool_name} is not covered by the contract`)
 
   const auth = ctx.authorization
-  if (ctx.authorizationError) return deny('AUTHORIZATION_INVALID', ctx.authorizationError)
+  if (ctx.authorizationError) return deny(ctx.authorizationCategory ?? 'AUTHORIZATION_INVALID', ctx.authorizationError)
   if (auth) {
     const problem = authorizationProblem(auth, ctx.contract, ctx.contractHash)
     if (problem) return deny('AUTHORIZATION_INVALID', problem)
@@ -122,6 +151,16 @@ export function evaluate(event, ctx) {
   let fallbackCategory = 'NOT_REHEARSED'
   if (kind === 'shell') {
     if (typeof input.command !== 'string') return deny('MALFORMED_EVENT', 'shell call has no command string')
+    // Kiro's execute_bash takes its own cwd (seen in live events). A rehearsed relative
+    // command run from another directory would execute different files, so only the
+    // workspace root (or no cwd) is accepted.
+    if (input.cwd !== undefined && input.cwd !== null) {
+      if (typeof input.cwd !== 'string') return deny('MALFORMED_EVENT', 'shell cwd is not a string')
+      const root = realpathSync(ctx.cwd)
+      if (realResolve(path.resolve(root, input.cwd)) !== root) {
+        return deny('OUT_OF_CONTRACT', 'shell working directory differs from the workspace root')
+      }
+    }
     const analysis = analyzeShell(input.command)
     scripts = analysis.scripts
     if (analysis.category) {
