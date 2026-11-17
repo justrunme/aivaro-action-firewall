@@ -11,8 +11,9 @@
     "test:smoke": "node --test test/smoke.test.js",
     "test:demo": "node --test demo/integration.test.js"
   },
-  "dependencies": {},
-  "devDependencies": {},
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
   "keywords": [
     "kiro",
     "kiroween",
@@ -31,5 +32,8 @@
   "homepage": "https://github.com/justrunme/justrunme-zero#readme",
   "bugs": {
     "url": "https://github.com/justrunme/justrunme-zero/issues"
+  },
+  "devDependencies": {
+    "fast-check": "4.10.2"
   }
 }
