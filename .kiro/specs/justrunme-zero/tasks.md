@@ -80,7 +80,7 @@ Kiro integration is checked early: T13.7 confirms in a real Kiro session that th
 | T13.7 | Default-deny hook evaluation: parse failure, missing contract and missing authorization all exit 2; replayed `PreToolUse` event fixtures for allowed and blocked calls | R10.6, R10.7, R10.8 | test/hook.test.js |
 | T13.8 | Manual check in a real Kiro session: hook receives events and exit 2 stops the tool call; result recorded in `docs/KIRO_LOG.md` | R10.8 | manual, logged |
 
-- [x] T13.1 · [x] T13.2 · [x] T13.3 · [x] T13.4 · [x] T13.5 · [x] T13.6 · [x] T13.7 · [ ] T13.8 (manual, pending)
+- [x] T13.1 · [x] T13.2 · [x] T13.3 · [x] T13.4 · [x] T13.5 · [x] T13.6 · [x] T13.7 · [~] T13.8 (Kiro CLI 3.3.0 checked, see KIRO_LOG Run 9; Kiro IDE not checked)
 
 T13 notes (what the code does and does not do yet):
 - Done and tested: strict contract parser and hash; default-deny hook; writes limited to `allowed_paths` and never to the gate files; shell, web and MCP calls only if rehearsed, bound to script content hash, mission, contract hash and time window; exit 2 on every error path (150 tests pass locally).
@@ -105,7 +105,15 @@ T13 notes (what the code does and does not do yet):
 | T14.11 | Store each impact report at `.justrunme/missions/<mission-id>/rehearsals/<plan_id>.json` with fields `plan_id`, `source_fingerprint_hash`, `verdict`, `rows_lost`, `failing_tests`, `duration_ms`, `all_reversible` (data structure only; comparison is T18.5) | R15.1 | test/rehearsal.test.js |
 | T14.10 | Demo A end to end with a scripted agent: dangerous migration, `DATA LOSS`, block, replan, `SAFE`, run | R13.1 to R13.4 | test/demo-a.test.js (Linux, Docker) |
 
-- [ ] T14.1 · [ ] T14.2 · [ ] T14.3 · [ ] T14.4 · [ ] T14.5 · [ ] T14.6 · [ ] T14.7 · [ ] T14.8 · [ ] T14.9 · [ ] T14.10 · [ ] T14.11
+- [x] T14.1 · [x] T14.2 · [x] T14.3 · [x] T14.4 · [x] T14.5 · [x] T14.6 · [ ] T14.7 · [~] T14.8 · [x] T14.9 · [~] T14.10 · [x] T14.11
+
+T14 notes:
+- Tests live in `test/impact.test.js`, `test/authorization.test.js` (fingerprint comparison, signed authorization, hook with a real signature) and `test/demo-a.test.js` (real Docker and Postgres). Demo A passed 4/4 locally with `JRM_DOCKER_TESTS=1`; it runs automatically on Linux CI.
+- T14.8 `[~]`: verdict and block are done; the failing-test count is not (no `test_command` in the contract yet), so reports do not claim one.
+- T14.10 `[~]`: R13.1 to R13.3 pass; R13.4 (signed receipts for the block and the run) waits for T16.
+- T14.7 not done: images are pinned by tag only.
+- Authorization is issued only by the operator side (`authorizeMission`), signed with the operator Ed25519 key outside the workspace, bound to the full fingerprint, and consumed by the real run. The hook re-checks signature and git source state on every call; the database part is re-checked by the runner right before execution.
+- Comparison of stored rehearsals (R15, T18.5) is not implemented; the per-plan reports and `base_hash` it needs exist.
 
 ---
 

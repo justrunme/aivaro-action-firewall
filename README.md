@@ -16,8 +16,9 @@ feature until it has a passing end-to-end test.
 |------|-------|
 | Spec, steering, agents, hooks (`.kiro/`) | Written |
 | Demo app (Node + Postgres 16 + Docker Compose) | Written, integration test runs on Linux CI |
-| Mission contract parser and PreToolUse hook | Implemented and unit-tested (T13); live Kiro session check pending (T13.8). Allowlist is not yet produced by a rehearsal and the fingerprint is not yet compared (T14) |
-| Rehearsal, impact report, fidelity gate | Not implemented (T14) |
+| Mission contract parser and PreToolUse hook | Implemented and tested; checked in a live Kiro CLI 3.3.0 session (blocked shell, protected files, inline interpreter; allowed reads and allowed-path writes). Kiro IDE not yet checked |
+| Rehearsal, impact report, fidelity gate | Implemented for `sql_migration` and `shell` steps; Demo A (DATA LOSS blocked, safe replan runs, drift blocked) passes against real Docker and Postgres. No failing-test count yet |
+| Signed run authorization | Implemented: operator Ed25519 key outside the workspace, bound to the fingerprint, single use |
 | Undo and recovery verification | Not implemented (T15) |
 | Receipts (Ed25519, hash chain) | Not implemented (T16) |
 | MCP server, Kiro Power, `justrunme-operator` agent | Not implemented (T17) |
@@ -25,11 +26,17 @@ feature until it has a passing end-to-end test.
 | Console UI | Not implemented (T18, after Demo A and B work) |
 | Phone passkey approval (WebAuthn) | Deferred to P2 |
 
-The hook (`src/hook/pretooluse.js`, inactive unless `JUSTRUNME_GATE=on`) blocks
-calls outside the contract and unrehearsed shell, web and MCP calls, and its
-exit codes are tested. It has not yet been confirmed in a live Kiro session, and
-rehearsal, fidelity, undo and receipts do not exist yet, so do not rely on this
-repository to protect real data.
+Limits that matter today:
+
+- The hook is inactive unless `JUSTRUNME_GATE=on` is set in the environment
+  Kiro starts with. An agent cannot change that variable for the hook, but an
+  operator who forgets it gets no protection.
+- Undo and receipts do not exist yet, so a run that goes wrong cannot be
+  restored by JustRunMe.
+- Rehearsed and authorized code runs as your OS user. JustRunMe binds and
+  checks what runs; it does not sandbox it.
+
+Do not rely on this repository to protect real data yet.
 
 ## What it will do
 
