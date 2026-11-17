@@ -181,7 +181,7 @@ The operator set the order T16.1, then counterfactual replay, then CLI with exit
 | T17.R2 | `src/compare/compare.js`: refuse unless every report is operator-signed, is the one the latest rehearsal receipt recorded in a verifying chain, all `base_hash` equal (names differing components, including target identity) and all conditions equal | R15.2 | test/compare.test.js |
 | T17.R3 | `src/compare/rank.js`: fixed rule R15.4.1 to R15.4.5, measured values only, rule that decided, rule that removed each plan | R15.3 to R15.5 | test/compare.test.js (unit + property: order-independent, never recommends a plan that is not SAFE) |
 | T17.R4 | `src/compare/select.js`: signed comparison file, `plan_selected` receipt with refs to each rehearsal receipt, `plan_comparison_refused` on refusal; policy rule for `plan_selected` | R15.4, R7 | test/compare.test.js |
-| T17.R5 | `verifySelection`: replay re-binds plans to rehearsal receipts, re-derives measured values from stored reports and re-runs the rule | R8.3, R15.4 | test/compare.test.js, test/demo-a.test.js |
+| T17.R5 | `verifySelection`: replay re-binds plans to rehearsal receipts, re-reads measured values from the signed stored reports (when still present) and re-runs the rule; it does not repeat any measurement | R8.3, R15.4 | test/compare.test.js, test/demo-a.test.js |
 
 - [x] T17.R1 · [x] T17.R2 · [x] T17.R3 · [x] T17.R4 · [x] T17.R5
 

@@ -537,6 +537,6 @@ Checked in code, gaps closed, each with a test in `test/compare.test.js`:
 
 Demo A: authorizing the safe plan before the comparison is `COMPARISON_REQUIRED`; after it, the authorization carries `selection.mode = selected` and the `plan_selected` receipt. Demo B (one plan) runs in single-rehearsal mode unchanged.
 
-Residual: when a stored report has since been replaced, replay checks its verdict and duration against the rehearsal receipt but cannot re-derive rows lost; it reports how many reports it re-derived (`reports_rechecked`).
+Residual: replay proves that the choice follows from signed measurements, not that the measurements were right. `rows_lost` is measured once, in the rehearsal copy (`measureDatabase` before and after the plan, `buildImpact` in `src/rehearsal/impact.js`), signed with the report, and the comparison reads it only after the report signature and its rehearsal receipt check out. Replay does not measure again. When a stored report has since been replaced, replay checks its verdict and duration against the rehearsal receipt but cannot re-read rows lost; `reports_rechecked` says how many reports were re-read.
 
 Verification (local, macOS): `test/compare.test.js` 24 pass; `npm test` 236 pass, 0 fail; Docker Demo A and B with `JRM_DOCKER_TESTS=1` 15 pass, 0 fail, 0 skipped.
