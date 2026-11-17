@@ -15,6 +15,7 @@ import path from 'node:path'
 import { hashValue } from '../util/canonical.js'
 import { redactDeep } from '../privacy/redact.js'
 import { publicKeyHex, signValue, verifyValue } from '../receipts/keys.js'
+import { appendReceipt } from '../receipts/chain.js'
 import { run } from '../util/exec.js'
 import { computeFingerprint } from '../fidelity/fingerprint.js'
 import { baseHash } from '../fidelity/gate.js'
@@ -132,5 +133,13 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
   const file = reportPath(repoDir, contract.id, id)
   mkdirSync(path.dirname(file), { recursive: true })
   writeFileSync(file, JSON.stringify(signed, null, 2) + '\n')
+  appendReceipt({
+    repoDir,
+    keys,
+    missionId: contract.id,
+    kind: 'rehearsal',
+    verdict: signed.verdict,
+    subject: { plan_id: id, report_hash: hashValue(signed), base_hash: signed.base_hash, duration_ms: signed.duration_ms, evidence: signed.evidence },
+  })
   return signed
 }

@@ -11,6 +11,8 @@ import { captureDir, loadManifest } from '../capture/capture.js'
 import { restoreFiles } from '../capture/files.js'
 import { restorePostgres } from '../capture/postgres.js'
 import { verifyRecovery } from './verify.js'
+import { appendReceipt, findLast, readChain } from '../receipts/chain.js'
+import { hashValue } from '../util/canonical.js'
 
 export const SUPPORTED_RESOURCES = ['files', 'config_files', 'postgres', 'containers']
 
@@ -27,11 +29,12 @@ export class UndoRefused extends Error {
  * @param {string} a.missionId
  * @param {string} a.captureId
  * @param {import('../rehearsal/compose.js').Target} a.target composeFile relative to repoDir
- * @param {any} a.publicKey operator public key
+ * @param {{ privateKey: any, publicKey: any, home: string }} a.keys operator keys (receipts are signed)
  * @param {{ service: string, url: string } | null} [a.health]
  * @param {string[]} [a.resources] subset to restore; anything unsupported is refused
  */
-export async function undoMission({ repoDir, missionId, captureId, target, publicKey, health = null, resources }) {
+export async function undoMission({ repoDir, missionId, captureId, target, keys, health = null, resources }) {
+  const publicKey = keys?.publicKey
   const unsupported = (resources ?? []).filter((r) => !SUPPORTED_RESOURCES.includes(r))
   if (unsupported.length > 0) throw new UndoRefused('UNSUPPORTED_RESOURCE', `undo is not supported for: ${unsupported.join(', ')}`)
   const { manifest, problem } = loadManifest(repoDir, missionId, captureId, publicKey)
@@ -70,6 +73,33 @@ export async function undoMission({ repoDir, missionId, captureId, target, publi
   }
 
   const verification = await verifyRecovery({ repoDir, manifest, target: real, health })
+
+  // R4.5, R5.5, R5.6: signed undo receipt, then the verification receipt right after it.
+  const run = findLast(readChain(repoDir, missionId), (r) => r.kind === 'run_result' && r.subject?.capture_id === captureId)
+  const undoReceipt = appendReceipt({
+    repoDir,
+    keys,
+    missionId,
+    kind: 'undo',
+    verdict: 'undo',
+    subject: { capture_id: captureId, manifest_hash: hashValue(manifest), resources: results.map((r) => ({ resource: r.resource, status: r.status, detail: r.detail })) },
+    refs: run ? { run: run.hash } : {},
+  })
+  const verificationReceipt = appendReceipt({
+    repoDir,
+    keys,
+    missionId,
+    kind: 'verification',
+    verdict: verification.status,
+    subject: {
+      capture_id: captureId,
+      checks: verification.checks.length,
+      failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource, expected: c.expected, actual: c.actual })),
+      integration_tests: verification.integration_tests,
+    },
+    refs: { undo: undoReceipt.hash },
+  })
+
   return {
     mission_id: missionId,
     capture_id: captureId,
@@ -77,5 +107,6 @@ export async function undoMission({ repoDir, missionId, captureId, target, publi
     restored_ok: results.every((r) => r.status === 'succeeded'),
     verification,
     status: verification.status === 'PASS' && results.every((r) => r.status === 'succeeded') ? 'RECOVERED' : 'NOT_RECOVERED',
+    receipts: { undo: undoReceipt.hash, verification: verificationReceipt.hash },
   }
 }
