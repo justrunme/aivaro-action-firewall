@@ -1,0 +1,196 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - "kiro/**"
+      - "feat/**"
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test (Node ${{ matrix.node }} / ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is dropped: Docker-based tests cannot run there and the
+        # unit tests add no signal beyond ubuntu for this project.
+        os: [ubuntu-latest]
+        node: ["24"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run all tests
+        run: npm test
+
+      - name: Check whitespace of the change under test
+        shell: bash
+        run: |
+          # Compare against the whole range being tested, not only the last commit.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="${{ github.event.pull_request.base.sha }}"
+          else
+            base="${{ github.event.before }}"
+          fi
+          # First push of a branch (all-zero "before") or an unreachable
+          # "before" after a force push: fall back to the merge base with main.
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+            base=$(git merge-base origin/main HEAD 2>/dev/null || git rev-list --max-parents=0 HEAD | tail -1)
+          fi
+          echo "Checking whitespace in $base..HEAD"
+          git diff --check "$base" HEAD
+
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+        continue-on-error: false
+
+  demo-integration:
+    name: Demo integration test (Linux + Docker)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Run demo integration test
+        run: npm run test:demo
+
+  lint-specs:
+    name: Lint spec and config files
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Confirm required files exist
+        shell: bash
+        run: |
+          files=(
+            ".kiro/specs/justrunme-zero/requirements.md"
+            ".kiro/specs/justrunme-zero/design.md"
+            ".kiro/specs/justrunme-zero/tasks.md"
+            ".kiro/steering/product.md"
+            ".kiro/steering/engineering.md"
+            ".kiro/steering/scope.md"
+            ".kiro/agents/justrunme-builder.json"
+            ".kiro/agents/justrunme-skeptic.json"
+            ".kiro/hooks/test-on-save.json"
+            ".kiro/hooks/stop-checklist.json"
+            "docs/KIRO_LOG.md"
+            "demo/docker-compose.yml"
+            "demo/migrations/001_init.sql"
+            "demo/migrations/002_seed_data.sql"
+            "demo/integration.test.js"
+          )
+          missing=0
+          for f in "${files[@]}"; do
+            if [ ! -f "$f" ]; then
+              echo "MISSING: $f"
+              missing=1
+            fi
+          done
+          if [ $missing -ne 0 ]; then exit 1; fi
+          echo "All required scaffold files present."
+
+      - name: Validate agent JSON
+        shell: bash
+        run: |
+          for f in .kiro/agents/*.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" \
+              && echo "OK: $f" \
+              || { echo "INVALID JSON: $f"; exit 1; }
+          done
+
+      - name: Validate hook JSON
+        shell: bash
+        run: |
+          for f in .kiro/hooks/*.json; do
+            node -e "JSON.parse(require('fs').readFileSync('$f','utf8'))" \
+              && echo "OK: $f" \
+              || { echo "INVALID JSON: $f"; exit 1; }
+          done
+
+      - name: Check no dependency version ranges in package.json
+        shell: bash
+        run: |
+          node --input-type=module <<'EOF'
+          import { readFileSync } from 'node:fs';
+          const pkg = JSON.parse(readFileSync('package.json', 'utf8'));
+          const all = { ...pkg.dependencies, ...pkg.devDependencies, ...pkg.optionalDependencies };
+          let fail = false;
+          for (const [name, ver] of Object.entries(all)) {
+            if (/^[\^~]/.test(ver)) {
+              console.error(`Range specifier in "${name}": "${ver}"`);
+              fail = true;
+            }
+          }
+          if (fail) process.exit(1);
+          console.log('No range specifiers — all dependencies are exactly pinned.');
+          EOF
+
+      - name: Check EARS R-IDs in requirements.md
+        shell: bash
+        run: |
+          file=".kiro/specs/justrunme-zero/requirements.md"
+          prefixes=("R1" "R2" "R3" "R4" "R5" "R6" "R7" "R8" "R9" "R10" "R11" "R12" "R13" "R14")
+          missing=0
+          for p in "${prefixes[@]}"; do
+            if ! grep -q "\\*\\*${p}\\." "$file"; then
+              echo "MISSING R-ID prefix: $p"
+              missing=1
+            fi
+          done
+          if [ $missing -ne 0 ]; then exit 1; fi
+          echo "All R-ID prefixes found."
+
+      - name: Check T-IDs reference R-IDs in tasks.md
+        shell: bash
+        run: |
+          file=".kiro/specs/justrunme-zero/tasks.md"
+          if ! grep -qE 'T1[2-9]\.[0-9]' "$file" || ! grep -qE 'T20\.[0-9]' "$file"; then
+            echo "Missing T12-T20 task IDs in tasks.md"
+            exit 1
+          fi
+          echo "T-IDs present."
+
+      - name: Check public brand names
+        shell: bash
+        run: |
+          # Only user-facing material is checked (README and docs/*.md, not the
+          # session log, steering or specs, which quote the banned names).
+          # Internal words such as goal or snapshot are not checked on purpose.
+          pattern='Aivaro Action Firewall|Agent Action Firewall|Kiro Action Firewall|Kiro Crew|Time Machine|Mission Control'
+          files=$(ls README.md docs/*.md 2>/dev/null | grep -v '^docs/KIRO_LOG.md$' || true)
+          hits=$(grep -nE "$pattern" $files || true)
+          if [ -n "$hits" ]; then
+            echo "Banned product name in user-facing material:"
+            echo "$hits"
+            exit 1
+          fi
+          echo "Public brand names OK."
