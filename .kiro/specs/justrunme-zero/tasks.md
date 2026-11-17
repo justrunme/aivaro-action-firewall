@@ -134,7 +134,16 @@ T14 notes:
 
 Volume backup is not part of v1 undo claims; Docker coverage is image tag and Compose service state only until a volume restore has an integration test.
 
-- [ ] T15.1 · [ ] T15.2 · [ ] T15.3 · [ ] T15.4 · [ ] T15.5 · [ ] T15.6 · [ ] T15.7 · [ ] T15.8 · [ ] T15.9 · [ ] T15.10
+- [x] T15.1 · [x] T15.2 · [~] T15.3 · [x] T15.4 · [x] T15.5 · [~] T15.6 · [x] T15.7 · [~] T15.8 · [~] T15.9 · [x] T15.10
+
+T15 notes (as built, tests in `test/capture-files.test.js` and `test/demo-b.test.js`):
+- T15.1 differs from the original plan: instead of `git stash`, every file under `allowed_paths` and `config_files` is copied with its SHA-256 (`src/capture/files.js`). These are the only workspace paths the gate lets the agent write. Restore rewrites changed files, recreates deleted ones and removes new ones; files outside those paths are neither captured nor claimed. Symbolic links are not followed.
+- T15.2: `pg_dump` to a 0600 file plus a measurement. Restore loads into a scratch database, requires it to equal the capture, then swaps names; the previous database is kept as `<db>_jrm_prev_<t>`. Any failure before the swap leaves the live database untouched, and the dump is never deleted.
+- T15.3 `[~]`: container images are recorded and verified; containers and volumes are not restored and not claimed.
+- T15.6 `[~]`: reverse order, per-resource results, unsupported types refused; the signed undo receipt (R4.5) waits for T16.
+- T15.7: undo idempotence is a fast-check property for files and an end-to-end test (undo twice) for Postgres.
+- T15.8 `[~]` and T15.9 `[~]`: checksums, row counts, schema hash, images and `/health` (exponential back-off, 30 s) are checked and a corrupted value gives `FAIL` with expected and actual. Not done: the configurable integration test suite (R5.4) and the non-zero CLI exit (no CLI yet), and signed verification receipts (T16).
+- Capture happens after the fidelity check and before the authorization is consumed; if capture fails nothing runs and the authorization stays usable. The capture manifest is signed with the operator key.
 
 ---
 
