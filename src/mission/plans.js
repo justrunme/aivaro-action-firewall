@@ -9,8 +9,14 @@
  *
  * Why not shell: a rehearsal executes its steps on this machine. A shell step the
  * agent chose would be arbitrary code execution that needs no approval at all.
- * A SQL file runs inside a disposable database copy; it reaches the real database
- * only after a rehearsal, a measured verdict and a signed approval.
+ * A SQL file is applied inside a disposable database copy whose network has no
+ * route out (src/rehearsal/compose.js, isolate); it reaches the real database only
+ * after a rehearsal, a measured verdict and a signed approval. Inside that
+ * container the SQL runs as the database superuser, so it can run programs there;
+ * the container cannot reach anything else.
+ *
+ * The mission must not let an agent write the Compose file the rehearsal starts
+ * (assertMissionNarrow).
  *
  * The effective contract (operator base + agent plan) is stored under
  * .justrunme/missions/<mission>/plans/<plan_id>.yaml. Every later operation
@@ -22,6 +28,7 @@ import path from 'node:path'
 import { stringify } from 'yaml'
 import { parseContract } from '../contract/parser.js'
 import { CONTRACT_FILE } from '../hook/run.js'
+import { loadTarget } from '../cli/target.js'
 import { STATE_DIR } from '../fidelity/source.js'
 import { planId } from '../rehearsal/engine.js'
 import { hashValue } from '../util/canonical.js'
@@ -78,6 +85,37 @@ export function checkMigration(repoDir, allowedPaths, rel) {
   return clean.split(path.sep).join('/')
 }
 
+// Files and directories an agent-written file must never be able to replace: the
+// operator's mission and target, the rehearsal's own Compose file, the gate, the
+// state directory, git metadata, this program. A rehearsal runs the Compose file
+// from the working tree, so an agent that could write it could add mounts or
+// privileges to the copy.
+const NEVER_AGENT_WRITABLE = ['justrunme.mission.yaml', 'justrunme.target.json', '.kiro', '.justrunme', '.git', 'src', 'node_modules', 'package.json', 'package-lock.json']
+
+/**
+ * allowed_paths of an operator mission is safe for agent plans only if no entry
+ * covers one of the files above or the target's Compose file.
+ */
+export function assertMissionNarrow(repoDir, allowedPaths) {
+  const root = realpathSync(repoDir)
+  const protectedPaths = [...NEVER_AGENT_WRITABLE]
+  try {
+    protectedPaths.push(loadTarget(repoDir).target.composeFile)
+  } catch {
+    // No target file yet: the fixed list still applies; rehearse refuses later with NO_TARGET.
+  }
+  for (const a of allowedPaths) {
+    const allowed = path.resolve(root, a)
+    for (const p of protectedPaths) {
+      const guarded = path.resolve(root, p)
+      // Covers it from above (allowed_paths: demo/ over demo/docker-compose.yml) or sits inside it (.kiro/hooks/ inside .kiro).
+      if (inside(guarded, allowed) || inside(allowed, guarded)) {
+        throw new PlanRefused('MISSION_TOO_BROAD', `allowed_paths entry ${a} covers ${p}, which an agent must never be able to write; narrow the mission before an agent proposes plans`)
+      }
+    }
+  }
+}
+
 /** The agent's whole contribution to a contract: sql_migration steps, all reversible. */
 export const stepsFor = (files) => files.map((file, i) => ({ id: `m${i + 1}`, tool: 'sql_migration', args: [file], reversibility: true }))
 
@@ -91,6 +129,7 @@ const missionPart = (contract) => hashValue({ ...contract, plan: null, irreversi
  */
 export function proposePlan({ repoDir, migrations }) {
   const base = loadBase(repoDir)
+  assertMissionNarrow(repoDir, base.contract.allowed_paths)
   if (!Array.isArray(migrations) || migrations.length === 0 || migrations.length > MAX_STEPS) {
     throw new PlanRefused('PLAN_INVALID', `a plan is 1 to ${MAX_STEPS} migration files`)
   }
@@ -115,6 +154,7 @@ export function proposePlan({ repoDir, migrations }) {
 export function loadStoredPlan(repoDir, id) {
   if (typeof id !== 'string' || !PLAN_ID_RE.test(id)) throw new PlanRefused('PLAN_INVALID', 'plan id must look like plan-<12 hex>')
   const base = loadBase(repoDir)
+  assertMissionNarrow(repoDir, base.contract.allowed_paths)
   const file = path.join(plansDir(repoDir, base.contract.id), `${id}.yaml`)
   if (!existsSync(file)) throw new PlanRefused('PLAN_UNKNOWN', `no stored plan ${id} for this mission`)
   const parsed = parseContract(readFileSync(file, 'utf8'))

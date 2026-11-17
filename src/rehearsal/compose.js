@@ -27,11 +27,18 @@ export function assertTarget(t) {
   }
 }
 
-/** Override that drops every published port of the listed services (Compose `!reset`). */
-export function writeNoPortsOverride(services) {
+/**
+ * Override that drops every published port of the listed services (Compose `!reset`).
+ * With `isolate`, the project's default network is also `internal`: its containers
+ * have no route to the internet, to the host or to published ports of other stacks.
+ * A rehearsal copy holds a dump of the real database and runs SQL the agent wrote,
+ * so it gets nothing to talk to.
+ */
+export function writeNoPortsOverride(services, { isolate = false } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'jrm-override-'))
   const file = path.join(dir, 'no-ports.override.yml')
-  writeFileSync(file, 'services:\n' + services.map((s) => `  ${s}:\n    ports: !reset []\n`).join(''))
+  const network = isolate ? 'networks:\n  default:\n    internal: true\n' : ''
+  writeFileSync(file, 'services:\n' + services.map((s) => `  ${s}:\n    ports: !reset []\n`).join('') + network)
   return file
 }
 

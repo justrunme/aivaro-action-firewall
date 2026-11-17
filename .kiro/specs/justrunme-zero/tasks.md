@@ -264,7 +264,7 @@ Decisions fixed by the operator: official MCP SDK from plain JavaScript (no Type
 
 | ID | Description | Tests |
 |----|-------------|-------|
-| T21.1 | MCP server (stdio) on `@modelcontextprotocol/server` 2.4.0; tools are thin calls into `src/cli/commands.js`; closed input schemas; serialized calls; paths and secrets redacted | test/mcp.test.js (plain JSON-RPC client against the real process) |
+| T21.1 | MCP server (stdio) on `@modelcontextprotocol/server` 2.4.0; tools call the CLI command functions where one exists; closed input schemas; serialized calls; paths and secrets redacted | test/mcp.test.js (plain JSON-RPC client against the real process) |
 | T21.2 | Hook: exact agent-tool names `mcp_justrunme_<tool>` allowed, everything else under the server name denied (`MCP_REENTRY`); `tool_load` is bookkeeping; `migrations` paths checked against the key directory | test/hook.test.js |
 | T21.3 | Agent plans: `src/mission/plans.js`; sql_migration only, inside `allowed_paths`, regular files, no symlinks, size and count limits; stored effective contract re-validated on every load; `--plan` in the CLI | test/plans.test.js (incl. property test) |
 | T21.4 | Live check with Kiro CLI 3.4.0: tool names, hook events | docs/KIRO_LOG.md Run 18 |

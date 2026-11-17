@@ -54,7 +54,7 @@ export function explainReport(report, attempts) {
     rule: safe ? null : report.verdict === 'DATA LOSS' ? 'R2.6' : 'R2.5',
     plan_id: report.plan_id,
     base_hash: report.base_hash,
-    measured_in: 'a disposable copy of the database; the real database was not changed',
+    measured_in: 'a disposable copy of the database, started for this rehearsal and removed afterwards',
     impact: {
       rows_lost: Object.fromEntries(Object.entries(tables).filter(([, v]) => v.protected).map(([t, v]) => [t, v.rows_lost])),
       tables,
@@ -65,7 +65,7 @@ export function explainReport(report, attempts) {
     remediation: safe
       ? null
       : {
-          goal: report.verdict === 'DATA LOSS' ? 'Revise the plan so that it destroys no data, then rehearse the revision.' : 'Make the plan apply cleanly, then rehearse it again.',
+          aim: report.verdict === 'DATA LOSS' ? 'Revise the plan so that it destroys no data, then rehearse the revision.' : 'Make the plan apply cleanly, then rehearse it again.',
           constraints: constraintsFor(report.evidence ?? [], failedSteps),
           next_action: exhausted ? NEXT.LIMIT : NEXT[report.verdict] ?? NEXT.FAILED,
           caution: 'These are measurements of the plan just rehearsed, not a proof that a revised plan is safe. Only a new rehearsal with verdict SAFE shows that.',

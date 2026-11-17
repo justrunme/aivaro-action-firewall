@@ -112,7 +112,8 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
     ...target,
     project,
     composeFile: path.resolve(copy.dir, target.composeFile),
-    overrideFile: writeNoPortsOverride([target.dbService]),
+    // The copy holds a dump of the real database and runs agent-written SQL: no network at all.
+    overrideFile: writeNoPortsOverride([target.dbService], { isolate: true }),
   }
 
   let steps = []

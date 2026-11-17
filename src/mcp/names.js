@@ -10,22 +10,15 @@
 export const SERVER_NAME = 'justrunme'
 
 /**
- * Tools an agent may call. Each one enforces the real gates inside the server
+ * The tools the server implements and an agent may call (a test checks that this
+ * list and src/mcp/tools.js agree). The hook allows exactly these names and no
+ * name that is not implemented yet. Each tool applies the gates inside the server
  * (fidelity, selection, signed authorization, receipts); the hook only decides
- * that the agent may reach them. There is deliberately no tool that authorizes,
- * approves, or reads a key.
+ * that the agent may reach it. No tool authorizes, approves or reads a key.
+ * The tools for approval, the real run and undo are added with the code that
+ * implements them.
  */
-export const AGENT_TOOLS = Object.freeze([
-  'rehearse',
-  'get_impact_report',
-  'compare',
-  'request_approval',
-  'run_mission',
-  'get_receipt',
-  'undo_mission',
-  'verify_recovery',
-  'replay_mission',
-])
+export const AGENT_TOOLS = Object.freeze(['rehearse', 'get_impact_report', 'compare', 'get_receipt', 'replay_mission'])
 
 /** Exact hook names of the agent tools, lower case as the hook sees them. */
 export const AGENT_TOOL_HOOK_NAMES = Object.freeze(new Set(AGENT_TOOLS.map((t) => `mcp_${SERVER_NAME}_${t}`)))

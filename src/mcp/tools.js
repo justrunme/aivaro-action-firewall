@@ -1,18 +1,23 @@
 /**
  * The tools of the JustRunMe MCP server (T21, T22).
  *
- * Every tool is a thin call into the same command functions the CLI uses
- * (src/cli/commands.js), so the fidelity gate, the selection gate, the signed
- * receipts and the exit-code semantics are the CLI's, not a second copy. What is
- * new here is only the shape of the answer: structured, redacted, and for a
- * rehearsal that did not come out SAFE, a machine-readable explanation
- * (src/explain/remediation.js).
+ * Where the CLI has a command (rehearse, compare, receipt, verify, replay) the tool
+ * calls that command function, so the fidelity gate, the selection gate, the signed
+ * receipts and the exit-code semantics are the CLI's, not a second copy. Around it
+ * the tool adds what only an agent needs: proposing a plan from SQL files
+ * (src/mission/plans.js), the attempt limit, reading a signed report, and an answer
+ * that is structured, redacted and, for a rehearsal that did not come out SAFE, a
+ * machine-readable explanation (src/explain/remediation.js).
  *
  * What a tool can never take as input: a connection string, a host, a database
- * name, a path outside allowed_paths, a shell command, a key. The real target
- * comes only from justrunme.target.json, which the agent cannot write.
+ * name, a path outside allowed_paths, a shell command, a key (closed input
+ * schemas, a test checks them). The real target comes only from
+ * justrunme.target.json; the agent cannot write it while the gate is on
+ * (JUSTRUNME_GATE=on and the hook's protected paths).
  */
 
+import { realpathSync } from 'node:fs'
+import os from 'node:os'
 import * as z from 'zod/v4'
 import * as cmd from '../cli/commands.js'
 import { ATTEMPT_LIMIT, explainReport } from '../explain/remediation.js'
@@ -26,9 +31,18 @@ import { hashValue } from '../util/canonical.js'
 const planIdSchema = z.string().regex(PLAN_ID_RE)
 const RESET_KINDS = new Set(['run_result', 'authorization_issued', 'undo'])
 
+const tryReal = (p) => {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
+}
+
 /** Paths of this machine never leave the server. */
 export function sanitize(value, repoDir) {
-  const pairs = [[repoDir, '$REPO'], [keyHome(), '$JUSTRUNME_HOME']].filter(([p]) => p && p.length > 1).sort((a, b) => b[0].length - a[0].length)
+  // Rehearsal copies live in the system temporary directory; their paths can appear in error text.
+  const pairs = [[repoDir, '$REPO'], [keyHome(), '$JUSTRUNME_HOME'], [os.tmpdir(), '$TMP'], [tryReal(os.tmpdir()), '$TMP']].filter(([p]) => p && p.length > 1).sort((a, b) => b[0].length - a[0].length)
   const walk = (v) => {
     if (typeof v === 'string') return pairs.reduce((s, [p, label]) => s.split(p).join(label), v)
     if (Array.isArray(v)) return v.map(walk)

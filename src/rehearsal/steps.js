@@ -10,7 +10,7 @@
  * Any other tool cannot be rehearsed and fails the rehearsal (fail closed).
  */
 
-import { readFileSync } from 'node:fs'
+import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { psql } from './compose.js'
 import { run } from '../util/exec.js'
@@ -58,7 +58,15 @@ export async function executeSteps({ plan, cwd, target, mode }) {
       if (!file) {
         result = { status: 'failed', detail: 'sql_migration needs exactly one file inside the workspace' }
       } else {
-        const r = await psql(target, { input: readFileSync(file), singleTransaction: true })
+        // The path was checked when the plan was proposed; check again what is on disk now,
+        // so that a file swapped for a link in between is not read.
+        let linked = true
+        try {
+          linked = lstatSync(file).isSymbolicLink() || realpathSync(file) !== path.join(realpathSync(cwd), path.relative(cwd, file))
+        } catch {
+          linked = true
+        }
+        const r = linked ? { code: 1, stderr: 'the migration file is missing or is a symbolic link' } : await psql(target, { input: readFileSync(file), singleTransaction: true })
         result = r.code === 0 ? { status: 'ok', detail: '' } : { status: 'failed', detail: tail(r.stderr) }
       }
     } else if (step.tool === 'shell') {

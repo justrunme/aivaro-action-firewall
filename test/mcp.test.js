@@ -85,7 +85,7 @@ describe('MCP server over stdio (T21)', () => {
     const tools = await server.listTools()
     const names = tools.map((t) => t.name).sort()
     assert.deepEqual(names, TOOLS.map((t) => t.name).sort())
-    assert.ok(names.length >= 5 && names.every((n) => AGENT_TOOLS.includes(n)), names.join(','))
+    assert.deepEqual(names, [...AGENT_TOOLS].sort(), 'the server and the hook allowlist must name the same tools')
     assert.ok(!names.some((n) => /authoriz|approve|key|sign/.test(n)))
   })
 

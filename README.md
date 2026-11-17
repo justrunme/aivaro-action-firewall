@@ -58,6 +58,15 @@ Limits that matter today:
   your user can reach; nothing detects that. Signatures and receipts prove what
   was decided and recorded, not that rehearsed code was harmless. Run JustRunMe
   under a dedicated OS user or in a VM if plans come from an untrusted agent.
+- Plans an agent proposes through the MCP server are rehearsed in a disposable
+  database copy that has no network route (an `internal` Compose network; a test
+  reads the copy's routing table). The SQL runs there as the database superuser
+  and can run programs inside that container, nothing outside it. The copy holds
+  a dump of the real database, and SQL error text (three lines, 300 characters)
+  is returned to the agent, so an agent can read small amounts of real data
+  through error messages. A masked or sampled copy would close that; it does not
+  exist yet. The agent can also record a signed plan selection with `compare`;
+  that steers which plan the operator is asked about and authorizes nothing.
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
 - The environment identity in the fingerprint covers the Compose project, db

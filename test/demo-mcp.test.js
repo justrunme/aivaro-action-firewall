@@ -123,4 +123,21 @@ describe('Demo MCP: an agent is told why its plan was denied and revises it', { 
     const text = JSON.stringify([denied, safe, cmp.payload, replay.payload])
     assert.ok(!text.includes(repoDir) && !text.includes(home), 'no local path in anything the agent sees')
   })
+
+  it('agent SQL is rehearsed in a copy that has no route out (the stack it was copied from has one)', async () => {
+    // Superuser SQL can run programs inside the container. What matters is where that container can go:
+    // read its routing table from SQL and report it in an error message.
+    const probe = "CREATE TEMP TABLE r(line text);\nCOPY r FROM PROGRAM 'ip route';\nDO $$ DECLARE s text; BEGIN SELECT string_agg(line, ' | ') INTO s FROM r; RAISE EXCEPTION 'ROUTES=%', s; END $$;\n"
+    writeFileSync(path.join(repoDir, 'demo/migrations/003_probe_routes.sql'), probe)
+    const r = await server.call('rehearse', { migrations: ['demo/migrations/003_probe_routes.sql'] })
+    assert.equal(r.isError, false, JSON.stringify(r.payload))
+    const detail = r.payload.impact.failed_steps[0]?.detail ?? ''
+    assert.match(detail, /ROUTES=/, `the probe did not report its routes: ${JSON.stringify(r.payload.impact.failed_steps)}`)
+    assert.doesNotMatch(detail, /default via/, 'the rehearsal copy must have no default route')
+    assert.equal(r.payload.cleanup_clean, true)
+
+    // Control: the same SQL on the stack that is not isolated does show a default route, so the probe can tell the two apart.
+    const control = await psql(real, { input: probe })
+    assert.match(control.stderr, /ROUTES=.*default via/)
+  })
 })

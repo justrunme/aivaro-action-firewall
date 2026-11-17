@@ -24,16 +24,18 @@ const MISSION = {
 }
 
 const dirs = []
-function workspace() {
+function workspace(mission = MISSION) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'jrm-plans-'))
   dirs.push(dir)
   mkdirSync(path.join(dir, 'demo/migrations'), { recursive: true })
+  writeFileSync(path.join(dir, 'demo/docker-compose.yml'), 'services: {}\n')
+  writeFileSync(path.join(dir, 'justrunme.target.json'), JSON.stringify({ project: 'jrm-plans-test', compose_file: 'demo/docker-compose.yml', db_service: 'db', db_user: 'u', db_name: 'd' }))
   mkdirSync(path.join(dir, 'secrets'), { recursive: true })
   writeFileSync(path.join(dir, 'demo/migrations/001_init.sql'), 'SELECT 1;\n')
   writeFileSync(path.join(dir, 'demo/migrations/003_a.sql'), "ALTER TABLE orders ADD COLUMN a TEXT;\n")
   writeFileSync(path.join(dir, 'demo/migrations/003_b.sql'), "ALTER TABLE orders ADD COLUMN b TEXT;\n")
   writeFileSync(path.join(dir, 'secrets/stolen.sql'), 'SELECT 1;\n')
-  writeFileSync(path.join(dir, 'justrunme.mission.yaml'), stringify(MISSION))
+  writeFileSync(path.join(dir, 'justrunme.mission.yaml'), stringify(mission))
   return dir
 }
 after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })))
@@ -79,6 +81,15 @@ describe('agent plans (T21)', () => {
       [[null], 'MIGRATION_INVALID'],
     ]
     for (const [migrations, code] of cases) refused(() => proposePlan({ repoDir: dir, migrations }), code)
+  })
+
+  it('refuses a mission whose allowed_paths would let an agent write the Compose file, the gate or the mission', () => {
+    for (const allowed of [['demo/'], ['demo'], ['.'], ['./'], ['demo/migrations/', 'demo/docker-compose.yml'], ['.kiro/hooks/'], ['.kiro/'], ['src/'], ['.git/hooks/'], ['justrunme.target.json']]) {
+      const dir = workspace({ ...MISSION, allowed_paths: allowed })
+      refused(() => proposePlan({ repoDir: dir, migrations: ['demo/migrations/003_a.sql'] }), 'MISSION_TOO_BROAD')
+    }
+    // The narrow mission used everywhere else is accepted, and so is one that names the migrations directory of another layout.
+    assert.doesNotThrow(() => proposePlan({ repoDir: workspace(), migrations: ['demo/migrations/003_a.sql'] }))
   })
 
   it('reloads a stored plan only while it is still exactly what would be built today', () => {
