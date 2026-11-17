@@ -21,7 +21,8 @@ import { performance } from 'node:perf_hooks'
 import { skippedStep, stepResult } from './report.js'
 
 const hasStatus = (m) => (m.columns.orders ?? []).some((c) => c.startsWith('status '))
-const sameData = (a, b) => JSON.stringify(a.tables) === JSON.stringify(b.tables)
+// Rows and checksums per table, and the schema hash (columns, types, defaults).
+const sameData = (a, b) => JSON.stringify(a.tables) === JSON.stringify(b.tables) && a.schema_hash === b.schema_hash
 
 export const STEPS = [
   ['keys', 'Create a throwaway operator key'],
@@ -69,11 +70,22 @@ export async function runScenario(backend) {
     results.set(id, r)
   }
   const c = (name, ok, actual) => ({ name, ok: Boolean(ok), ...(actual !== undefined ? { actual } : {}) })
+  // A backend call outside a step (writing a file, stopping the stack) that throws
+  // fails the run like a failed step: the report is still produced, the rest is skipped.
+  const guarded = async (name, fn) => {
+    try {
+      return await fn()
+    } catch (err) {
+      failed = true
+      story.error = { during: name, message: String(err?.message ?? err) }
+      return undefined
+    }
+  }
 
   await step('keys', 0, ['keys', 'init'], (r) => [c('a public key was created', typeof r.public_key === 'string')])
-  if (!failed) state.before = await backend.measure()
+  if (!failed) state.before = await guarded('measure before', () => backend.measure())
 
-  await backend.useMigration('dangerous')
+  await guarded('write dangerous migration', () => backend.useMigration('dangerous'))
   await step('rehearse_dangerous', 10, ['rehearse'], async (r) => {
     story.dangerous = { verdict: r.verdict, rows_lost: r.rows_lost, schema_delta: r.schema_delta ?? null }
     state.dangerousPlan = r.plan_id
@@ -89,11 +101,15 @@ export async function runScenario(backend) {
     return [c('refused for DATA_LOSS', o.code === 'DATA_LOSS', o.code)]
   })
 
-  await backend.useMigration('safe')
+  await guarded('write safe migration', () => backend.useMigration('safe'))
   await step('rehearse_safe', 0, ['rehearse'], (r) => {
     story.safe = { verdict: r.verdict, rows_lost: r.rows_lost, schema_delta: r.schema_delta ?? null }
     state.safePlan = r.plan_id
-    return [c('verdict is SAFE', r.verdict === 'SAFE', r.verdict), c('same base as the dangerous plan', r.base_hash === state.base), c('a different plan', r.plan_id !== state.dangerousPlan)]
+    return [
+      c('verdict is SAFE', r.verdict === 'SAFE', r.verdict),
+      c('same base as the dangerous plan', typeof r.base_hash === 'string' && r.base_hash === state.base),
+      c('a different plan', typeof r.plan_id === 'string' && r.plan_id !== state.dangerousPlan),
+    ]
   })
   await step('compare', 0, ['compare'], (r) => {
     story.selection = { recommended: r.recommended, decided_by: r.decided_by, removed: r.removed }
@@ -122,17 +138,17 @@ export async function runScenario(backend) {
   await step('verify', 0, ['verify'], (r) => [c('chain, policy and selection check out', r.ok === true), c('a receipt exists for every decision', (r.receipts ?? 0) >= 8, r.receipts)])
   await step('replay', 0, ['replay'], (r) => [c('the selection replays', r.ok === true)])
 
-  if (!failed) await backend.stopStack()
+  if (!failed) await guarded('stop the containers', () => backend.stopStack())
   await step('offline_verify', 0, ['verify'], (r) => {
     offline = { receipts: r.receipts ?? 0, chain_findings: (r.chain_findings ?? []).length, policy_findings: (r.policy_findings ?? []).length }
     return [c('chain verifies without Docker', r.ok === true), c('no chain findings', offline.chain_findings === 0), c('no policy violations', offline.policy_findings === 0)]
   }, { offlineRun: true })
 
-  if (!failed) await backend.corruptChain()
-  await step('tamper_detected', 30, ['verify'], (r) => [c('the verifier reports findings', (r.chain_findings ?? []).length > 0 || r.ok === false)], { offlineRun: true })
-  await backend.restoreChain()
+  if (!failed) await guarded('change one byte of the chain', () => backend.corruptChain())
+  await step('tamper_detected', 30, ['verify'], (r) => [c('the chain is reported not ok', r.ok === false), c('with a named finding', (r.chain_findings ?? []).length > 0 && typeof r.chain_findings[0].problem === 'string')], { offlineRun: true })
+  await guarded('restore the chain', () => backend.restoreChain())
   await step('tamper_restored', 0, ['verify'], (r) => [c('the chain verifies again', r.ok === true)], { offlineRun: true })
 
-  const { publicKey, receipts } = await backend.readReceipts()
+  const { publicKey, receipts } = (await guarded('read the receipts', () => backend.readReceipts())) ?? { publicKey: null, receipts: [] }
   return { stepResults: STEPS.map(([id, title]) => results.get(id) ?? skippedStep(id, title)), story, offline, receipts, publicKey }
 }

@@ -9,12 +9,13 @@ import { errorSummary } from '../privacy/redact.js'
 /**
  * @param {string} cmd
  * @param {string[]} args
- * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, input?: string | Buffer, timeoutMs?: number }} [opts]
+ * @param {{ cwd?: string, env?: NodeJS.ProcessEnv, input?: string | Buffer, timeoutMs?: number, onSpawn?: (child: import('node:child_process').ChildProcess) => void }} [opts]
  * @returns {Promise<{ code: number, stdout: string, stderr: string, timedOut: boolean }>}
  */
-export function run(cmd, args, { cwd, env, input, timeoutMs = 120000 } = {}) {
+export function run(cmd, args, { cwd, env, input, timeoutMs = 120000, onSpawn } = {}) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, { cwd, env: env ?? process.env, stdio: ['pipe', 'pipe', 'pipe'] })
+    if (onSpawn) onSpawn(child)
     const out = []
     const err = []
     let timedOut = false

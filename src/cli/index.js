@@ -15,6 +15,7 @@
  */
 
 import { realpathSync } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
@@ -128,7 +129,10 @@ export async function main(argv) {
     }
   }
   const out = { command, ok: exit === EXIT.OK, exit_code: exit, ...body }
-  return { exit, text: opts.text, output: redactDeep(scrubPaths(out, [[keyHome(), '$JUSTRUNME_HOME'], [path.resolve(opts.repo ?? process.cwd()), '$REPO']])) }
+  const pairs = [[keyHome(), '$JUSTRUNME_HOME'], [path.resolve(opts.repo ?? process.cwd()), '$REPO']]
+  // judge works in temporary directories whose names can appear in error text.
+  if (command === 'judge') for (const t of new Set([os.tmpdir(), tryReal(os.tmpdir())])) pairs.push([t, '$TMP'])
+  return { exit, text: opts.text, output: redactDeep(scrubPaths(out, pairs)) }
 }
 
 /**
@@ -146,6 +150,14 @@ export function scrubPaths(value, pairs) {
     return v
   }
   return walk(value)
+}
+
+const tryReal = (p) => {
+  try {
+    return realpathSync(p)
+  } catch {
+    return p
+  }
 }
 
 /** Text mode: no control characters, so nothing can colour the terminal or fake a line. */

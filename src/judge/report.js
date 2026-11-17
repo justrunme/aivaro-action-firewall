@@ -34,6 +34,7 @@ export function buildReport({ stepResults, elapsedMs, imagesCached, missionId, p
   const findings = []
   for (const s of failed) findings.push({ code: 'STEP_FAILED', step: s.id, detail: s.checks.filter((c) => !c.ok).map((c) => c.name) })
   for (const s of skipped) findings.push({ code: 'STEP_SKIPPED', step: s.id })
+  if (story?.error) findings.push({ code: 'BACKEND_ERROR', during: story.error.during })
   if (budgetEnforced && !withinBudget) findings.push({ code: 'OVER_BUDGET', elapsed_ms: elapsedMs, budget_ms: budgetMs })
   const ok = findings.length === 0
   return {
@@ -61,7 +62,7 @@ export function buildReport({ stepResults, elapsedMs, imagesCached, missionId, p
     receipts,
     operator_public_key: publicKey,
     limits: [
-      'The demo runs against a throwaway Postgres 16 container with demo-only credentials; no production credential is read or passed on.',
+      'The demo runs against a throwaway Postgres 16 container with demo-only credentials. Database and cloud credentials in your environment are not passed to it; HOME and the DOCKER_* client settings are, because the Docker client needs them. A remote DOCKER_HOST is refused.',
       'Undo covers the resource types named in the contract (here: the Postgres database and tracked files). Network calls and other external effects are not undoable.',
       'JustRunMe is not a sandbox: plan steps run as the operating-system user.',
     ],

@@ -1,7 +1,8 @@
 /**
  * `justrunme judge` (T19): one command, one throwaway Postgres, a full mission, a
  * PASS/FAIL report. The whole run, setup and teardown included, is timed against the
- * 60 s budget (R8.2) when the images are already on the machine.
+ * 60 s budget (R8.2) when the images are already on the machine. Cleanup on failure
+ * and on Ctrl-C / SIGTERM is owned by the backend (src/judge/env.js).
  */
 
 import { performance } from 'node:perf_hooks'
@@ -14,10 +15,6 @@ import { runScenario } from './scenario.js'
 export async function runJudge({ create }) {
   const t0 = performance.now()
   const env = await create()
-  // Ctrl-C must not leave a database container behind.
-  const onSignal = (sig) => () => env.cleanup().finally(() => process.exit(sig === 'SIGINT' ? 130 : 143))
-  const handlers = ['SIGINT', 'SIGTERM'].map((s) => [s, onSignal(s)])
-  for (const [s, h] of handlers) process.once(s, h)
   try {
     const scenario = await runScenario(env.backend)
     await env.cleanup()
@@ -32,7 +29,6 @@ export async function runJudge({ create }) {
       story: scenario.story,
     })
   } finally {
-    for (const [s, h] of handlers) process.removeListener(s, h)
     await env.cleanup()
   }
 }

@@ -133,12 +133,21 @@ under `JUSTRUNME_HOME/emergency/`. Exit 17 even when everything was restored.
 node src/cli/index.js judge --text
 ```
 
-It uses nothing of yours: its own temporary workspace, operator key and Compose
-project (`jrm-judge-<id>`), the demo's `postgres:16.3-alpine` image with the
-demo-only credentials, and an environment reduced to `PATH`, `HOME` and the
-`DOCKER_*` settings, so credentials in your shell are not passed on. It takes no
-`--repo` or `--mission`, never reads or writes `~/.justrunme`, and removes the
-containers, volumes and temporary directories at the end (also on Ctrl-C).
+It uses none of your workspace or keys: its own temporary workspace, operator key
+and Compose project (`jrm-judge-<id>`), the demo's `postgres:16.3-alpine` image
+with the demo-only credentials. Every child process gets only `PATH`, `HOME`,
+`TMPDIR`, `LANG` and the `DOCKER_*` settings (the Docker client needs them), a
+throwaway `JUSTRUNME_HOME`, and git settings that ignore your git configuration;
+database and cloud credentials in your shell are not passed on (a test sets
+canary values and checks the output). A remote `DOCKER_HOST` is refused. It takes
+no `--repo` or `--mission`, and a test checks that it creates nothing in a
+`JUSTRUNME_HOME` you set or in `~/.justrunme`.
+
+At the end, on failure, and on Ctrl-C or SIGTERM it removes the stack and the
+rehearsal copies' containers, volumes and networks and its own temporary
+directories (a test interrupts a run during a rehearsal and checks this). One
+leftover is possible when the run is interrupted mid-rehearsal: the rehearsal's
+temporary workspace directory `jrm-rehearsal-*` in the system temp directory.
 
 The 60 s budget covers setup and teardown and is judged only when the image was
 already on the machine; the first run that downloads it is timed and reported

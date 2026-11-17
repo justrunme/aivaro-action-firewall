@@ -8,7 +8,7 @@ import assert from 'node:assert/strict'
 import fc from 'fast-check'
 import { runScenario, STEPS } from '../src/judge/scenario.js'
 import { BUDGET_MS, buildReport } from '../src/judge/report.js'
-import { childEnv } from '../src/judge/env.js'
+import { JudgeEnvironmentError, childEnv, createBackend, projectNames } from '../src/judge/env.js'
 import { EXIT } from '../src/cli/codes.js'
 import { main } from '../src/cli/index.js'
 
@@ -16,6 +16,7 @@ import { main } from '../src/cli/index.js'
 function fakeBackend({ override = {}, verifierAcceptsAnything = false } = {}) {
   const state = { kind: null, migrated: false, tampered: false, calls: [] }
   const db = () => ({
+    schema_hash: state.migrated ? 'sha256:h2' : 'sha256:h1',
     tables: { orders: { rows: 12, checksum: 'a' }, patches: { rows: 3, checksum: 'b' } },
     columns: { orders: ['id integer not null', ...(state.migrated ? ['status text not null'] : [])] },
   })
@@ -121,6 +122,43 @@ describe('Judge scenario (T19)', () => {
     assert.equal(report(s).judge.status, 'FAIL')
   })
 
+  it('fails the report when a backend call outside a step throws, even if every step passed', async () => {
+    const b = fakeBackend()
+    b.readReceipts = () => {
+      throw new Error('cannot read the chain')
+    }
+    const s = await runScenario(b)
+    assert.ok(s.stepResults.every((r) => r.status === 'passed'))
+    const r = report(s)
+    assert.equal(r.judge.status, 'FAIL')
+    assert.deepEqual(r.findings.map((f) => f.code), ['BACKEND_ERROR'])
+  })
+
+  it('does not run the offline steps when the containers could not be stopped', async () => {
+    const b = fakeBackend()
+    b.stopStack = async () => {
+      throw new Error('docker compose down failed')
+    }
+    const s = await runScenario(b)
+    assert.equal(s.stepResults.find((r) => r.id === 'offline_verify').status, 'skipped')
+    assert.equal(report(s).judge.status, 'FAIL')
+  })
+
+  it('fails when the schema changed even though every table kept its rows', async () => {
+    const b = fakeBackend()
+    const measure = b.measure
+    let afterUndo = false
+    const cli = b.cli
+    b.cli = async (args) => {
+      const r = await cli(args)
+      if (args[0] === 'undo') afterUndo = true
+      return r
+    }
+    b.measure = async () => ({ ...(await measure()), ...(afterUndo ? { schema_hash: 'sha256:other' } : {}) })
+    const s = await runScenario(b)
+    assert.equal(s.stepResults.find((r) => r.id === 'undo').status, 'failed')
+  })
+
   it('records a command that throws or prints no JSON as a failed step, not a crash', async () => {
     const thrown = await runScenario(fakeBackend({ override: { compare: () => { throw new Error('boom') } } }))
     assert.equal(thrown.stepResults.find((r) => r.id === 'compare').status, 'failed')
@@ -171,8 +209,23 @@ describe('Judge environment (T19.2)', () => {
       { PATH: '/bin', HOME: '/h', DOCKER_HOST: 'unix:///x', AWS_SECRET_ACCESS_KEY: 's', DATABASE_URL: 'postgres://u:p@h/d', PGPASSWORD: 'p', GITHUB_TOKEN: 't', JUSTRUNME_HOME: '/real/keys', JUSTRUNME_GATE: 'on' },
       '/tmp/throwaway'
     )
-    assert.deepEqual(Object.keys(env).sort(), ['DOCKER_HOST', 'HOME', 'JUSTRUNME_HOME', 'PATH'])
+    assert.deepEqual(Object.keys(env).sort(), ['DOCKER_HOST', 'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_NOSYSTEM', 'HOME', 'JUSTRUNME_HOME', 'PATH'])
     assert.equal(env.JUSTRUNME_HOME, '/tmp/throwaway')
+    assert.equal(env.GIT_CONFIG_GLOBAL, '/dev/null', 'the caller git configuration is ignored')
+    assert.ok(!('GIT_DIR' in childEnv({ GIT_DIR: '/elsewhere/.git', GIT_WORK_TREE: '/elsewhere' }, '/tmp/x')), 'GIT_DIR cannot redirect git to another repository')
+  })
+
+  it('refuses a remote Docker daemon before creating anything', async () => {
+    for (const host of ['tcp://10.0.0.5:2375', 'ssh://deploy@prod.example']) {
+      await assert.rejects(createBackend({ env: { PATH: '/bin', DOCKER_HOST: host } }), (err) => err instanceof JudgeEnvironmentError && err.code === 'REMOTE_DOCKER')
+    }
+  })
+
+  it('names what a run created, so that an early exit can remove the rehearsal copies too', () => {
+    assert.deepEqual(projectNames('ab12cd34'), { stack: 'jrm-judge-ab12cd34', rehearsalPrefix: 'jrm-reh-judgeab12cd34-' })
+    // The rehearsal engine names its copies jrm-reh-<mission id, lower case, letters and digits only>-<hex>.
+    const mission = 'judge-ab12cd34'
+    assert.ok(`jrm-reh-${mission.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 20)}-0f0f0f0f`.startsWith(projectNames('ab12cd34').rehearsalPrefix))
   })
 })
 
