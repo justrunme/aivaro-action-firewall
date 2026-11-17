@@ -540,3 +540,69 @@ Demo A: authorizing the safe plan before the comparison is `COMPARISON_REQUIRED`
 Residual: replay proves that the choice follows from signed measurements, not that the measurements were right. `rows_lost` is measured once, in the rehearsal copy (`measureDatabase` before and after the plan, `buildImpact` in `src/rehearsal/impact.js`), signed with the report, and the comparison reads it only after the report signature and its rehearsal receipt check out. Replay does not measure again. When a stored report has since been replaced, replay checks its verdict and duration against the rehearsal receipt but cannot re-read rows lost; `reports_rechecked` says how many reports were re-read.
 
 Verification (local, macOS): `test/compare.test.js` 24 pass; `npm test` 236 pass, 0 fail; Docker Demo A and B with `JRM_DOCKER_TESTS=1` 15 pass, 0 fail, 0 skipped.
+
+---
+
+## Run 16 — T18 CLI with exit codes
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t18-cli`, from `main` at `b407925` (PR 9 merged by the operator) |
+
+### Written
+
+- `src/cli/codes.js`: fixed exit codes (0 ok, 1 internal, 2 usage, 3 config, 10 DATA LOSS, 11 rehearsal failed, 12 no plan selected, 13 run failed, 14 not recovered, 20 to 24 refusals per command, 30 integrity). Every non-zero exit carries `error.code`.
+- `src/cli/target.js`: `justrunme.target.json` (Compose project, file, db service, user, database, optional health), unknown fields refused, compose file must be a relative path inside the workspace, names checked with the existing `assertTarget`. Added to the hook's protected paths.
+- `src/cli/commands.js`: `keys init`, `rehearse`, `compare` (no ids: every plan whose latest rehearsal is on the base of the most recent rehearsal, which is the coverage the selection gate requires), `authorize`, `run`, `undo`, `verify` (chain, policy, replay of every selection), `replay`, `status`, `receipt`, `reanchor`, `lock inspect|recover`. Each is a thin call into the library; `authorize` goes through `authorizeMission`, so through the fidelity and selection gates. Only `keys init` creates a key; read-only commands need only the public key.
+- `src/cli/index.js`: `node:util` `parseArgs` in strict mode, JSON on stdout, `--text`, no colour codes at all, output through `redactDeep`. `package.json` `bin`.
+
+### Decisions
+
+- No ANSI colour in any mode, rather than gating it on `NO_COLOR` and TTY: simpler, and nothing to strip in CI logs.
+- One exit code per command for refusals (20 to 24) plus `error.code` for the reason, instead of one exit code per reason: exit codes stay few and stable, the JSON carries the detail.
+- The CLI is operator-side. With the gate on, the agent cannot call it: the hook denies unrehearsed shell commands (tested for five spellings), and authorization refuses plan steps that invoke JustRunMe.
+
+### Verification (local, macOS)
+
+`npm test`: 249 pass, 0 fail (Docker demos skipped). Docker with `JRM_DOCKER_TESTS=1`: Demo A, Demo B and Demo CLI 16 pass, 0 fail, 0 skipped (225 s). Demo CLI runs the whole mission through `justrunme` only: rehearse DATA LOSS (exit 10), replan SAFE (0), authorize before compare (21 `COMPARISON_REQUIRED`), compare (0), authorize the dangerous plan (21 `DATA_LOSS`), authorize (0, `selected`), run (0), second run (22), verify (0), undo (0, `RECOVERED`, tables and columns back to the pre-run state), verify (0), replay (0).
+
+### PR 10 security review (operator request: gate bypass, error handling, secrets in output)
+
+Independent read-only review by the `justrunme-skeptic` agent plus own reading. No P1 (no command reaches an authorization, run or selection without `authorizeMission` / `runMission`, the fidelity check and `gate.js`; no private key material in any output). P2 findings and what changed:
+
+- Self-reference was refused at authorization, after rehearsal had already executed the step. Now `rehearse` runs the same bindability check (`entriesForPlan`) first and refuses with exit 25 before anything runs. Plan steps run without `JUSTRUNME_HOME` and `JUSTRUNME_GATE` in their environment. Residual, documented in README: a rehearsed script that imports JustRunMe code or reads the default key directory is not detected; plan steps run as the OS user.
+- A refusal whose receipt could not be written (chain broken, lock held) became exit 1 `INTERNAL`. Now the refusal keeps its exit code and `error.code` and carries `recorded: false`.
+- `rehearse`, `run` and `undo` could do real work on a chain that could not record it. All three now verify the chain before any side effect (`CHAIN_INVALID`). If the receipt still fails afterwards (lock taken in between), the result is returned with exit 30 / 31 and `error.code: RESULT_UNRECORDED`, including the `capture_id`.
+- An invalid health entry failed inside undo after the database was restored. `justrunme.target.json` now validates health with the probe's own rules (exit 3), and a verification that throws becomes a failed check instead of a lost result.
+- `run` returned 0 when irreversible steps were skipped: now exit 15 with `skipped_needs_approval`.
+- `authorize` wrote the authorization file before its receipt: the order is now receipt, then file.
+- `rehearse` ignored a copy that was not removed: now exit 16 (it holds a dump of the real database).
+- `status` printed unverified data and always exited 0. The report counts only if operator-signed and recorded. The authorization counts only if signed, recorded, for this contract and not expired. The exit is 30 when the chain does not verify.
+- `verify` passed on an empty or mistyped mission. It now exits 2 `NO_RECEIPTS`.
+- Postgres `DETAIL`/`CONTEXT`/`QUERY` lines (they can quote row values) were kept in step details and receipts. They are now dropped by `errorSummary`, and `scheme://user:password@` is masked.
+
+P3 taken:
+- A lock with an unknown owner is reported at once as exit 31 (`CHAIN_LOCKED`) instead of a timeout.
+- `run` re-checks the selection gate before executing.
+- Read-only commands retry once on a transient `ANCHOR_BEHIND` from a parallel append.
+- Key directory and workspace paths are replaced by `$JUSTRUNME_HOME` / `$REPO` in output.
+- `--text` strips control characters.
+- `replay --receipt` of a non-selection exits 2.
+
+Not taken, recorded:
+- Health and db user are not part of the fingerprint; the target file is protected by the hook only.
+- Key directory permissions are not tightened when the directory already exists.
+- `--mission` is ignored by commands that read the contract.
+
+### Operator decisions after the review: break-glass undo, security limit, fingerprint
+
+- Break-glass recovery (`src/undo/emergency.js`, `undo --emergency-recovery`).
+  - It needs the flag (undo only), a written reason (8+ characters) and `--confirm` with the capture id typed again.
+  - It is refused while the chain verifies (`EMERGENCY_NOT_NEEDED`) and for a capture that is not operator-signed.
+  - It restores, always runs the recovery verification, and never reads, repairs, reanchors or extends the damaged chain.
+  - Evidence goes to a separate journal in `JUSTRUNME_HOME/emergency/` (outside the workspace, denied to the agent by the hook). Each entry is signed and hash-linked and carries `evidence_status: "unverified"`.
+  - Exit 17 when restored and verified, 14 when not, 30 if the journal itself cannot be written. Never 0.
+- Security limit stated plainly in README: JustRunMe is not a sandbox; plan steps run as the OS user and can read the key directory.
+- Fingerprint: `base.target` now includes `db_user` and `health`; changing either after authorization blocks the run (`FIDELITY_MISMATCH`, component named).

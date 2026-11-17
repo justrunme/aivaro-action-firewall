@@ -24,7 +24,8 @@ feature until it has a passing end-to-end test.
 | Plan comparison (counterfactual replay) | Implemented as a library: stored rehearsals are compared only with equal `base_hash` (same source state and environment), equal rehearsal conditions, operator signatures and matching rehearsal receipts; a fixed rule picks the plan, names the deciding rule, and the choice is a signed `plan_selected` receipt. A replay checks that the choice follows from the signed measurements; it does not measure the database again. When several plans were rehearsed on the current state, only the selected one can be authorized; a selection made on another state grants nothing. Demo A compares its dangerous and safe plans against real Postgres. No `compare` CLI command yet |
 | MCP server, Kiro Power, `justrunme-operator` agent | Not implemented |
 | Judge mode (one command, under 60 s) | Not implemented (T19) |
-| Console UI | Not implemented (T18, after Demo A and B work) |
+| CLI (`justrunme`) | Implemented: JSON output, stable exit codes, every refusal named; the whole mission (rehearse, compare, authorize, run, undo, verify, replay) runs through the CLI against real Docker and Postgres in a test |
+| Console UI | Not implemented |
 | Phone passkey approval (WebAuthn) | Deferred to P2 |
 
 Limits that matter today:
@@ -45,15 +46,86 @@ Limits that matter today:
   explicitly. The reanchor is itself recorded before the anchor moves; an
   interrupted reanchor stays denied until it is completed. A lock left by a
   crash whose owner cannot be determined is never removed automatically; the
-  operator inspects it and removes it by its exact hash, which is recorded.
-  There is no CLI for these yet; they are library calls (`reanchorChain`,
-  `inspectChainLock`, `recoverLock`).
+  operator inspects it and removes it by its exact hash, which is recorded
+  (`justrunme reanchor`, `justrunme lock inspect`, `justrunme lock recover`).
+- The CLI is the operator's tool. With the gate on, the agent cannot run it:
+  shell calls that were not rehearsed are denied, and a plan whose steps name
+  JustRunMe on their command line is refused before rehearsal runs anything.
+  Plan steps run without `JUSTRUNME_HOME` in their environment.
+- **Security limit: JustRunMe is not a sandbox.** Plan steps (during rehearsal
+  and the real run) execute as your OS user. A step or a script it calls can
+  read the operator key directory, import JustRunMe code, or reach anything else
+  your user can reach; nothing detects that. Signatures and receipts prove what
+  was decided and recorded, not that rehearsed code was harmless. Run JustRunMe
+  under a dedicated OS user or in a VM if plans come from an untrusted agent.
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
-- Rehearsed and authorized code runs as your OS user. JustRunMe binds and
-  checks what runs; it does not sandbox it.
+- The environment identity in the fingerprint covers the Compose project, db
+  service, name and user, the health probe and the Compose file hash: changing
+  any of them after rehearsal blocks the run.
 
 Do not rely on this repository to protect real data yet.
+
+## CLI
+
+`justrunme` (`node src/cli/index.js`) reads `justrunme.mission.yaml` and
+`justrunme.target.json` from the workspace (`--repo`, default the current
+directory) and the operator key from `JUSTRUNME_HOME`. It prints one JSON object
+on stdout (`--text` for a plain listing) and never writes colour codes.
+
+```
+justrunme keys init                     # once; no other command creates a key
+justrunme rehearse                      # 0 SAFE, 10 DATA LOSS, 11 FAILED
+justrunme compare [plan_id ...]         # no ids: every plan rehearsed on the latest state
+justrunme authorize                     # only the selected plan when several were rehearsed
+justrunme run
+justrunme undo <capture_id>
+justrunme verify | replay | status | receipt [--seq n]
+justrunme reanchor --reason "..." | lock inspect | lock recover --sha256 ... --reason "..."
+```
+
+`justrunme.target.json` names the operator's Compose project:
+`{"project", "compose_file", "db_service", "db_user", "db_name", "health"?}`.
+The hook protects it like the contract.
+
+| Exit | Meaning |
+|------|---------|
+| 0 | done; `rehearse`: SAFE |
+| 1 | internal error |
+| 2 | usage error |
+| 3 | contract, target or operator key missing or invalid |
+| 10 | `rehearse`: DATA LOSS |
+| 11 | `rehearse`: a step failed or the copy did not start |
+| 12 | `compare`: no plan survived the rule |
+| 13 | `run`: a step failed; undo with the printed `capture_id` |
+| 14 | `undo`: not RECOVERED |
+| 15 | `run`: completed, but steps that need approval were skipped |
+| 16 | `rehearse`: the copy was not fully removed (it holds a dump of the real database) |
+| 17 | `undo --emergency-recovery`: restored and verified, but `evidence_status: "unverified"` (never 0) |
+| 20 | `compare` refused |
+| 21 | `authorize` refused |
+| 22 | `run` refused |
+| 23 | `undo` refused |
+| 24 | `reanchor` or `lock recover` refused |
+| 25 | `rehearse` refused before running anything |
+| 30 | `verify` / `replay` / `status`: chain, policy or selection does not check out; or a command did its work but could not record it (`RESULT_UNRECORDED`, result included) |
+| 31 | the receipt chain lock is held or stuck (`justrunme lock inspect`) |
+
+Break-glass recovery. A normal `undo` refuses to restore when the receipt chain
+does not verify. If the chain is damaged and production must be restored anyway:
+
+```
+justrunme undo <capture_id> --emergency-recovery --reason "<why>" --confirm <capture_id>
+```
+
+It is refused while the chain still verifies (`EMERGENCY_NOT_NEEDED`) and for a
+capture that is not operator-signed. It restores, always runs the recovery
+verification, never touches or repairs the chain, and records a signed,
+hash-linked entry with `evidence_status: "unverified"` in a separate journal
+under `JUSTRUNME_HOME/emergency/`. Exit 17 even when everything was restored.
+
+Every non-zero exit carries `error.code` (for example `COMPARISON_REQUIRED`,
+`PLAN_NOT_SELECTED`, `FIDELITY_MISMATCH`, `BASE_MISMATCH`) in the JSON output.
 
 ## What it will do
 

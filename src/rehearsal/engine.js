@@ -15,7 +15,8 @@ import path from 'node:path'
 import { hashValue } from '../util/canonical.js'
 import { redactDeep } from '../privacy/redact.js'
 import { publicKeyHex, signValue, verifyValue } from '../receipts/keys.js'
-import { appendReceipt } from '../receipts/chain.js'
+import { appendReceipt, verifyChain } from '../receipts/chain.js'
+import { AuthorizationRefused, entriesForPlan } from '../authorize/authorization.js'
 import { run } from '../util/exec.js'
 import { computeFingerprint } from '../fidelity/fingerprint.js'
 import { baseHash } from '../fidelity/gate.js'
@@ -27,6 +28,14 @@ import { buildImpact } from './impact.js'
 import { executeSteps } from './steps.js'
 
 export const planId = (contract) => 'plan-' + hashValue(contract.plan).slice(7, 19)
+
+export class RehearsalRefused extends Error {
+  /** @param {string} code @param {string} message */
+  constructor(code, message) {
+    super(message)
+    this.code = code
+  }
+}
 
 /** Inputs of the verdict other than the plan and the base state. */
 export function rehearsalConditions(contract, target) {
@@ -81,6 +90,17 @@ async function leftovers(project) {
  */
 export async function rehearse({ repoDir, contract, contractHash, target, keys, clock = Date.now }) {
   if (!keys) throw new Error('rehearse needs the operator keys to sign the report')
+  // Before anything runs: a plan that could never be authorized is not executed
+  // either (it would run agent-authored steps that invoke JustRunMe itself), and a
+  // chain that does not verify could not record the result.
+  try {
+    entriesForPlan(contract.plan, repoDir)
+  } catch (err) {
+    if (err instanceof AuthorizationRefused) throw new RehearsalRefused(err.code, `${err.message}; nothing was executed`)
+    throw err
+  }
+  const chain = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId: contract.id })
+  if (!chain.ok) throw new RehearsalRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}; nothing was executed`)
   const started = clock()
   const realTarget = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
   const fingerprint = await computeFingerprint({ repoDir, target: realTarget, contract, contractHash })
@@ -147,13 +167,19 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
   const file = reportPath(repoDir, contract.id, id)
   mkdirSync(path.dirname(file), { recursive: true })
   writeFileSync(file, JSON.stringify(signed, null, 2) + '\n')
-  appendReceipt({
-    repoDir,
-    keys,
-    missionId: contract.id,
-    kind: 'rehearsal',
-    verdict: signed.verdict,
-    subject: { plan_id: id, report_hash: hashValue(signed), base_hash: signed.base_hash, duration_ms: signed.duration_ms, evidence: signed.evidence },
-  })
+  try {
+    appendReceipt({
+      repoDir,
+      keys,
+      missionId: contract.id,
+      kind: 'rehearsal',
+      verdict: signed.verdict,
+      subject: { plan_id: id, report_hash: hashValue(signed), base_hash: signed.base_hash, duration_ms: signed.duration_ms, evidence: signed.evidence },
+    })
+  } catch (err) {
+    // The verdict is still returned; without its receipt the report cannot be
+    // compared or authorized (both require the matching rehearsal receipt).
+    return { ...signed, receipt_error: err.code === 'CHAIN_LOCKED' ? 'CHAIN_LOCKED' : 'CHAIN_INVALID' }
+  }
   return signed
 }

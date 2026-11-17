@@ -11,8 +11,10 @@ import { captureDir, loadManifest } from '../capture/capture.js'
 import { restoreFiles } from '../capture/files.js'
 import { restorePostgres } from '../capture/postgres.js'
 import { verifyRecovery } from './verify.js'
-import { appendReceipt, findLast, readChain } from '../receipts/chain.js'
+import { appendReceipt, findLast, verifyChain } from '../receipts/chain.js'
 import { hashValue } from '../util/canonical.js'
+import { errorSummary } from '../privacy/redact.js'
+import { appendEmergencyRecord } from './emergency.js'
 
 export const SUPPORTED_RESOURCES = ['files', 'config_files', 'postgres', 'containers']
 
@@ -33,12 +35,21 @@ export class UndoRefused extends Error {
  * @param {{ service: string, url: string } | null} [a.health]
  * @param {string[]} [a.resources] subset to restore; anything unsupported is refused
  */
-export async function undoMission({ repoDir, missionId, captureId, target, keys, health = null, resources }) {
+export async function undoMission({ repoDir, missionId, captureId, target, keys, health = null, resources, emergency = null }) {
   const publicKey = keys?.publicKey
   const unsupported = (resources ?? []).filter((r) => !SUPPORTED_RESOURCES.includes(r))
   if (unsupported.length > 0) throw new UndoRefused('UNSUPPORTED_RESOURCE', `undo is not supported for: ${unsupported.join(', ')}`)
   const { manifest, problem } = loadManifest(repoDir, missionId, captureId, publicKey)
   if (problem) throw new UndoRefused('CAPTURE_INVALID', problem)
+  // Nothing is restored on a chain that could not record the undo and its verification,
+  // except as an explicit break-glass recovery (emergency.js), and only when needed.
+  const chain = verifyChain({ repoDir, home: keys.home, publicKey, missionId })
+  if (emergency) {
+    if (typeof emergency.reason !== 'string' || emergency.reason.trim().length < 8) throw new UndoRefused('EMERGENCY_REASON_REQUIRED', 'emergency recovery needs a written reason')
+    if (chain.ok) throw new UndoRefused('EMERGENCY_NOT_NEEDED', 'the receipt chain verifies; use a normal undo')
+  } else if (!chain.ok) {
+    throw new UndoRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}; nothing was restored (break-glass: --emergency-recovery)`)
+  }
 
   const real = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
   const dir = captureDir(repoDir, missionId, captureId)
@@ -72,41 +83,78 @@ export async function undoMission({ repoDir, missionId, captureId, target, keys,
     results.push({ resource, ...result, duration_ms: Date.now() - started })
   }
 
-  const verification = await verifyRecovery({ repoDir, manifest, target: real, health })
-
-  // R4.5, R5.5, R5.6: signed undo receipt, then the verification receipt right after it.
-  const run = findLast(readChain(repoDir, missionId), (r) => r.kind === 'run_result' && r.subject?.capture_id === captureId)
-  const undoReceipt = appendReceipt({
-    repoDir,
-    keys,
-    missionId,
-    kind: 'undo',
-    verdict: 'undo',
-    subject: { capture_id: captureId, manifest_hash: hashValue(manifest), resources: results.map((r) => ({ resource: r.resource, status: r.status, detail: r.detail })) },
-    refs: run ? { run: run.hash } : {},
-  })
-  const verificationReceipt = appendReceipt({
-    repoDir,
-    keys,
-    missionId,
-    kind: 'verification',
-    verdict: verification.status,
-    subject: {
-      capture_id: captureId,
-      checks: verification.checks.length,
-      failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource, expected: c.expected, actual: c.actual })),
-      integration_tests: verification.integration_tests,
-    },
-    refs: { undo: undoReceipt.hash },
-  })
-
-  return {
+  // The restore has happened: a verification that throws is a failed verification, not a lost result.
+  let verification
+  try {
+    verification = await verifyRecovery({ repoDir, manifest, target: real, health })
+  } catch (err) {
+    const failed = [{ check: 'verification_error', resource: '(verification)', expected: 'completed', actual: errorSummary(err.message), ok: false }]
+    verification = { status: 'FAIL', checks: failed, failed, integration_tests: null }
+  }
+  const status = verification.status === 'PASS' && results.every((r) => r.status === 'succeeded') ? 'RECOVERED' : 'NOT_RECOVERED'
+  const outcome = {
     mission_id: missionId,
     capture_id: captureId,
     resources: results,
     restored_ok: results.every((r) => r.status === 'succeeded'),
     verification,
-    status: verification.status === 'PASS' && results.every((r) => r.status === 'succeeded') ? 'RECOVERED' : 'NOT_RECOVERED',
-    receipts: { undo: undoReceipt.hash, verification: verificationReceipt.hash },
+    status,
+    evidence_status: emergency ? 'unverified' : 'recorded',
+    receipts: { undo: null, verification: null },
   }
+
+  if (emergency) {
+    // Break-glass: evidence goes to the separate signed journal, never into the damaged chain.
+    try {
+      outcome.emergency_record = appendEmergencyRecord({
+        repoDir,
+        keys,
+        missionId,
+        record: {
+          kind: 'emergency_undo',
+          capture_id: captureId,
+          manifest_hash: hashValue(manifest),
+          reason: emergency.reason,
+          chain_findings: chain.findings.slice(0, 5).map((f) => f.problem),
+          resources: results.map((r) => ({ resource: r.resource, status: r.status, detail: r.detail })),
+          verification: { status: verification.status, checks: verification.checks.length, failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource })) },
+          recovery_status: status,
+        },
+      }).hash
+    } catch {
+      outcome.receipt_error = 'JOURNAL_FAILED'
+    }
+    return outcome
+  }
+
+  // R4.5, R5.5, R5.6: signed undo receipt, then the verification receipt right after it.
+  try {
+    const run = findLast(chain.receipts, (r) => r.kind === 'run_result' && r.subject?.capture_id === captureId)
+    outcome.receipts.undo = appendReceipt({
+      repoDir,
+      keys,
+      missionId,
+      kind: 'undo',
+      verdict: 'undo',
+      subject: { capture_id: captureId, manifest_hash: hashValue(manifest), resources: results.map((r) => ({ resource: r.resource, status: r.status, detail: r.detail })) },
+      refs: run ? { run: run.hash } : {},
+    }).hash
+    outcome.receipts.verification = appendReceipt({
+      repoDir,
+      keys,
+      missionId,
+      kind: 'verification',
+      verdict: verification.status,
+      subject: {
+        capture_id: captureId,
+        checks: verification.checks.length,
+        failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource, expected: c.expected, actual: c.actual })),
+        integration_tests: verification.integration_tests,
+      },
+      refs: { undo: outcome.receipts.undo },
+    }).hash
+  } catch (err) {
+    outcome.receipt_error = err.code === 'CHAIN_LOCKED' ? 'CHAIN_LOCKED' : 'CHAIN_INVALID'
+  }
+  return outcome
 }

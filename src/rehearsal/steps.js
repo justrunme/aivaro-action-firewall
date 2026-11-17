@@ -14,9 +14,18 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { psql } from './compose.js'
 import { run } from '../util/exec.js'
-import { redact } from '../privacy/redact.js'
+import { errorSummary } from '../privacy/redact.js'
 
-const tail = (s) => redact(String(s).trim().split('\n').slice(-3).join(' | ')).slice(0, 300)
+const tail = (s) => errorSummary(s)
+
+// Plan steps are agent-authored code: they get no pointer to the operator key
+// directory and cannot switch the gate. (They still run as the OS user; see the threat model.)
+function stepEnv(target) {
+  const env = { ...process.env, COMPOSE_PROJECT_NAME: target.project, COMPOSE_FILE: [target.composeFile, target.overrideFile].filter(Boolean).join(path.delimiter) }
+  delete env.JUSTRUNME_HOME
+  delete env.JUSTRUNME_GATE
+  return env
+}
 
 function insideRoot(root, rel) {
   const abs = path.resolve(root, rel)
@@ -53,8 +62,7 @@ export async function executeSteps({ plan, cwd, target, mode }) {
         result = r.code === 0 ? { status: 'ok', detail: '' } : { status: 'failed', detail: tail(r.stderr) }
       }
     } else if (step.tool === 'shell') {
-      const env = { ...process.env, COMPOSE_PROJECT_NAME: target.project, COMPOSE_FILE: [target.composeFile, target.overrideFile].filter(Boolean).join(path.delimiter) }
-      const r = await run(step.args[0], step.args.slice(1), { cwd, env, timeoutMs: 120000 })
+      const r = await run(step.args[0], step.args.slice(1), { cwd, env: stepEnv(target), timeoutMs: 120000 })
       result = r.code === 0 ? { status: 'ok', detail: '' } : { status: 'failed', detail: `exit ${r.code}: ${tail(r.stderr)}` }
     } else {
       result = { status: 'failed', detail: `tool ${step.tool} cannot be rehearsed` }
