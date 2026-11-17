@@ -16,6 +16,7 @@ import { compareFingerprints } from '../fidelity/gate.js'
 import { STATE_DIR } from '../fidelity/source.js'
 import { AuthorizationRefused, issueAuthorization, signatureProblem } from '../authorize/authorization.js'
 import { executeSteps } from '../rehearsal/steps.js'
+import { captureState } from '../capture/capture.js'
 import { loadReport, planId, reportSignatureProblem } from '../rehearsal/engine.js'
 
 export const authorizationPath = (repoDir) => path.join(repoDir, STATE_DIR, 'authorization.json')
@@ -58,12 +59,22 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
     throw new AuthorizationRefused('FIDELITY_MISMATCH', 'real target changed since authorization', compareFingerprints(report.fingerprint, current).diffs)
   }
 
+  // R4.1, R4.2: capture before anything executes. If capture fails, nothing ran and
+  // the authorization is left unconsumed so the operator can fix the cause and retry.
+  let manifest
+  try {
+    manifest = await captureState({ repoDir, contract, target: realTarget, keys, now })
+  } catch (err) {
+    throw new AuthorizationRefused('CAPTURE_FAILED', `pre-run capture failed, nothing was executed: ${err.message}`)
+  }
+
   // Consume before executing: a crash mid-run must not leave a reusable authorization.
   renameSync(file, path.join(repoDir, STATE_DIR, `authorization.used-${auth.signature.slice(0, 16)}.json`))
   const steps = await executeSteps({ plan: contract.plan, cwd: repoDir, target: realTarget, mode: 'real' })
   return {
     mission_id: contract.id,
     plan_id: auth.plan_id,
+    capture_id: manifest.capture_id,
     steps,
     ok: steps.every((s) => s.status === 'ok' || s.status === 'skipped_needs_approval'),
   }

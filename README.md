@@ -19,7 +19,7 @@ feature until it has a passing end-to-end test.
 | Mission contract parser and PreToolUse hook | Implemented and tested; checked in a live Kiro CLI 3.3.0 session (blocked shell, protected files, inline interpreter; allowed reads and allowed-path writes). Kiro IDE not yet checked |
 | Rehearsal, impact report, fidelity gate | Implemented for `sql_migration` and `shell` steps; Demo A (DATA LOSS blocked, safe replan runs, drift blocked) passes against real Docker and Postgres. No failing-test count yet |
 | Signed run authorization | Implemented: operator Ed25519 key outside the workspace, bound to the fingerprint, single use |
-| Undo and recovery verification | Not implemented (T15) |
+| Undo and recovery verification | Implemented for files under `allowed_paths`, contract config files and the named Postgres database; Demo B (failed real run, undo, verification of schema, row counts, checksums, files, images and `/health`, negative controls) passes against real Docker and Postgres. Containers and volumes are verified, not restored |
 | Receipts (Ed25519, hash chain) | Not implemented (T16) |
 | MCP server, Kiro Power, `justrunme-operator` agent | Not implemented (T17) |
 | Judge mode (one command, under 60 s) | Not implemented (T19) |
@@ -31,8 +31,10 @@ Limits that matter today:
 - The hook is inactive unless `JUSTRUNME_GATE=on` is set in the environment
   Kiro starts with. An agent cannot change that variable for the hook, but an
   operator who forgets it gets no protection.
-- Undo and receipts do not exist yet, so a run that goes wrong cannot be
-  restored by JustRunMe.
+- Undo covers only files under `allowed_paths`, the contract's config files
+  and the named Postgres database. Anything else a run changes (other files,
+  container volumes, network calls) is not restored.
+- Signed receipts do not exist yet (T16).
 - Rehearsed and authorized code runs as your OS user. JustRunMe binds and
   checks what runs; it does not sandbox it.
 

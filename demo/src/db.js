@@ -31,6 +31,12 @@ function pool() {
       user:     process.env.PGUSER     || 'demo_user',
       password: process.env.PGPASSWORD || 'demo_password',
     })
+    // An idle client whose backend is terminated (for example while a database is
+    // restored) emits 'error' on the pool. Without a listener Node exits the process.
+    // The pool drops that client and opens a new connection for the next query.
+    _pool.on('error', (err) => {
+      process.stderr.write(`db pool: idle client error: ${err.code ?? 'unknown'}\n`)
+    })
   }
   return _pool
 }

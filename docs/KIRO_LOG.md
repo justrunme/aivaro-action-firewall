@@ -332,3 +332,43 @@ Not checked: Kiro IDE (tool names there differ, for example `str_replace`, `fs_a
 ### Not done
 
 Failing-test count in the impact report; signed receipts (R13.4, T16); undo (T15); comparison of stored rehearsals (R15); a CLI; Kiro IDE live check; image digest pinning. Demo A takes about 60 s including stack start, so judge mode (under 60 s) will need the stack start shared or the rehearsal made faster.
+
+---
+
+## Run 10 — PR 5 review conditions, T15 undo and recovery verification (Demo B)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branches | `kiro/t14-rehearsal` (PR 5, commit `f148e69`); `kiro/t15-undo` stacked on it |
+| Commits / push | By Kiro, push and PR creation authorized by the operator; no merge |
+
+### PR 5 review conditions
+
+1. Authorization only after a successful rehearsal, not usable for another plan or environment. Two gaps were found and closed:
+   - the fingerprint did not identify the environment, so a second Compose project with identical data and images would have accepted the same authorization. It now includes project, database service and name, and the compose file hash;
+   - rehearsal reports were unsigned, so an edited report saying SAFE would have been accepted by `authorize`. Reports are now signed with the operator key and checked.
+   Tests (real Docker): edited report refused with `REPORT_INVALID`; authorization used with a different plan refused with `AUTHORIZATION_INVALID`; used against a twin project with the same data refused with `FIDELITY_MISMATCH` on `base.target.project`; `FAILED` rehearsal refused with `NOT_SAFE`.
+2. Cleanup on errors. The override file is now removed; each report records leftover containers, volumes, networks and worktree. Tests: a failing SQL step and a Compose copy that cannot start (unknown image) both end with 0 containers, 0 volumes, 0 networks, worktree removed, and the real database unchanged. The database dump used to seed a rehearsal is held in memory only.
+
+Demo A after these changes, locally with real Docker: 7 pass, 0 fail.
+
+### T15 written
+
+`src/capture/{files,postgres,capture}.js`, `src/undo/{undo,verify}.js`, `httpStatusInService` in `src/rehearsal/compose.js`; `runMission` now captures before executing. Tests `test/capture-files.test.js` (no Docker, includes a fast-check property) and `test/demo-b.test.js` (real Docker, app and Postgres).
+
+Demo fix: `demo/src/db.js` had no `error` listener on the `pg` pool, so terminating its connections during a restore would have crashed the app. Found while designing the restore; fixed.
+
+### Demo B evidence (local, real Docker, app and Postgres 16): 6 pass, 0 fail, 70.5 s
+
+- The plan rehearsed `SAFE`; in the real run step 1 changed `orders` data and the `patches` schema, step 2 wrote `applied.log` and changed `app.config.json`, then failed (`notification service unreachable`, simulated with `DEMO_NOTIFY_FAIL=1` for the real run only).
+- Undo restored in the order config files, containers (verify only), Postgres, files. Verification `PASS` with each check asserted: schema hash, row count and content checksum per table, file hashes, no unexpected files, container images, `/health` 200. Live state independently equal to the state before the run.
+- Undo a second time: same verified state.
+- Negative control: one quantity set to 999 and a stray file added gives `FAIL`, with the `orders` checksum expected and actual values; the row-count check alone would have passed.
+- Restore failures: a dump that no longer matches its checksum, and a dump with matching checksum but invalid SQL, both leave the live database unchanged; with the original capture back, the retry recovers fully.
+- Undo refuses an unsupported resource type (`email`) and a capture signed by another key.
+
+### Not done
+
+Signed undo and verification receipts (T16); configurable integration test suite in verification (R5.4); CLI with non-zero exit; container or volume restore (not claimed). Residual risk unchanged: authorized code runs as the operator's OS user.
