@@ -436,3 +436,29 @@ Before merging, all three were `MERGEABLE` / `CLEAN`, each branch contained the 
 ### Not done
 
 Counterfactual plan comparison (next), CLI with exit codes, judge mode. Pruning of `<db>_jrm_prev_<t>` stays an explicit operator action (ROADMAP, P2).
+
+---
+
+## Run 13 — PR 8 review points: lock ownership, interrupted append, unsigned diagnostics
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t16-1-hook-receipts` (PR 8), pushed; not merged |
+
+### 1. Stale lock (confirmed problem, fixed)
+
+The first version removed a lock older than 30 s, so a live writer paused longer (SIGSTOP, debugger, swap) would have lost exclusivity. Now a lock is never removed because of its age. The lock file holds `<pid> <host> <nonce>`; a waiter removes it only when the token parses, the host is this host and the pid does not exist (`kill(pid, 0)` gives `ESRCH`). Removal renames the lock to a unique tombstone and compares tokens; a fresh lock caught by mistake is put back with `link()`, which cannot overwrite. The holder re-checks its own token before writing the receipt and before moving the anchor, and releases only its own lock. Unknown owners (other host, unparseable token, pid reused by a live process) are never removed; waiters time out after 8 s and the hook denies. Even if exclusivity were lost in a remaining race, two writers would produce a duplicate `seq` or broken `prev_hash`, which fails verification, so the gate denies rather than accepting an inconsistent chain.
+
+### 2. Interrupted append (fail-closed was already true; explicit recovery added)
+
+Receipt line first, anchor second. A crash in between leaves the anchor one behind: `verifyChain` now reports `ANCHOR_BEHIND` (distinct from `ANCHOR_AHEAD` for a cut-off tail and `ANCHOR_MISMATCH`), every append is refused and the hook denies every gated call. `reanchorChain` is the only way forward: operator key, a written reason, accepted only when anchor-behind is the sole finding, the anchored receipt matches the file and every later receipt is linked and signed by the operator; it records a signed `chain_reanchored` receipt listing the accepted seqs. A partial last line is never accepted automatically.
+
+### 3. NO_CONTRACT (made explicit)
+
+Audit lines now carry `evidence: "unsigned_diagnostic"` unless a signed receipt exists (`"signed_receipt"`), and the hook's stderr carries `signed: false`. No mission chain is created without a contract.
+
+### Verification (local, macOS)
+
+`npm test`: 206 pass, 0 fail. New tests: a live owner's lock with a one-hour-old mtime is not removed and the hook denies after waiting; a dead owner's lock is removed and the decision proceeds into a verifying chain; locks from another host or with garbage content are not removed; an interrupted append (anchor reset to the previous seq) makes the hook deny with `RECEIPT_FAILED`, reanchor without a reason is refused, reanchor with a reason accepts seq 1 and adds `chain_reanchored`, after which the hook allows again; reanchor is refused for a cut-off tail and for a tampered receipt; a decision without a contract is `signed: false`, marked `unsigned_diagnostic`, and creates no chain.

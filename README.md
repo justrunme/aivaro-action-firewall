@@ -36,8 +36,13 @@ Limits that matter today:
   container volumes, network calls) is not restored.
 - With the gate on, an operator key must be installed (`JUSTRUNME_HOME`,
   default `~/.justrunme`); otherwise every call is denied. Hook decisions are
-  signed into the mission chain only while a valid contract exists; denials
-  without a contract are unsigned audit lines.
+  signed into the mission chain only while a valid contract exists. Denials
+  without a contract are audit lines marked `unsigned_diagnostic`: they are
+  diagnostics, not evidence.
+- If an append is interrupted between the receipt and its anchor, the gate
+  denies everything until the operator reviews the chain and reanchors it
+  explicitly. There is no CLI for that yet; it is a library call
+  (`reanchorChain`).
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
 - Rehearsed and authorized code runs as your OS user. JustRunMe binds and
