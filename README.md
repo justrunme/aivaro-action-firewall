@@ -16,7 +16,7 @@ feature until it has a passing end-to-end test.
 |------|-------|
 | Spec, steering, agents, hooks (`.kiro/`) | Written |
 | Demo app (Node + Postgres 16 + Docker Compose) | Written, integration test runs on Linux CI |
-| Mission contract and PreToolUse hook | Not implemented (T13) |
+| Mission contract parser and PreToolUse hook | Implemented and unit-tested (T13); live Kiro session check pending (T13.8). Allowlist is not yet produced by a rehearsal and the fingerprint is not yet compared (T14) |
 | Rehearsal, impact report, fidelity gate | Not implemented (T14) |
 | Undo and recovery verification | Not implemented (T15) |
 | Receipts (Ed25519, hash chain) | Not implemented (T16) |
@@ -25,8 +25,11 @@ feature until it has a passing end-to-end test.
 | Console UI | Not implemented (T18, after Demo A and B work) |
 | Phone passkey approval (WebAuthn) | Deferred to P2 |
 
-The requirements describe intended behavior. No enforcement mechanism exists
-yet, so nothing in this repository currently stops a dangerous action.
+The hook (`src/hook/pretooluse.js`, inactive unless `JUSTRUNME_GATE=on`) blocks
+calls outside the contract and unrehearsed shell, web and MCP calls, and its
+exit codes are tested. It has not yet been confirmed in a live Kiro session, and
+rehearsal, fidelity, undo and receipts do not exist yet, so do not rely on this
+repository to protect real data.
 
 ## What it will do
 

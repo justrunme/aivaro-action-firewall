@@ -80,7 +80,12 @@ Kiro integration is checked early: T13.7 confirms in a real Kiro session that th
 | T13.7 | Default-deny hook evaluation: parse failure, missing contract and missing authorization all exit 2; replayed `PreToolUse` event fixtures for allowed and blocked calls | R10.6, R10.7, R10.8 | test/hook.test.js |
 | T13.8 | Manual check in a real Kiro session: hook receives events and exit 2 stops the tool call; result recorded in `docs/KIRO_LOG.md` | R10.8 | manual, logged |
 
-- [ ] T13.1 · [ ] T13.2 · [ ] T13.3 · [ ] T13.4 · [ ] T13.5 · [ ] T13.6 · [ ] T13.7 · [ ] T13.8
+- [x] T13.1 · [x] T13.2 · [x] T13.3 · [x] T13.4 · [x] T13.5 · [x] T13.6 · [x] T13.7 · [ ] T13.8 (manual, pending)
+
+T13 notes (what the code does and does not do yet):
+- Done and tested: strict contract parser and hash; default-deny hook; writes limited to `allowed_paths` and never to the gate files; shell, web and MCP calls only if rehearsed, bound to script content hash, mission, contract hash and time window; exit 2 on every error path (150 tests pass locally).
+- Not done: comparing `fingerprint_hash` with the live fingerprint (T14.9); signed denial receipts (T16, denials are unsigned audit lines until then); producing the authorization file from a rehearsal (T14). R1.6 protected-table enforcement in the hook is a best-effort text scan; the authoritative check is the measured rehearsal (T14.8).
+- T13.8 stays open until the operator confirms in a real Kiro session that the hook receives events and that exit 2 stops a call.
 
 ---
 
