@@ -540,3 +540,26 @@ Demo A: authorizing the safe plan before the comparison is `COMPARISON_REQUIRED`
 Residual: replay proves that the choice follows from signed measurements, not that the measurements were right. `rows_lost` is measured once, in the rehearsal copy (`measureDatabase` before and after the plan, `buildImpact` in `src/rehearsal/impact.js`), signed with the report, and the comparison reads it only after the report signature and its rehearsal receipt check out. Replay does not measure again. When a stored report has since been replaced, replay checks its verdict and duration against the rehearsal receipt but cannot re-read rows lost; `reports_rechecked` says how many reports were re-read.
 
 Verification (local, macOS): `test/compare.test.js` 24 pass; `npm test` 236 pass, 0 fail; Docker Demo A and B with `JRM_DOCKER_TESTS=1` 15 pass, 0 fail, 0 skipped.
+
+---
+
+## Run 16 — T18 CLI with exit codes
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t18-cli`, from `main` at `b407925` (PR 9 merged by the operator) |
+
+### Written
+
+- `src/cli/codes.js`: fixed exit codes (0 ok, 1 internal, 2 usage, 3 config, 10 DATA LOSS, 11 rehearsal failed, 12 no plan selected, 13 run failed, 14 not recovered, 20 to 24 refusals per command, 30 integrity). Every non-zero exit carries `error.code`.
+- `src/cli/target.js`: `justrunme.target.json` (Compose project, file, db service, user, database, optional health), unknown fields refused, compose file must be a relative path inside the workspace, names checked with the existing `assertTarget`. Added to the hook's protected paths.
+- `src/cli/commands.js`: `keys init`, `rehearse`, `compare` (no ids: every plan whose latest rehearsal is on the base of the most recent rehearsal, which is the coverage the selection gate requires), `authorize`, `run`, `undo`, `verify` (chain, policy, replay of every selection), `replay`, `status`, `receipt`, `reanchor`, `lock inspect|recover`. Each is a thin call into the library; `authorize` goes through `authorizeMission`, so through the fidelity and selection gates. Only `keys init` creates a key; read-only commands need only the public key.
+- `src/cli/index.js`: `node:util` `parseArgs` in strict mode, JSON on stdout, `--text`, no colour codes at all, output through `redactDeep`. `package.json` `bin`.
+
+### Decisions
+
+- No ANSI colour in any mode, rather than gating it on `NO_COLOR` and TTY: simpler, and nothing to strip in CI logs.
+- One exit code per command for refusals (20 to 24) plus `error.code` for the reason, instead of one exit code per reason: exit codes stay few and stable, the JSON carries the detail.
+- The CLI is operator-side. With the gate on, the agent cannot call it: the hook denies unrehearsed shell commands (tested for five spellings), and authorization refuses plan steps that invoke JustRunMe.

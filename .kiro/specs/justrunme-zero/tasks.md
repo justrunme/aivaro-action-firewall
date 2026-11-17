@@ -215,6 +215,7 @@ milestone that adds resources and permissions blocks after the MCP server exists
 
 | ID | Description | R-IDs | Tests |
 |----|-------------|-------|-------|
+| T18.0 | (operator order) Exit code table `src/cli/codes.js`; target file `justrunme.target.json` (validated, protected by the hook); every command a thin call into the library, no path around the gates | R2, R3, R15 | test/cli.test.js, test/hook.test.js |
 | T18.1 | Implement `src/cli/index.js` (commands: rehearse, undo, verify, judge, status, receipt) | R2, R4, R5, R8 | test/cli.test.js — each command exits 0 on success |
 | T18.2 | JSON output mode (default); plain-text mode with `--text` flag | R11, R12 | test/cli.test.js — JSON parses; --text produces no raw JSON |
 | T18.3 | ANSI color gated on NO_COLOR + isTTY; no hardcoded color in test environment | — | test/cli.test.js — no ANSI in piped output |
@@ -222,7 +223,14 @@ milestone that adds resources and permissions blocks after the MCP server exists
 
 | T18.5 | (P1) `justrunme compare <plan_id>...`: refuse on fingerprint mismatch, show measured values, deterministic recommendation; Console shows Original vs Revised from the same data | R15.2 to R15.5 | test/compare.test.js: mismatch refused; same input same recommendation; DATA LOSS never recommended |
 
-- [ ] T18.1 · [ ] T18.2 · [ ] T18.3 · [ ] T18.4 · [ ] T18.5
+- [x] T18.0 · [~] T18.1 · [x] T18.2 · [x] T18.3 · [x] T18.4 · [~] T18.5
+
+T18 notes (CLI, not the Console; tests in `test/cli.test.js` and `test/demo-cli.test.js`):
+- Commands: `keys init`, `rehearse`, `compare`, `authorize`, `run`, `undo`, `verify`, `replay`, `status`, `receipt`, `reanchor`, `lock inspect|recover`. `judge` is T19. T18.1 `[~]` for that reason.
+- JSON on stdout by default, `--text` plain listing, no ANSI ever (T18.3 satisfied by never emitting colour). Output is passed through `redactDeep`.
+- T18.5 `[~]`: `justrunme compare` is done; the Console view of Original vs Revised is not.
+- Only `keys init` creates an operator key. Read-only commands (`verify`, `replay`, `status`, `receipt`) need only the public key.
+- The agent cannot run the CLI with the gate on (hook test: five spellings of the command are denied); plan steps that invoke JustRunMe are refused at authorization (`SELF_REFERENCE`).
 
 ---
 

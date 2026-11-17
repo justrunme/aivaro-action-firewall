@@ -127,7 +127,7 @@ describe('hook: writes (R1.6)', () => {
 
   it('never lets the agent write the gate, its inputs or git metadata', () => {
     const ctx = context(workspace())
-    for (const p of ['.justrunme/authorization.json', 'justrunme.mission.yaml', '.kiro/hooks/pretooluse.json', '.git/config', 'src/hook/evaluate.js']) {
+    for (const p of ['.justrunme/authorization.json', 'justrunme.mission.yaml', 'justrunme.target.json', '.kiro/hooks/pretooluse.json', '.git/config', 'src/hook/evaluate.js']) {
       assert.equal(evaluate(write(p), ctx).category, p.startsWith('src/') ? 'PROTECTED_PATH' : 'PROTECTED_PATH', p)
     }
   })
@@ -216,6 +216,12 @@ describe('hook: bypass categories (R10.2, R10.3, R10.4, R10.7)', () => {
   it('blocks UNDECLARED_SCRIPT: script written elsewhere then executed', () => {
     for (const cmd of ['sh /tmp/x.sh', './deploy.sh', 'python3 helper.py', 'node demo/src/new.js']) {
       assert.equal(evaluate(shell(cmd), ctx).category, 'UNDECLARED_SCRIPT', cmd)
+    }
+  })
+
+  it('T18: the agent cannot call the operator CLI through the shell, even with an authorization present', () => {
+    for (const cmd of ['justrunme authorize', 'npx justrunme authorize', 'node src/cli/index.js authorize', 'node node_modules/.bin/justrunme run', 'npm exec justrunme compare']) {
+      assert.equal(evaluate(shell(cmd), ctx).decision, 'deny', cmd)
     }
   })
 

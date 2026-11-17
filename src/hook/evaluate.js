@@ -26,7 +26,7 @@ const WEB_TOOLS = new Set(['web_fetch', 'remote_web_search', 'web_search', 'fetc
 const NOOP_TOOLS = new Set(['todo_list', 'update_session_information', 'disclose_context', 'list_processes'])
 const PATH_KEYS = ['path', 'filePath', 'file_path', 'targetFile', 'target_file', 'sourcePath', 'destinationPath', 'source', 'destination']
 // Files the agent must never write while the gate is on (the gate, its inputs, and git metadata).
-const PROTECTED_PATHS = ['.justrunme', '.kiro/hooks', '.kiro/settings', '.git', 'justrunme.mission.yaml', 'src/hook']
+const PROTECTED_PATHS = ['.justrunme', '.kiro/hooks', '.kiro/settings', '.git', 'justrunme.mission.yaml', 'justrunme.target.json', 'src/hook']
 
 const inside = (child, parent) => child === parent || child.startsWith(parent + path.sep)
 
