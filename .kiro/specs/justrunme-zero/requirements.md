@@ -220,6 +220,32 @@ All of the following must hold in one automated test, run on Linux with Docker a
 
 ---
 
+## R15 — Plan Comparison (Priority P1, after Demo A)
+
+**R15.1** WHEN a rehearsal finishes, THE SYSTEM SHALL store its impact report under the mission and a `plan_id`, together with the source fingerprint hash it started from, so that several rehearsals of one mission can be compared later.
+
+**R15.2** WHEN the operator or agent asks to compare two or more stored rehearsals, THE SYSTEM SHALL refuse the comparison with an explicit error if their source fingerprint hashes differ, because results measured on different source states are not comparable.
+
+**R15.3** WHEN a comparison is produced, THE SYSTEM SHALL show, per plan, only measured values: verdict, rows lost per protected table, failing test count, rehearsal duration in milliseconds, and whether every action is reversible. It SHALL NOT show estimated values.
+
+**R15.4** WHEN a comparison recommends a plan, THE SYSTEM SHALL choose by a fixed rule: exclude plans with verdict `DATA LOSS`; then exclude plans with failing tests; then exclude plans with irreversible actions unless all remaining plans have them; then pick the lowest duration; ties go to the lexicographically smallest `plan_id`. The same inputs SHALL always give the same recommendation, and the report SHALL state which rule decided.
+
+**R15.5** WHEN no plan survives the exclusions, THE SYSTEM SHALL recommend none and say which rule removed each plan.
+
+---
+
+## R16 — Chaos Twin (Priority P2, after Demo B)
+
+**R16.1** WHEN a rehearsal is requested with a fault specification naming an operation marker (for example the statement label or step id between two migration statements) and a fault type, THE SYSTEM SHALL inject exactly that fault in the disposable copy when execution reaches the marker. Triggers by elapsed time are not allowed.
+
+**R16.2** WHEN the fault has been injected, THE SYSTEM SHALL measure the resulting state of the disposable database (schema hash, row counts, per-table content checksums, constraint validity) and report whether it equals the state before the rehearsal, equals the state after a normal rehearsal, or is neither (inconsistent).
+
+**R16.3** WHEN the same fault specification is run twice on the same source fingerprint, THE SYSTEM SHALL produce the same classification.
+
+**R16.4** THE SYSTEM SHALL NOT inject faults into the real database or the real run.
+
+---
+
 ## Threat Model
 
 The following bypass vectors are explicitly in scope for the hook enforcement rules above:

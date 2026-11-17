@@ -234,7 +234,7 @@ describe('requirements.md content', () => {
   const content = readRoot('.kiro/specs/justrunme-zero/requirements.md')
 
   // All twelve top-level requirement groups must be present
-  const topLevelIds = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14']
+  const topLevelIds = ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9', 'R10', 'R11', 'R12', 'R13', 'R14', 'R15', 'R16']
   for (const id of topLevelIds) {
     it(`contains ${id} requirement section`, () => {
       assert.ok(

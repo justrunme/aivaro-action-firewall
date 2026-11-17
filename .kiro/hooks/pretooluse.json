@@ -1,0 +1,15 @@
+{
+  "version": "v1",
+  "hooks": [
+    {
+      "name": "JustRunMe gate",
+      "trigger": "PreToolUse",
+      "description": "Default-deny gate. Inactive unless JUSTRUNME_GATE=on. Exit 2 blocks the tool call.",
+      "action": {
+        "type": "command",
+        "command": "node src/hook/pretooluse.js",
+        "timeout": 20
+      }
+    }
+  ]
+}

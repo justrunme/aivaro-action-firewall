@@ -233,3 +233,47 @@ Applied after operator review, same branch, still uncommitted:
 - `requirements.md` R10.7: a dangerous shell construct is allowed only if it ran in rehearsal, the rehearsal environment matched the real run's declared resources, and it touches only declared resources; otherwise blocked. It is stated as a gate on declared actions, not isolation.
 - `README.md`: added a sentence that no enforcement mechanism exists yet.
 - Verification: see the report in the session; GitHub Actions not run.
+
+---
+
+## Run 8 — T13 contract parser and PreToolUse gate
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Session type | T13 implementation, first `src/` code |
+| Branch | `kiro/t13-hook`, from `kiro/t12-hygiene` at `6f7ed65` |
+| Commits | Made by Kiro on explicit operator instruction, local only: roadmap and R15/R16, dependency pins, contract and privacy modules, hook. No push, no merge. The steering rule that Kiro never commits was overridden by the operator for this session only. |
+
+### Context
+
+The operator had already committed and pushed T12 as `6f7ed65` (pull request 3). All checks on that pull request passed on GitHub Actions: Test, Lint spec and config files, and the Docker demo integration test.
+
+### Written
+
+- `docs/ROADMAP.md` (every item marked NOT IMPLEMENTED), R15 plan comparison (P1) and R16 Chaos Twin (P2) in `requirements.md`, tasks T14.11, T18.5, T19.4.
+- Dependencies pinned to exact versions: `yaml` 2.9.1 (no built-in YAML parser), `fast-check` 4.10.2 (dev). `npm audit --audit-level=high`: 0 vulnerabilities.
+- `src/util/canonical.js`, `src/privacy/redact.js`, `src/contract/schema.js`, `src/contract/parser.js`.
+- `src/hook/{shell,bypass,allowlist,evaluate,run,pretooluse}.js` and `.kiro/hooks/pretooluse.json`.
+- `test/contract.test.js`, `test/privacy.test.js`, `test/hook.test.js` (includes property tests and child-process exit-code tests with recorded-style event JSON).
+
+### Verification (local, macOS)
+
+- `npm test`: 150 pass, 0 fail.
+- `git diff --check` clean; no trailing whitespace or home paths in new files.
+- Not run: GitHub Actions for the T13 branch, Docker demo test, a live Kiro session.
+
+### Open: T13.8 live check (operator)
+
+1. In the workspace root, start Kiro with `JUSTRUNME_GATE=on` in the environment and a valid `justrunme.mission.yaml` (the example in `design.md` section 3.1 works).
+2. Ask the agent to run any shell command, for example `ls`. Expected: the call is blocked and the hook reason (category `NO_AUTHORIZATION`) is shown. Check `.justrunme/audit.jsonl` for a `deny` line.
+3. Ask the agent to edit a file under an allowed path. Expected: allowed.
+4. Ask the agent to edit `justrunme.mission.yaml`. Expected: blocked with `PROTECTED_PATH`.
+5. Record the actual Kiro behavior here. If the tool names or event fields differ from the ones in `src/hook/evaluate.js`, the tool-name sets there must be corrected.
+
+### Known limits
+
+- Tool names are matched against a fixed list (Kiro IDE and CLI names differ); unknown tools are denied, so a wrong name fails closed but may also block harmless tools.
+- Reads are not gated. Fingerprint comparison and signed denial receipts come later (T14.9, T16).
+- Shell analysis is conservative, not a sandbox: it denies anything it cannot parse with certainty.

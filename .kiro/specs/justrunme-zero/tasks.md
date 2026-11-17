@@ -45,9 +45,9 @@ Completed in this session (task 11 — spec, steering, scaffold):
 
 Provenance check for the six files restored from PR #1: done with `gh pr view 1` and `git log`; same repository, same author (see `scope.md`, Code Origin).
 
-- [x] T12.1 · [x] T12.2 · [~] T12.3 · [~] T12.4 · [x] T12.5 · [~] T12.6 · [x] T12.7 · [x] T12.8 · [x] T12.9 · [~] T12.10 · [x] T12.11
+- [x] T12.1 · [x] T12.2 · [x] T12.3 · [x] T12.4 · [x] T12.5 · [x] T12.6 · [x] T12.7 · [x] T12.8 · [x] T12.9 · [x] T12.10 · [x] T12.11
 
-`[~]` rows (T12.3, T12.4, T12.6, T12.10) are implemented in `ci.yml` and not yet confirmed green on GitHub Actions; mark `[x]` after CI passes on the T12 pull request.
+T12.3, T12.4, T12.6 and T12.10 were confirmed on GitHub Actions: all checks on pull request 3 passed (Test, Lint spec and config files, Demo integration test with Docker).
 
 ## Plan and deadlines
 
@@ -80,7 +80,12 @@ Kiro integration is checked early: T13.7 confirms in a real Kiro session that th
 | T13.7 | Default-deny hook evaluation: parse failure, missing contract and missing authorization all exit 2; replayed `PreToolUse` event fixtures for allowed and blocked calls | R10.6, R10.7, R10.8 | test/hook.test.js |
 | T13.8 | Manual check in a real Kiro session: hook receives events and exit 2 stops the tool call; result recorded in `docs/KIRO_LOG.md` | R10.8 | manual, logged |
 
-- [ ] T13.1 · [ ] T13.2 · [ ] T13.3 · [ ] T13.4 · [ ] T13.5 · [ ] T13.6 · [ ] T13.7 · [ ] T13.8
+- [x] T13.1 · [x] T13.2 · [x] T13.3 · [x] T13.4 · [x] T13.5 · [x] T13.6 · [x] T13.7 · [ ] T13.8 (manual, pending)
+
+T13 notes (what the code does and does not do yet):
+- Done and tested: strict contract parser and hash; default-deny hook; writes limited to `allowed_paths` and never to the gate files; shell, web and MCP calls only if rehearsed, bound to script content hash, mission, contract hash and time window; exit 2 on every error path (150 tests pass locally).
+- Not done: comparing `fingerprint_hash` with the live fingerprint (T14.9); signed denial receipts (T16, denials are unsigned audit lines until then); producing the authorization file from a rehearsal (T14). R1.6 protected-table enforcement in the hook is a best-effort text scan; the authoritative check is the measured rehearsal (T14.8).
+- T13.8 stays open until the operator confirms in a real Kiro session that the hook receives events and that exit 2 stops a call.
 
 ---
 
@@ -97,9 +102,10 @@ Kiro integration is checked early: T13.7 confirms in a real Kiro session that th
 | T14.7 | Add Docker image digest pinning to `demo/docker-compose.yml` | R12 | CI: compose syntax check |
 | T14.8 | Verdict `SAFE` or `DATA LOSS` in the impact report; failing-test count; block on `DATA LOSS` | R2.6, R2.7 | test/rehearsal.test.js |
 | T14.9 | Run allowlist: entries bind action, script content hash, fingerprint, mission ID, expiry; hook consults it | R3.6, R3.7 | test/fidelity.test.js, test/hook.test.js: script edited after rehearsal is blocked |
+| T14.11 | Store each impact report at `.justrunme/missions/<mission-id>/rehearsals/<plan_id>.json` with fields `plan_id`, `source_fingerprint_hash`, `verdict`, `rows_lost`, `failing_tests`, `duration_ms`, `all_reversible` (data structure only; comparison is T18.5) | R15.1 | test/rehearsal.test.js |
 | T14.10 | Demo A end to end with a scripted agent: dangerous migration, `DATA LOSS`, block, replan, `SAFE`, run | R13.1 to R13.4 | test/demo-a.test.js (Linux, Docker) |
 
-- [ ] T14.1 · [ ] T14.2 · [ ] T14.3 · [ ] T14.4 · [ ] T14.5 · [ ] T14.6 · [ ] T14.7 · [ ] T14.8 · [ ] T14.9 · [ ] T14.10
+- [ ] T14.1 · [ ] T14.2 · [ ] T14.3 · [ ] T14.4 · [ ] T14.5 · [ ] T14.6 · [ ] T14.7 · [ ] T14.8 · [ ] T14.9 · [ ] T14.10 · [ ] T14.11
 
 ---
 
@@ -166,7 +172,9 @@ milestone that adds resources and permissions blocks after the MCP server exists
 | T18.3 | ANSI color gated on NO_COLOR + isTTY; no hardcoded color in test environment | — | test/cli.test.js — no ANSI in piped output |
 | T18.4 | Privacy: CLI output never includes home paths or emails | R11.1, R11.2 | test/cli.test.js — redaction assertions |
 
-- [ ] T18.1 · [ ] T18.2 · [ ] T18.3 · [ ] T18.4
+| T18.5 | (P1) `justrunme compare <plan_id>...`: refuse on fingerprint mismatch, show measured values, deterministic recommendation; Console shows Original vs Revised from the same data | R15.2 to R15.5 | test/compare.test.js: mismatch refused; same input same recommendation; DATA LOSS never recommended |
+
+- [ ] T18.1 · [ ] T18.2 · [ ] T18.3 · [ ] T18.4 · [ ] T18.5
 
 ---
 
@@ -178,7 +186,9 @@ milestone that adds resources and permissions blocks after the MCP server exists
 | T19.2 | Judge mode uses no live DB or external credentials | R8.2 | test/judge.test.js — no network calls during replay |
 | T19.3 | Judge report emitted as structured JSON with counts and overall PASS/FAIL | R8.4 | test/judge.test.js — report schema matches spec |
 
-- [ ] T19.1 · [ ] T19.2 · [ ] T19.3
+| T19.4 | (P2) Chaos Twin: one fault at a named migration marker in the demo, classification reported, repeatable | R16.1 to R16.4 | test/chaos.test.js (Linux, Docker) |
+
+- [ ] T19.1 · [ ] T19.2 · [ ] T19.3 · [ ] T19.4 (P2)
 
 ---
 
