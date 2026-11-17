@@ -1,7 +1,7 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, symlinkSync, rmSync, existsSync, utimesSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, readdirSync, symlinkSync, rmSync, existsSync, utimesSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import fc from 'fast-check'
@@ -10,7 +10,9 @@ import { parseContract } from '../src/contract/parser.js'
 import { evaluate } from '../src/hook/evaluate.js'
 import { hashScript } from '../src/hook/allowlist.js'
 import { loadOrCreateKeys } from '../src/receipts/keys.js'
-import { verifyChain, chainPath, anchorPath } from '../src/receipts/chain.js'
+import { verifyChain, chainPath, anchorPath, reanchorChain, recoverLock, inspectChainLock } from '../src/receipts/chain.js'
+import { checkPolicy } from '../src/receipts/policy.js'
+import { withLock } from '../src/receipts/lock.js'
 import { analyzeShell } from '../src/hook/bypass.js'
 import { tokenizeShell } from '../src/hook/shell.js'
 
@@ -521,6 +523,149 @@ describe('hook process: exit codes as Kiro sees them (R10.5, R10.6, R10.8)', () 
     bytes[40] = bytes[40] ^ 1
     writeFileSync(file, bytes)
     assert.throws(() => reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'attempted cover-up' }), /refused/)
+  })
+
+  // Second review of PR 8 (commit 2107f76).
+  it('PR 8 review 2.1: reanchor writes its receipt before moving the anchor; a crash in between is REANCHOR_PENDING', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const anchorFile = anchorPath(operatorHome, CONTRACT.id, dir)
+    const stale = readFileSync(anchorFile)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    writeFileSync(anchorFile, stale) // interrupted append: anchor behind
+    const r = reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'hook crashed during append; receipt 1 reviewed' })
+    assert.equal(r.completed_pending, false)
+    const reanchor = verifyHookChain(dir).receipts.at(-1)
+    assert.equal(reanchor.kind, 'chain_reanchored')
+    assert.equal(reanchor.subject.previous_anchor_seq, 0)
+    assert.match(reanchor.subject.previous_anchor_hash, /^sha256:[0-9a-f]{64}$/)
+
+    // Crash between the two steps of the reanchor: receipt written, anchor not moved.
+    writeFileSync(anchorFile, stale)
+    const pending = verifyHookChain(dir)
+    assert.equal(pending.ok, false)
+    assert.deepEqual(pending.findings.map((f) => f.code), ['REANCHOR_PENDING'])
+    assert.equal(pending.receipts.at(-1).kind, 'chain_reanchored', 'the intent is already signed and on record')
+    const blocked = run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } }))
+    assert.equal(blocked.status, 2)
+    assert.equal(JSON.parse(blocked.stderr.trim()).category, 'RECEIPT_FAILED')
+
+    // Explicit completion: anchor moves onto the existing receipt, no second receipt.
+    const done = reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'completing interrupted reanchor' })
+    assert.equal(done.completed_pending, true)
+    assert.deepEqual(done.accepted_seqs, [1])
+    const after = verifyHookChain(dir)
+    assert.equal(after.ok, true, JSON.stringify(after.findings))
+    assert.equal(after.count, 3)
+    assert.equal(after.receipts.filter((x) => x.kind === 'chain_reanchored').length, 1)
+    assert.throws(() => reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'nothing left to do here' }), /nothing to reanchor/)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 0)
+  })
+
+  it('PR 8 review 2.1: in every reachable state of a reanchor, the chain verifies only with the chain_reanchored receipt present', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const anchorFile = anchorPath(operatorHome, CONTRACT.id, dir)
+    const file = chainPath(dir, CONTRACT.id)
+    const staleAnchor = readFileSync(anchorFile)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    writeFileSync(anchorFile, staleAnchor)
+    const linesBefore = readFileSync(file)
+    reanchorChain({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, reason: 'hook crashed during append; receipt 1 reviewed' })
+    const linesAfter = readFileSync(file)
+    const newAnchor = readFileSync(anchorFile)
+    // Every combination of {chain before/after the receipt} x {anchor before/after the move}.
+    for (const [lines, anchor] of [[linesBefore, staleAnchor], [linesAfter, staleAnchor], [linesBefore, newAnchor], [linesAfter, newAnchor]]) {
+      writeFileSync(file, lines)
+      writeFileSync(anchorFile, anchor)
+      const v = verifyHookChain(dir)
+      if (v.ok) assert.equal(v.receipts.at(-1).kind, 'chain_reanchored')
+    }
+    // The only verifying state is the completed one.
+    writeFileSync(file, linesBefore)
+    writeFileSync(anchorFile, newAnchor)
+    assert.equal(verifyHookChain(dir).findings[0].code, 'ANCHOR_AHEAD')
+  })
+
+  it('PR 8 review 2.2: an empty lock blocks the hook until an explicit, hash-bound, recorded recovery', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    writeFileSync(lockOf(dir), '') // what a crash between create and write used to leave
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 2)
+    const seen = inspectChainLock({ repoDir: dir, missionId: CONTRACT.id })
+    assert.deepEqual({ exists: seen.exists, bytes: seen.bytes, owner: seen.owner }, { exists: true, bytes: 0, owner: 'unknown' })
+
+    const args = { repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id }
+    assert.throws(() => recoverLock({ ...args, expectedSha256: seen.sha256, reason: '' }), /written reason/)
+    assert.throws(() => recoverLock({ ...args, reason: 'empty lock after crash' }), /pass the sha256/)
+    assert.throws(() => recoverLock({ ...args, expectedSha256: 'sha256:' + '0'.repeat(64), reason: 'empty lock after crash' }), /changed since it was inspected/)
+    assert.equal(readFileSync(lockOf(dir), 'utf8'), '', 'a refused recovery leaves the lock as it was')
+
+    const r = recoverLock({ ...args, expectedSha256: seen.sha256, reason: 'empty lock after crash' })
+    assert.equal(existsSync(lockOf(dir)), false)
+    assert.equal(r.removed.removed_sha256, seen.sha256)
+    assert.ok(existsSync(path.join(path.dirname(lockOf(dir)), r.removed.kept_as)), 'removed lock kept as evidence')
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    const last = v.receipts.at(-1)
+    assert.equal(last.kind, 'lock_recovered')
+    assert.deepEqual([last.subject.removed_sha256, last.subject.kept_as], [seen.sha256, r.removed.kept_as])
+    assert.equal(checkPolicy(v.receipts).ok, true)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+
+    // Swapping the kept evidence breaks verification.
+    writeFileSync(path.join(path.dirname(lockOf(dir)), r.removed.kept_as), 'something else\n')
+    assert.deepEqual(verifyHookChain(dir).findings.map((f) => f.code), ['LOCK_RECOVERY_UNRECORDED'])
+  })
+
+  it('PR 8 review 2.2: recovery never removes the lock of a live local owner', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    writeFileSync(lockOf(dir), tokenFor(process.pid))
+    const seen = inspectChainLock({ repoDir: dir, missionId: CONTRACT.id })
+    assert.equal(seen.owner, 'alive')
+    assert.throws(() => recoverLock({ repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id, expectedSha256: seen.sha256, reason: 'operator thinks it is stuck' }), /live process/)
+    assert.equal(readFileSync(lockOf(dir), 'utf8'), tokenFor(process.pid))
+    rmSync(lockOf(dir))
+  })
+
+  it('PR 8 review 2.2: a crash that leaves both a bad lock and an anchor behind is recovered in explicit steps, each recorded', () => {
+    const dir = workspace()
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'a' } })).status, 0)
+    const anchorFile = anchorPath(operatorHome, CONTRACT.id, dir)
+    const stale = readFileSync(anchorFile)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'b' } })).status, 0)
+    writeFileSync(anchorFile, stale)
+    writeFileSync(lockOf(dir), 'garbage\n')
+    const args = { repoDir: dir, keys: operatorKeys, missionId: CONTRACT.id }
+    const seen = inspectChainLock(args)
+    // Step 1: the lock is removed, but the receipt cannot be written to a chain that does not verify.
+    assert.throws(() => recoverLock({ ...args, expectedSha256: seen.sha256, reason: 'garbage lock after crash' }), /reanchorChain/)
+    assert.equal(existsSync(lockOf(dir)), false)
+    assert.deepEqual(verifyHookChain(dir).findings.map((f) => f.code).sort(), ['ANCHOR_BEHIND', 'LOCK_RECOVERY_UNRECORDED'])
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 2)
+    // Step 2: reanchor. Step 3: record the pending removal (no lock left, so no hash).
+    reanchorChain({ ...args, reason: 'hook crashed during append; receipt 1 reviewed' })
+    assert.deepEqual(verifyHookChain(dir).findings.map((f) => f.code), ['LOCK_RECOVERY_UNRECORDED'])
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 2)
+    const r = recoverLock({ ...args, reason: 'garbage lock after crash' })
+    assert.equal(r.removed, null)
+    assert.equal(r.recorded.length, 1)
+    const v = verifyHookChain(dir)
+    assert.equal(v.ok, true, JSON.stringify(v.findings))
+    assert.deepEqual(v.receipts.slice(-2).map((x) => x.kind), ['chain_reanchored', 'lock_recovered'])
+    assert.throws(() => recoverLock({ ...args, reason: 'garbage lock after crash' }), /no lock to recover/)
+    assert.equal(run(dir, ev({ tool_name: 'read_file', tool_input: { path: 'c' } })).status, 0)
+  })
+
+  it('PR 8 review 2.2: a held lock always has its full owner token (never empty) and no temp files remain', () => {
+    const dir = workspace()
+    const lock = path.join(dir, 'probe.lock')
+    for (let i = 0; i < 50; i++) {
+      withLock(lock, () => assert.match(readFileSync(lock, 'utf8'), /^\d+ \S+ [0-9a-f]{16}\n$/))
+    }
+    assert.equal(existsSync(lock), false)
+    assert.deepEqual(readdirSync(dir).filter((n) => n.startsWith('probe.lock')), [])
   })
 
   it('PR 8 review 3: decisions without a contract are marked unsigned diagnostics, and no chain is created', () => {

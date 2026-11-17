@@ -41,8 +41,12 @@ Limits that matter today:
   diagnostics, not evidence.
 - If an append is interrupted between the receipt and its anchor, the gate
   denies everything until the operator reviews the chain and reanchors it
-  explicitly. There is no CLI for that yet; it is a library call
-  (`reanchorChain`).
+  explicitly. The reanchor is itself recorded before the anchor moves; an
+  interrupted reanchor stays denied until it is completed. A lock left by a
+  crash whose owner cannot be determined is never removed automatically; the
+  operator inspects it and removes it by its exact hash, which is recorded.
+  There is no CLI for these yet; they are library calls (`reanchorChain`,
+  `inspectChainLock`, `recoverLock`).
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
 - Rehearsed and authorized code runs as your OS user. JustRunMe binds and

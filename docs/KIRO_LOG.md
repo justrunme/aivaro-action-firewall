@@ -462,3 +462,28 @@ Audit lines now carry `evidence: "unsigned_diagnostic"` unless a signed receipt 
 ### Verification (local, macOS)
 
 `npm test`: 206 pass, 0 fail. New tests: a live owner's lock with a one-hour-old mtime is not removed and the hook denies after waiting; a dead owner's lock is removed and the decision proceeds into a verifying chain; locks from another host or with garbage content are not removed; an interrupted append (anchor reset to the previous seq) makes the hook deny with `RECEIPT_FAILED`, reanchor without a reason is refused, reanchor with a reason accepts seq 1 and adds `chain_reanchored`, after which the hook allows again; reanchor is refused for a cut-off tail and for a tampered receipt; a decision without a contract is `signed: false`, marked `unsigned_diagnostic`, and creates no chain.
+
+---
+
+## Run 14 — PR 8 second review: recorded reanchor, recovery of an unknown lock
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t16-1-hook-receipts` (PR 8); not merged |
+
+### P1: a reanchor could end without its receipt (confirmed, fixed)
+
+`reanchorChain` moved the anchor first and wrote `chain_reanchored` second, so a crash in between left a chain that verified without any record of the recovery. The order is now intent, then commit: the signed `chain_reanchored` receipt is appended first (with `previous_anchor_seq`, `previous_anchor_hash`, `accepted_seqs`, reason), and the anchor is moved onto that receipt second. A crash between the two leaves the anchor behind with a matching reanchor receipt at the end. `verifyChain` reports this as `REANCHOR_PENDING` (only when the last receipt is a `chain_reanchored` whose previous anchor seq and hash equal the anchor, and whose `accepted_seqs` are exactly the receipts in between); the hook keeps denying. Calling `reanchorChain` again completes it: it moves the anchor only, writes no second receipt and returns `completed_pending: true`. A test sets the chain and anchor to all four combinations of before/after; the only verifying state contains the `chain_reanchored` receipt.
+
+### P2: a crash could leave an empty lock forever (confirmed, fixed in two parts)
+
+1. Creation: the owner token is written to a private temp file, which is then hard-linked to the lock name. `link()` fails if the name exists, so it is the atomic create-if-absent, and the lock has its full content from the first moment. A crash leaves at most a stray temp file, which is not a lock.
+2. Explicit recovery for locks whose owner cannot be determined (empty, garbage, another host, older versions): `inspectChainLock` shows SHA-256, size and owner state (`alive`, `dead`, `unknown`). `recoverLock` needs the operator key, a written reason and the exact inspected hash; it refuses a live local owner and a lock whose content changed, renames the lock to `<lock>.recovered-*` (kept as evidence) and writes a signed `lock_recovered` receipt. The kept file is the intent and the receipt is the commit: a kept file without a matching receipt is `LOCK_RECOVERY_UNRECORDED` and the hook denies. If the chain cannot take the receipt yet (the same crash left the anchor behind), the steps are: `recoverLock` (removes and keeps the lock, reports that the receipt is pending), `reanchorChain`, `recoverLock` again without a hash (records the removal). Nothing removes an unknown lock automatically.
+
+`policy.js`: `hook_decision`, `chain_reanchored` and `lock_recovered` are chain maintenance and may appear between an undo and its verification.
+
+### Verification (local, macOS)
+
+`test/hook.test.js`: 61 pass, 0 fail. New tests: reanchor crash between receipt and anchor gives `REANCHOR_PENDING`, hook denies, second call completes without a second receipt, hook allows; all four before/after states verify only with the reanchor receipt; an empty lock blocks the hook, recovery without a reason, without a hash or with a wrong hash is refused and leaves the lock untouched, recovery with the inspected hash removes it, keeps the file, records `lock_recovered`, passes policy and the hook allows; changing the kept file afterwards fails verification; a live owner's lock is never recovered; a garbage lock plus anchor behind is recovered in three recorded steps; 50 acquisitions always see a full owner token and leave no temp files. `npm test`: 212 pass, 0 fail (Docker demos skipped on macOS). Docker Demo A and B with `JRM_DOCKER_TESTS=1`: 15 pass, 0 fail, 0 skipped (173 s). `git diff --check`: clean.

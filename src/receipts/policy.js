@@ -14,6 +14,10 @@
 
 import { receiptHash } from './chain.js'
 
+// Receipts that are not part of the mission story: parallel hook decisions and
+// operator maintenance of the chain itself. They may land between undo and verification.
+const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered'])
+
 export function checkPolicy(receipts) {
   const findings = []
   const bySeqHash = new Map()
@@ -45,11 +49,11 @@ export function checkPolicy(receipts) {
     if (r.kind === 'verification') {
       const undo = earlier(r.refs?.undo)
       if (!undo || undo.kind !== 'undo') violation(r, 'must refer to an undo receipt')
-      // Hook decisions from parallel agent tool calls may land in between; nothing else may.
+      // Hook decisions and chain maintenance may land in between; nothing else may.
       else if (undo !== lastOperatorReceipt) violation(r, 'must directly follow the undo it verifies')
     }
     bySeqHash.set(receiptHash(r), r)
-    if (r.kind !== 'hook_decision') lastOperatorReceipt = r
+    if (!CHAIN_MAINTENANCE.has(r.kind)) lastOperatorReceipt = r
   }
   return { ok: findings.length === 0, findings }
 }
