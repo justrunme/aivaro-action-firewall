@@ -49,8 +49,11 @@ Limits that matter today:
   operator inspects it and removes it by its exact hash, which is recorded
   (`justrunme reanchor`, `justrunme lock inspect`, `justrunme lock recover`).
 - The CLI is the operator's tool. With the gate on, the agent cannot run it:
-  shell calls that were not rehearsed are denied, and a plan step that invokes
-  JustRunMe is refused at authorization.
+  shell calls that were not rehearsed are denied, and a plan whose steps name
+  JustRunMe on their command line is refused before rehearsal runs anything.
+  Plan steps run without `JUSTRUNME_HOME` in their environment. A rehearsed
+  script that imports JustRunMe code or reads the default key directory is not
+  detected: plan steps run as your OS user.
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
 - Rehearsed and authorized code runs as your OS user. JustRunMe binds and
@@ -91,12 +94,16 @@ The hook protects it like the contract.
 | 12 | `compare`: no plan survived the rule |
 | 13 | `run`: a step failed; undo with the printed `capture_id` |
 | 14 | `undo`: not RECOVERED |
+| 15 | `run`: completed, but steps that need approval were skipped |
+| 16 | `rehearse`: the copy was not fully removed (it holds a dump of the real database) |
 | 20 | `compare` refused |
 | 21 | `authorize` refused |
 | 22 | `run` refused |
 | 23 | `undo` refused |
 | 24 | `reanchor` or `lock recover` refused |
-| 30 | `verify` / `replay`: chain, policy or selection does not check out |
+| 25 | `rehearse` refused before running anything |
+| 30 | `verify` / `replay` / `status`: chain, policy or selection does not check out; or a command did its work but could not record it (`RESULT_UNRECORDED`, result included) |
+| 31 | the receipt chain lock is held or stuck (`justrunme lock inspect`) |
 
 Every non-zero exit carries `error.code` (for example `COMPARISON_REQUIRED`,
 `PLAN_NOT_SELECTED`, `FIDELITY_MISMATCH`, `BASE_MISMATCH`) in the JSON output.

@@ -71,9 +71,12 @@ export const withDatabase = (t, dbName) => ({ ...t, dbName })
  * HTTP status of a GET from inside a service container (no host port needed).
  * @returns {Promise<number>} 0 when the request could not be made
  */
+export const HEALTH_SERVICE_RE = /^[A-Za-z0-9_-]{1,63}$/
+export const HEALTH_URL_RE = /^http:\/\/[A-Za-z0-9.:-]+\/[A-Za-z0-9/_-]*$/
+
 export async function httpStatusInService(t, service, url) {
-  if (!/^[A-Za-z0-9_-]{1,63}$/.test(service)) throw new Error('invalid service name')
-  if (!/^http:\/\/[A-Za-z0-9.:-]+\/[A-Za-z0-9/_-]*$/.test(url)) throw new Error('invalid health url')
+  if (!HEALTH_SERVICE_RE.test(service)) throw new Error('invalid service name')
+  if (!HEALTH_URL_RE.test(url)) throw new Error('invalid health url')
   const code = `fetch(${JSON.stringify(url)}).then(r=>console.log(r.status)).catch(()=>console.log(0))`
   const r = await run('docker', [...baseArgs(t), 'exec', '-T', service, 'node', '-e', code], { timeoutMs: 20000 })
   const n = Number.parseInt(r.stdout.trim(), 10)

@@ -11,6 +11,10 @@ import os from 'node:os'
 const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g
 const HOME_PREFIX = /(?:\/Users|\/home)\/[^\s/"'\\:]+|[A-Za-z]:\\Users\\[^\s\\"']+/g
 const CREDENTIAL = /([A-Za-z_]*(?:password|passwd|secret|token|api[_-]?key|authorization))(\s*[=:]\s*)(\S+)/gi
+// user:password@ in connection strings (postgres://u:p@host/db)
+const URL_CREDENTIAL = /([A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s/@:]+:[^\s/@]+@/g
+// psql / Postgres message lines that can quote table values or SQL text
+const DATA_LINE = /^\s*(psql:[^:]*:\d+:\s*)?(DETAIL|CONTEXT|QUERY|HINT|LINE \d+|STATEMENT|WHERE):|^\s*\^\s*$/
 
 /**
  * @param {string} text
@@ -23,7 +27,24 @@ export function redact(text, home = os.homedir()) {
   out = out.replace(HOME_PREFIX, '$HOME')
   out = out.replace(EMAIL, '[email]')
   out = out.replace(CREDENTIAL, '$1$2[REDACTED]')
+  out = out.replace(URL_CREDENTIAL, '$1[REDACTED]@')
   return out
+}
+
+/**
+ * Short, redacted summary of a tool's stderr for reports and receipts: the last
+ * lines that are not Postgres DETAIL/CONTEXT/QUERY/... lines (those can quote
+ * row values such as "Failing row contains (...)").
+ *
+ * @param {string} stderr
+ * @param {number} [lines]
+ */
+export function errorSummary(stderr, lines = 3) {
+  const kept = String(stderr)
+    .trim()
+    .split('\n')
+    .filter((l) => l.trim().length > 0 && !DATA_LINE.test(l))
+  return redact(kept.slice(-lines).join(' | ')).slice(0, 300)
 }
 
 /**

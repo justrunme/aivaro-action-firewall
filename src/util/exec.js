@@ -4,6 +4,7 @@
  */
 
 import { spawn, execFileSync } from 'node:child_process'
+import { errorSummary } from '../privacy/redact.js'
 
 /**
  * @param {string} cmd
@@ -48,7 +49,7 @@ export function runSync(cmd, args, { cwd, input } = {}) {
 export async function runOk(cmd, args, opts) {
   const r = await run(cmd, args, opts)
   if (r.code !== 0) {
-    throw new Error(`${cmd} ${args.slice(0, 3).join(' ')} failed (exit ${r.code}${r.timedOut ? ', timeout' : ''}): ${r.stderr.trim().split('\n').slice(-3).join(' | ')}`)
+    throw new Error(`${cmd} ${args.slice(0, 3).join(' ')} failed (exit ${r.code}${r.timedOut ? ', timeout' : ''}): ${errorSummary(r.stderr)}`)
   }
   return r.stdout
 }

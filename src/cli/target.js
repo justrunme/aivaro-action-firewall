@@ -14,7 +14,7 @@
 
 import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
-import { assertTarget } from '../rehearsal/compose.js'
+import { HEALTH_SERVICE_RE, HEALTH_URL_RE, assertTarget } from '../rehearsal/compose.js'
 
 export const TARGET_FILE = 'justrunme.target.json'
 const KEYS = ['project', 'compose_file', 'db_service', 'db_user', 'db_name', 'health']
@@ -55,6 +55,9 @@ export function loadTarget(repoDir) {
     if (!h || typeof h.service !== 'string' || typeof h.url !== 'string' || Object.keys(h).some((k) => k !== 'service' && k !== 'url')) {
       throw new ConfigError('TARGET_INVALID', 'health must be { "service": string, "url": string }')
     }
+    // Same rules as the probe itself, so a bad entry fails here (exit 3), not after a restore.
+    if (!HEALTH_SERVICE_RE.test(h.service)) throw new ConfigError('TARGET_INVALID', 'health.service must be a Compose service name')
+    if (!HEALTH_URL_RE.test(h.url)) throw new ConfigError('TARGET_INVALID', 'health.url must be http://<host>[:port]/<path> (letters, digits, / _ -)')
     health = { service: h.service, url: h.url }
   }
   return { target, health }

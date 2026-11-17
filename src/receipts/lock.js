@@ -115,7 +115,9 @@ export function withLock(lockFile, fn, { timeoutMs = 8000 } = {}) {
       tryBreak(lockFile, current)
       continue
     }
-    if (Date.now() - started > timeoutMs) throw new Error('timed out waiting for the receipt chain lock (owner still running or unknown)')
+    if (Date.now() - started > timeoutMs) {
+      throw Object.assign(new Error('timed out waiting for the receipt chain lock (owner still running or unknown); see `justrunme lock inspect`'), { code: 'CHAIN_LOCKED' })
+    }
     sleep(5 + Math.floor(Math.random() * 20))
   }
   const stillHeld = () => readToken(lockFile) === token

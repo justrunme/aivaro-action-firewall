@@ -19,6 +19,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseArgs } from 'node:util'
 import { redactDeep } from '../privacy/redact.js'
+import { keyHome } from '../receipts/keys.js'
 import { EXIT } from './codes.js'
 import * as cmd from './commands.js'
 
@@ -78,7 +79,7 @@ function textOf(out) {
   if (out.result) {
     for (const [k, v] of Object.entries(out.result)) lines.push(`${k}: ${typeof v === 'object' && v !== null ? JSON.stringify(v) : v}`)
   }
-  return lines.join('\n') + '\n'
+  return lines.map(printable).join('\n') + '\n'
 }
 
 /**
@@ -108,13 +109,37 @@ export async function main(argv) {
     if (err instanceof cmd.CliError) {
       exit = err.exit
       body = { error: { code: err.code, message: err.message, ...(err.detail !== undefined ? { detail: err.detail } : {}) } }
+    } else if (err?.code === 'CHAIN_LOCKED') {
+      exit = EXIT.CHAIN_LOCKED
+      body = { error: { code: 'CHAIN_LOCKED', message: String(err.message) } }
     } else {
       exit = EXIT.INTERNAL
       body = { error: { code: 'INTERNAL', message: String(err?.message ?? err) } }
     }
   }
-  return { exit, text: opts.text, output: redactDeep({ command, ok: exit === EXIT.OK, exit_code: exit, ...body }) }
+  const out = { command, ok: exit === EXIT.OK, exit_code: exit, ...body }
+  return { exit, text: opts.text, output: redactDeep(scrubPaths(out, [[keyHome(), '$JUSTRUNME_HOME'], [path.resolve(opts.repo ?? process.cwd()), '$REPO']])) }
 }
+
+/**
+ * Replace local paths that redact() does not know (a key directory or workspace
+ * outside the home directory) with placeholders, longest first.
+ * @param {unknown} value
+ * @param {[string, string][]} pairs
+ */
+export function scrubPaths(value, pairs) {
+  const sorted = pairs.filter(([p]) => typeof p === 'string' && p.length > 1).sort((a, b) => b[0].length - a[0].length)
+  const walk = (v) => {
+    if (typeof v === 'string') return sorted.reduce((s, [p, label]) => s.split(p).join(label), v)
+    if (Array.isArray(v)) return v.map(walk)
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)]))
+    return v
+  }
+  return walk(value)
+}
+
+/** Text mode: no control characters, so nothing can colour the terminal or fake a line. */
+export const printable = (s) => String(s).replace(/[\u0000-\u0008\u000a-\u001f\u007f-\u009f]/g, '?')
 
 const isEntry = (() => {
   try {

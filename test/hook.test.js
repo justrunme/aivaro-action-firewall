@@ -128,7 +128,7 @@ describe('hook: writes (R1.6)', () => {
   it('never lets the agent write the gate, its inputs or git metadata', () => {
     const ctx = context(workspace())
     for (const p of ['.justrunme/authorization.json', 'justrunme.mission.yaml', 'justrunme.target.json', '.kiro/hooks/pretooluse.json', '.git/config', 'src/hook/evaluate.js']) {
-      assert.equal(evaluate(write(p), ctx).category, p.startsWith('src/') ? 'PROTECTED_PATH' : 'PROTECTED_PATH', p)
+      assert.equal(evaluate(write(p), ctx).category, 'PROTECTED_PATH', p)
     }
   })
 

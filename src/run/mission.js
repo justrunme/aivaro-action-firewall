@@ -21,22 +21,48 @@ import { AuthorizationRefused, issueAuthorization, signatureProblem } from '../a
 import { executeSteps } from '../rehearsal/steps.js'
 import { captureState } from '../capture/capture.js'
 import { loadReport, planId, reportSignatureProblem } from '../rehearsal/engine.js'
-import { appendReceipt, findLast, readChain, verifyChain } from '../receipts/chain.js'
+import { appendReceipt, findLast, verifyChain } from '../receipts/chain.js'
 
 export const authorizationPath = (repoDir) => path.join(repoDir, STATE_DIR, 'authorization.json')
 
 const realTargetOf = (repoDir, target) => ({ ...target, composeFile: path.resolve(repoDir, target.composeFile) })
 
-/** Write a refusal receipt, then rethrow the refusal unchanged. */
+/**
+ * Write a refusal receipt, then rethrow the refusal. If the receipt cannot be
+ * written (chain does not verify, lock held), the refusal still stands with its
+ * own code; `recorded: false` says it is not in the chain.
+ */
 async function recordingRefusals({ repoDir, keys, missionId, kind, plan_id }, fn) {
   try {
     return await fn()
   } catch (err) {
     if (err instanceof AuthorizationRefused) {
-      appendReceipt({ repoDir, keys, missionId, kind, verdict: 'deny', subject: { plan_id, code: err.code, reason: err.message } })
+      try {
+        appendReceipt({ repoDir, keys, missionId, kind, verdict: 'deny', subject: { plan_id, code: err.code, reason: err.message } })
+        err.recorded = true
+      } catch (recordErr) {
+        err.recorded = false
+        err.record_error = recordErr.code === 'CHAIN_LOCKED' ? 'CHAIN_LOCKED' : 'CHAIN_INVALID'
+      }
     }
     throw err
   }
+}
+
+function verifiedReceipts(repoDir, keys, missionId) {
+  const chain = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId })
+  if (!chain.ok) throw new AuthorizationRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}`)
+  return chain.receipts
+}
+
+function selectionFor({ repoDir, keys, missionId, receipts, planId: id, reportHash, currentFingerprint }) {
+  return selectionGate({
+    receipts,
+    planId: id,
+    reportHash,
+    baseHash: baseHash(currentFingerprint),
+    replay: (receiptHash) => verifySelection({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId, receiptHash }),
+  })
 }
 
 export async function authorizeMission({ repoDir, contract, contractHash, target, keys, now = Date.now(), ttlSeconds }) {
@@ -52,24 +78,17 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
     if (problem) throw new AuthorizationRefused('REPORT_INVALID', problem)
     if (report.plan_id !== plan_id) throw new AuthorizationRefused('REPORT_INVALID', 'report is for a different plan')
     // Decisions below read the chain, so it must verify first.
-    const chain = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId: contract.id })
-    if (!chain.ok) throw new AuthorizationRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}`)
+    const receipts = verifiedReceipts(repoDir, keys, contract.id)
     const reportHash = hashValue(report)
-    const rehearsal = findLast(chain.receipts, (r) => r.kind === 'rehearsal' && r.subject?.report_hash === reportHash)
+    const rehearsal = findLast(receipts, (r) => r.kind === 'rehearsal' && r.subject?.report_hash === reportHash)
     if (!rehearsal) throw new AuthorizationRefused('REPORT_INVALID', 'no rehearsal receipt matches this report')
     const currentFingerprint = await computeFingerprint({ repoDir, target: realTargetOf(repoDir, target), contract, contractHash })
     // Verdict and fidelity first (issueAuthorization is pure); then the selection gate on the current base.
     issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds })
-    const selection = selectionGate({
-      receipts: chain.receipts,
-      planId: plan_id,
-      reportHash,
-      baseHash: baseHash(currentFingerprint),
-      replay: (receiptHash) => verifySelection({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId: contract.id, receiptHash }),
-    })
+    const selection = selectionFor({ repoDir, keys, missionId: contract.id, receipts, planId: plan_id, reportHash, currentFingerprint })
     const auth = issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds, selection: { mode: selection.mode, receipt: selection.receipt } })
-    mkdirSync(path.join(repoDir, STATE_DIR), { recursive: true })
-    writeFileSync(authorizationPath(repoDir), JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 })
+    // Receipt first, file second: a file without its receipt never exists, so a
+    // failed append cannot leave a live authorization behind.
     appendReceipt({
       repoDir,
       keys,
@@ -88,6 +107,8 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
       refs: { rehearsal: rehearsal.hash, ...(selection.receipt ? { selection: selection.receipt } : {}) },
       now,
     })
+    mkdirSync(path.join(repoDir, STATE_DIR), { recursive: true })
+    writeFileSync(authorizationPath(repoDir), JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 })
     return auth
   })
 }
@@ -105,15 +126,20 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
       throw new AuthorizationRefused('AUTHORIZATION_INVALID', 'authorization is for a different mission, contract or plan')
     }
     if (now < Date.parse(auth.issued_at) || now > Date.parse(auth.expires_at)) throw new AuthorizationRefused('EXPIRED', 'authorization expired')
-    const issued = findLast(readChain(repoDir, contract.id), (r) => r.kind === 'authorization_issued' && r.subject?.authorization_hash === hashValue(auth))
+    // Nothing runs on a chain that could not record the result.
+    const receipts = verifiedReceipts(repoDir, keys, contract.id)
+    const issued = findLast(receipts, (r) => r.kind === 'authorization_issued' && r.subject?.authorization_hash === hashValue(auth))
     if (!issued) throw new AuthorizationRefused('AUTHORIZATION_INVALID', 'no authorization_issued receipt matches this authorization')
 
     const realTarget = realTargetOf(repoDir, target)
     const current = await computeFingerprint({ repoDir, target: realTarget, contract, contractHash })
+    const report = loadReport(repoDir, contract.id, auth.plan_id)
     if (hashValue(current) !== auth.fingerprint_hash) {
-      const report = loadReport(repoDir, contract.id, auth.plan_id)
       throw new AuthorizationRefused('FIDELITY_MISMATCH', 'real target changed since authorization', compareFingerprints(report.fingerprint, current).diffs)
     }
+    // The selection is checked again: a plan rehearsed or compared after the
+    // authorization was issued must be taken into account before anything runs.
+    selectionFor({ repoDir, keys, missionId: contract.id, receipts, planId: plan_id, reportHash: hashValue(report), currentFingerprint: current })
 
     // R4.1, R4.2: capture before anything executes. If capture fails, nothing ran and
     // the authorization is left unconsumed so the operator can fix the cause and retry.
@@ -128,15 +154,23 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
     renameSync(file, path.join(repoDir, STATE_DIR, `authorization.used-${auth.signature.slice(0, 16)}.json`))
     const steps = await executeSteps({ plan: contract.plan, cwd: repoDir, target: realTarget, mode: 'real' })
     const ok = steps.every((s) => s.status === 'ok' || s.status === 'skipped_needs_approval')
-    const { hash } = appendReceipt({
-      repoDir,
-      keys,
-      missionId: contract.id,
-      kind: 'run_result',
-      verdict: ok ? 'completed' : 'failed',
-      subject: { plan_id, capture_id: manifest.capture_id, manifest_hash: hashValue(manifest), steps: steps.map((s) => ({ id: s.id, status: s.status, detail: s.detail })) },
-      refs: { authorization: issued.hash },
-    })
-    return { mission_id: contract.id, plan_id: auth.plan_id, capture_id: manifest.capture_id, steps, ok, receipt_hash: hash }
+    const skipped = steps.filter((s) => s.status === 'skipped_needs_approval').map((s) => s.id)
+    const result = { mission_id: contract.id, plan_id: auth.plan_id, capture_id: manifest.capture_id, steps, ok, skipped_needs_approval: skipped, receipt_hash: null }
+    // The run has happened: if its receipt cannot be written (lock held after the
+    // check above), report that instead of losing the result and the capture id.
+    try {
+      result.receipt_hash = appendReceipt({
+        repoDir,
+        keys,
+        missionId: contract.id,
+        kind: 'run_result',
+        verdict: ok ? 'completed' : 'failed',
+        subject: { plan_id, capture_id: manifest.capture_id, manifest_hash: hashValue(manifest), steps: steps.map((s) => ({ id: s.id, status: s.status, detail: s.detail })) },
+        refs: { authorization: issued.hash },
+      }).hash
+    } catch (err) {
+      result.receipt_error = err.code === 'CHAIN_LOCKED' ? 'CHAIN_LOCKED' : 'CHAIN_INVALID'
+    }
+    return result
   })
 }
