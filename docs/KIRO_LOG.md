@@ -372,3 +372,34 @@ Demo fix: `demo/src/db.js` had no `error` listener on the `pg` pool, so terminat
 ### Not done
 
 Signed undo and verification receipts (T16); configurable integration test suite in verification (R5.4); CLI with non-zero exit; container or volume restore (not claimed). Residual risk unchanged: authorized code runs as the operator's OS user.
+
+---
+
+## Run 11 — T16 signed, hash-chained receipts
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t16-receipts`, stacked on `kiro/t15-undo` (PR 5 and PR 6 still open, so not branched from `main`) |
+| Commits / push | By Kiro on operator authorization; no merge |
+
+### Written
+
+- `src/receipts/chain.js`: per-mission JSONL chain with `seq`, `prev_hash`, Ed25519 signature, canonical-form check per line, signed head anchor in the operator key directory, refusal to extend a chain that does not verify.
+- `src/receipts/policy.js`: ordering rules (authorization only after SAFE rehearsal of the same plan; one run per authorization and only of the authorized plan; undo only for a recorded run; verification directly after its undo).
+- Receipts written by `rehearse`, `authorizeMission` (issued and refused), `runMission` (result and refused), `undoMission` (undo and verification). `runMission` now also refuses an authorization that has no matching `authorization_issued` receipt, and `authorizeMission` one whose report has no matching rehearsal receipt.
+- `loadOrCreateKeys` returns the key directory with the keys; `undoMission` takes `keys` instead of `publicKey`.
+- Tests: `test/receipts.test.js` (no Docker), Demo A and Demo B chain assertions.
+
+### Verification (local, macOS)
+
+- `npm test`: 194 pass, 0 fail. Includes a fast-check property that changes one random byte of a five-receipt chain file to a random other value 400 times; verification failed every time.
+- Also covered: removed middle receipt (sequence gap and broken link), cut-off tail (head anchor), swapped receipts, a receipt copied from another chain, a chain re-signed with another key, a deleted chain, home path and e-mail redaction, and six ordering-rule violations.
+- Demo A with real Docker: 8 pass, including R13.4 (the DATA LOSS rehearsal, the refusals with codes `DATA_LOSS`, `REPORT_INVALID`, `FIDELITY_MISMATCH`, and the single completed run are one chain that verifies and passes the ordering rules).
+- Demo B with real Docker: 7 pass, 75.2 s. The chain reads rehearsal `SAFE`, authorization `allow`, run `failed` (steps `ok`, `failed`), undo, verification `PASS`, then the later undo and verification pairs including the `FAIL` ones from the failed-restore tests; it verifies and passes the ordering rules. 0 containers left afterwards.
+- Note: the first combined Demo A + B run was killed when the terminal session running it dropped (not a test failure); it left one Demo B Compose project behind, which was removed by project name. Demo B was then rerun on its own under `nohup`.
+
+### Not done
+
+Hook decisions are not in the chain (unsigned audit lines; concurrent hook processes need a lock first). No pruning of `<db>_jrm_prev_<t>` databases (listed in ROADMAP as P2, explicit operator action only). Judge mode and CLI still to come.
