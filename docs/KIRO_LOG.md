@@ -655,3 +655,36 @@ Verdict was FAIL on two P1 and several P2 items. All P1 and the P2 items below w
 - `src/rehearsal/compose.js`: a target may carry `env`; `up`, `down`, `psql`, `dump`, container lookup, health probe and `imageDigests` pass it to docker. Without `env` nothing changes.
 - Tests: endpoint and listing parsing; a fake `docker` whose active context is `ssh://...` makes `createBackend` refuse; a fake `docker` logs `DOCKER_HOST` and every call of `up`, `psql`, `dump`, `imageDigests` and `down` sees the target's socket while the process environment says otherwise.
 - Limit, stated in README and the report: a local socket that is itself forwarded to another machine cannot be told apart.
+
+---
+
+## Run 18 — T21 and T22: MCP server and structured remediation (PR A)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t21-mcp`, from `main` at `b806408` (PR 11 merged by the operator) |
+
+### Live check: Kiro CLI 3.4.0 with a minimal MCP server (before any design was frozen)
+
+Setup: a throwaway workspace with `.kiro/settings/mcp.json` naming a server `justrunme` with one tool `ping`, a PreToolUse hook that only recorded the raw events, `kiro-cli chat --v3 --no-interactive --trust-all-tools --trust-workspace`. Run twice, once with each SDK line.
+
+- Kiro shows the tool as `@justrunme/ping` and the hook receives `tool_name: "mcp_justrunme_ping"`, `tool_input: {"text":"hello"}`. The documented `mcp_<server>_<tool>` pattern holds.
+- New in 3.4.0: before a tool is used the agent calls a pseudo tool `tool_load` with `tool_input.tool_ids` (for example `["justrunme::ping"]`, `["builtin::remote_web_search"]`). The gate had no rule for it and would have denied it as `UNKNOWN_TOOL`; it is now bookkeeping (loading runs nothing, the call of the loaded tool is checked on its own).
+- Both `@modelcontextprotocol/sdk` 1.32.2 and `@modelcontextprotocol/server` 2.4.0 work with Kiro CLI 3.4.0 from plain JavaScript. Footprint: 1.32.2 installs 95 packages (express, hono, jose and others for HTTP transports we do not use); 2.4.0 installs 3 (the server package, its core, zod 4). `npm audit`: 0 vulnerabilities for both. Chosen: `@modelcontextprotocol/server` 2.4.0 and `zod` 4.6.7, exact pins; the whole production tree is 7 packages with `yaml`.
+- The agent also read `.kiro/settings/mcp.json` with `read_file` on its own, which the gate allows (reads are allowed; writes to `.kiro/settings` are protected).
+
+### Written
+
+- `src/mcp/names.js` (names shared with the hook, no imports), `src/mcp/tools.js` (tools), `src/mcp/server.js` (SDK glue, stdio, calls handled one at a time).
+- Tools in this PR: `rehearse`, `get_impact_report`, `compare`, `get_receipt`, `replay_mission`. Each is a thin call into the CLI command functions (`src/cli/commands.js`), so the gates, receipts and exit-code semantics are the CLI's. The hook's list already names all nine agent tools (`request_approval`, `run_mission`, `undo_mission`, `verify_recovery` follow in the next PR); it contains no tool that authorizes or approves.
+- `src/mission/plans.js`: the operator owns the mission (`justrunme.mission.yaml`, protected from the agent); the agent proposes only a list of `.sql` files for `sql_migration` steps, inside `allowed_paths`, regular files, no symlink anywhere in the path, at most 5 files of at most 256 KiB. Why not shell: a rehearsal runs its steps on this machine, so an agent-chosen shell step would be arbitrary code execution with no approval. The effective contract (mission + plan) is stored under `.justrunme/missions/<id>/plans/` and re-validated on every load (same mission part, same plan id, only reversible sql_migration steps, files still acceptable). The CLI got `--plan <plan_id>` for `rehearse`, `authorize`, `run`.
+- `src/explain/remediation.js`: reason, rule, measured impact, constraints, next action, attempt count. Built only from the signed report. The wording says what was measured and what a revision must leave intact, and carries a caution that only a new rehearsal shows safety. Limit: 8 rehearsals since the last run, authorization or undo, then `ASK_OPERATOR`.
+- Hook: exact agent-tool names are allowed (`mcp_justrunme_<tool>`), every other name under the server prefix stays `MCP_REENTRY`, other servers cannot borrow a name, `migrations` paths are checked against the key directory.
+- The rehearsal self-reference check also refuses plan steps naming `src/mcp` or `src/mission`.
+
+### Findings while testing
+
+- The dangerous demo plan does not only lose a row of `orders`: it also drops the columns it did not copy. The agent is told both (`rows_preserved` and `column_preserved`).
+- `path.join(root, 'demo/migrations/')` keeps the trailing slash, so the `allowed_paths` prefix check never matched; fixed with `path.resolve` (caught by the first unit run).

@@ -14,7 +14,7 @@ import { hashValue } from '../util/canonical.js'
 import { publicKeyHex, signValue, verifyValue } from '../receipts/keys.js'
 import { compareFingerprints } from '../fidelity/gate.js'
 
-const SELF_REFERENCE = /(^|[\\/])(justrunme|src[\\/]cli|src[\\/]hook|src[\\/]authorize)([\\/.]|$)/i
+const SELF_REFERENCE = /(^|[\\/])(justrunme|src[\\/]cli|src[\\/]hook|src[\\/]authorize|src[\\/]mcp|src[\\/]mission)([\\/.]|$)/i
 
 export class AuthorizationRefused extends Error {
   /** @param {string} code @param {string} message @param {unknown} [detail] */

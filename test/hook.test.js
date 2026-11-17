@@ -15,6 +15,7 @@ import { checkPolicy } from '../src/receipts/policy.js'
 import { withLock } from '../src/receipts/lock.js'
 import { analyzeShell } from '../src/hook/bypass.js'
 import { tokenizeShell } from '../src/hook/shell.js'
+import { AGENT_TOOLS } from '../src/mcp/names.js'
 
 const HOOK = new URL('../src/hook/pretooluse.js', import.meta.url).pathname
 const NOW = Date.now()
@@ -248,8 +249,35 @@ describe('hook: bypass categories (R10.2, R10.3, R10.4, R10.7)', () => {
   })
 
   it('blocks MCP re-entry from a justrunme server and unlisted MCP tools', () => {
-    assert.equal(evaluate({ tool_name: 'mcp_justrunme_undo_mission', tool_input: {} }, ctx).category, 'MCP_REENTRY')
+    // authorize and approve are not agent tools; neither is anything else under the server name.
+    for (const name of ['mcp_justrunme_authorize', 'mcp_justrunme_approve', 'mcp_justrunme_keys_init', 'mcp_justrunme_x_rehearse', 'mcp_justrunme_rehearse_all']) {
+      assert.equal(evaluate({ tool_name: name, tool_input: {} }, ctx).category, 'MCP_REENTRY', name)
+    }
     assert.equal(evaluate({ tool_name: 'mcp_postgres_query', tool_input: { sql: 'select 1' } }, ctx).decision, 'deny')
+    // Another server cannot borrow an agent tool name.
+    assert.equal(evaluate({ tool_name: 'mcp_other_rehearse', tool_input: {} }, ctx).decision, 'deny')
+  })
+
+  it('lets the agent reach exactly the JustRunMe agent tools, with or without an authorization', () => {
+    for (const tool of AGENT_TOOLS) {
+      for (const c of [ctx, context(dir, { auth: false })]) {
+        assert.equal(evaluate({ tool_name: `mcp_justrunme_${tool}`, tool_input: {} }, c).decision, 'allow', tool)
+      }
+    }
+    assert.deepEqual([...AGENT_TOOLS].sort(), ['compare', 'get_impact_report', 'get_receipt', 'replay_mission', 'request_approval', 'rehearse', 'run_mission', 'undo_mission', 'verify_recovery'].sort())
+    assert.ok(!AGENT_TOOLS.some((t) => /authoriz|approve$|key/.test(t)), 'no tool authorizes, approves or touches a key')
+  })
+
+  it('still refuses an agent tool call that names the key directory, and every call without a contract', () => {
+    const withKeys = { ...context(dir, { auth: false }), keyHome: path.join(dir, 'keys') }
+    assert.equal(evaluate({ tool_name: 'mcp_justrunme_rehearse', tool_input: { migrations: [path.join(dir, 'keys', 'operator.key')] } }, withKeys).category, 'PROTECTED_PATH')
+    assert.equal(evaluate({ tool_name: 'mcp_justrunme_rehearse', tool_input: {} }, { cwd: os.tmpdir(), contract: null, authorization: null, now: NOW }).category, 'NO_CONTRACT')
+  })
+
+  it('treats tool_load (Kiro CLI 3.4.0 announces tools before calling them) as bookkeeping', () => {
+    assert.equal(evaluate({ tool_name: 'tool_load', tool_input: { tool_ids: ['justrunme::rehearse', 'builtin::remote_web_search'] } }, context(dir, { auth: false })).decision, 'allow')
+    // Loading a tool does not run it: the web tool is still refused when it is called.
+    assert.equal(evaluate({ tool_name: 'remote_web_search', tool_input: { query: 'x' } }, context(dir, { auth: false })).decision, 'deny')
   })
 
   it('allows a rehearsed MCP call only with identical input', () => {

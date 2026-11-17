@@ -15,7 +15,9 @@
     "test:demo": "node --test demo/integration.test.js"
   },
   "dependencies": {
-    "yaml": "2.9.1"
+    "@modelcontextprotocol/server": "2.4.0",
+    "yaml": "2.9.1",
+    "zod": "4.6.7"
   },
   "keywords": [
     "kiro",

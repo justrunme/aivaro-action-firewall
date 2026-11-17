@@ -10,6 +10,7 @@
 import { realpathSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { AGENT_TOOL_HOOK_NAMES } from '../mcp/names.js'
 import { analyzeShell } from './bypass.js'
 import { authorizationProblem, checkWindow, matchEntry } from './allowlist.js'
 
@@ -23,7 +24,10 @@ const SHELL_TOOLS = new Set(['execute_bash', 'executebash', 'shell', 'bash', 'ru
 const WRITE_TOOLS = new Set(['fs_write', 'fs_append', 'str_replace', 'delete_file', 'smart_relocate', 'semantic_rename', 'write', 'edit', 'create', 'delete'])
 const READ_TOOLS = new Set(['read_file', 'read_code', 'list_directory', 'grep_search', 'file_search', 'get_process_output', 'read', 'grep', 'glob', 'ls'])
 const WEB_TOOLS = new Set(['web_fetch', 'remote_web_search', 'web_search', 'fetch'])
-const NOOP_TOOLS = new Set(['todo_list', 'update_session_information', 'disclose_context', 'list_processes'])
+// tool_load: Kiro CLI 3.4.0 announces which tools it is about to load (tool_ids such as
+// builtin::remote_web_search or justrunme::rehearse). Loading runs nothing; the call of
+// the loaded tool is checked on its own.
+const NOOP_TOOLS = new Set(['todo_list', 'update_session_information', 'disclose_context', 'list_processes', 'tool_load'])
 const PATH_KEYS = ['path', 'filePath', 'file_path', 'targetFile', 'target_file', 'sourcePath', 'destinationPath', 'source', 'destination']
 // Files the agent must never write while the gate is on (the gate, its inputs, and git metadata).
 const PROTECTED_PATHS = ['.justrunme', '.kiro/hooks', '.kiro/settings', '.git', 'justrunme.mission.yaml', 'justrunme.target.json', 'src/hook']
@@ -59,7 +63,7 @@ function classify(name) {
 function collectPaths(input) {
   const found = []
   for (const key of PATH_KEYS) if (typeof input[key] === 'string') found.push(input[key])
-  if (Array.isArray(input.paths)) for (const p of input.paths) if (typeof p === 'string') found.push(p)
+  for (const key of ['paths', 'migrations']) if (Array.isArray(input[key])) for (const p of input[key]) if (typeof p === 'string') found.push(p)
   return found
 }
 
@@ -132,6 +136,10 @@ export function evaluate(event, ctx) {
   const kind = classify(name)
   if (touchesKeyHome(input, ctx)) return deny('PROTECTED_PATH', 'access to the operator key directory')
   if (kind === 'read' || kind === 'noop') return { decision: 'allow', category: 'ALLOWED', reason: `${kind} tool` }
+  // The agent's own tools of the JustRunMe MCP server (exact names only). The server
+  // enforces fidelity, selection, signed authorization and receipts itself; any other
+  // tool of a server called justrunme*, such as an authorize tool, is not on the list.
+  if (kind === 'mcp' && AGENT_TOOL_HOOK_NAMES.has(name)) return { decision: 'allow', category: 'ALLOWED', reason: 'agent tool of the JustRunMe MCP server' }
   if (kind === 'unknown') return deny('UNKNOWN_TOOL', `tool ${event.tool_name} is not covered by the contract`)
 
   const auth = ctx.authorization
