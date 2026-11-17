@@ -655,3 +655,59 @@ Verdict was FAIL on two P1 and several P2 items. All P1 and the P2 items below w
 - `src/rehearsal/compose.js`: a target may carry `env`; `up`, `down`, `psql`, `dump`, container lookup, health probe and `imageDigests` pass it to docker. Without `env` nothing changes.
 - Tests: endpoint and listing parsing; a fake `docker` whose active context is `ssh://...` makes `createBackend` refuse; a fake `docker` logs `DOCKER_HOST` and every call of `up`, `psql`, `dump`, `imageDigests` and `down` sees the target's socket while the process environment says otherwise.
 - Limit, stated in README and the report: a local socket that is itself forwarded to another machine cannot be told apart.
+
+---
+
+## Run 18 — T21 and T22: MCP server and structured remediation (PR A)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t21-mcp`, from `main` at `b806408` (PR 11 merged by the operator) |
+
+### Live check: Kiro CLI 3.4.0 with a minimal MCP server (before any design was frozen)
+
+Setup: a throwaway workspace with `.kiro/settings/mcp.json` naming a server `justrunme` with one tool `ping`, a PreToolUse hook that only recorded the raw events, `kiro-cli chat --v3 --no-interactive --trust-all-tools --trust-workspace`. Run twice, once with each SDK line.
+
+- Kiro shows the tool as `@justrunme/ping` and the hook receives `tool_name: "mcp_justrunme_ping"`, `tool_input: {"text":"hello"}`. The documented `mcp_<server>_<tool>` pattern holds.
+- New in 3.4.0: before a tool is used the agent calls a pseudo tool `tool_load` with `tool_input.tool_ids` (for example `["justrunme::ping"]`, `["builtin::remote_web_search"]`). The gate had no rule for it and would have denied it as `UNKNOWN_TOOL`; it is now bookkeeping (loading runs nothing, the call of the loaded tool is checked on its own).
+- Both `@modelcontextprotocol/sdk` 1.32.2 and `@modelcontextprotocol/server` 2.4.0 work with Kiro CLI 3.4.0 from plain JavaScript. Footprint: 1.32.2 installs 95 packages (express, hono, jose and others for HTTP transports we do not use); 2.4.0 installs 3 (the server package, its core, zod 4). `npm audit`: 0 vulnerabilities for both. Chosen: `@modelcontextprotocol/server` 2.4.0 and `zod` 4.6.7, exact pins; the production tree is 4 packages (the server, its core, zod, yaml), 6 with the two development packages.
+- The agent also read `.kiro/settings/mcp.json` with `read_file` on its own, which the gate allows (reads are allowed; writes to `.kiro/settings` are protected).
+
+### Written
+
+- `src/mcp/names.js` (names shared with the hook, no imports), `src/mcp/tools.js` (tools), `src/mcp/server.js` (SDK glue, stdio, calls handled one at a time).
+- Tools in this PR: `rehearse`, `get_impact_report`, `compare`, `get_receipt`, `replay_mission`. `rehearse`, `compare`, `get_receipt` and `replay_mission` call the CLI command functions (`src/cli/commands.js`), so the gates, receipts and exit-code semantics are the CLI's; `rehearse` adds plan proposal, the attempt limit and the explanation around that call, and `get_impact_report` reads the signed report directly. The hook allows exactly the implemented tools; `request_approval`, `run_mission`, `undo_mission`, `verify_recovery` are added with their code in the next PR. No tool authorizes or approves.
+- `src/mission/plans.js`: the operator owns the mission (`justrunme.mission.yaml`, protected from the agent); the agent proposes only a list of `.sql` files for `sql_migration` steps, inside `allowed_paths`, regular files, no symlink anywhere in the path, at most 5 files of at most 256 KiB. Why not shell: a rehearsal runs its steps on this machine, so an agent-chosen shell step would be arbitrary code execution with no approval. The effective contract (mission + plan) is stored under `.justrunme/missions/<id>/plans/` and re-validated on every load (same mission part, same plan id, only reversible sql_migration steps, files still acceptable). The CLI got `--plan <plan_id>` for `rehearse`, `authorize`, `run`.
+- `src/explain/remediation.js`: reason, rule, measured impact, constraints, next action, attempt count. Built only from the signed report. The wording says what was measured and what a revision must leave intact, and carries a caution that only a new rehearsal shows safety. Limit: 8 rehearsals since the last run, authorization or undo, then `ASK_OPERATOR`.
+- Hook: exact agent-tool names are allowed (`mcp_justrunme_<tool>`), every other name under the server prefix stays `MCP_REENTRY`, other servers cannot borrow a name, `migrations` paths are checked against the key directory.
+- The rehearsal self-reference check also refuses plan steps naming `src/mcp` or `src/mission`.
+
+### Findings while testing
+
+- The dangerous demo plan does not only lose a row of `orders`: it also drops the columns it did not copy. The agent is told both (`rows_preserved` and `column_preserved`).
+- `path.join(root, 'demo/migrations/')` keeps the trailing slash, so the `allowed_paths` prefix check never matched; fixed with `path.resolve` (caught by the first unit run).
+
+### Review by the `justrunme-skeptic` agent (read-only): FAIL, then fixes
+
+- P1, agent SQL reached outside its copy. The rehearsal copy ran superuser SQL in a container on an ordinary Compose network, with a full dump of the real data in it and the real stack's port published on the host. Fix: the copy's default network is `internal` (`writeNoPortsOverride(..., { isolate: true })`, used by the rehearsal engine), so the container gets an internal network (Docker gives it no default route and no published ports; the second review below says what is and is not shown). Test (`test/demo-mcp.test.js`): agent SQL reads the container's routing table with `COPY ... FROM PROGRAM 'ip route'` and reports it through an error; the isolated copy shows no default route, and the same SQL on the real, non-isolated stack shows one (control, so the probe can tell the two apart). Residual, stated in README: SQL runs as the database superuser inside the container and can run programs there; the container cannot reach anything else.
+- P1 (conditional), agent-writable Compose file. The rehearsal starts the Compose file from the working tree, including uncommitted edits. Fix: `assertMissionNarrow` refuses agent plans when an `allowed_paths` entry covers, or lies inside, the Compose file, the target and mission files, `.kiro`, `.justrunme`, `.git`, `src`, `node_modules` or the package files. Tested with ten mission shapes.
+- P2, allowlist named tools that do not exist. The hook now allows exactly the five implemented tools; the four planned names are refused until their code exists (test), and a test checks that the server and the allowlist name the same tools.
+- P2, time of check and time of use. `steps.js` re-checks with `lstat`/`realpath` the file it is about to read, so a file swapped for a link after the plan was proposed is not read.
+- P2, claims. "7 packages" corrected to 4 production packages; "thin calls" corrected to where it is true; "the agent cannot write the target file" now says "while the gate is on"; "the real database was not changed" removed from the agent-facing text (the copy is described as a disposable copy); `goal` renamed `aim`.
+- P2, `compare` lets the agent record a signed `plan_selected` receipt. This steers which plan the operator will be asked to approve; it grants nothing (authorization is a separate signed step the agent cannot take). Stated here and in README.
+- P3, error text: system temporary paths are masked too (`$TMP`).
+- Not taken, recorded: plan files are unsigned and rely on `.justrunme` being protected by the hook (the reports and receipts they feed are signed); a refused rehearse leaves a plan file and no receipt, so those are not counted by the attempt limit; the attempt counter ignores a broken chain (rehearse itself refuses on one); parallel server processes can race on the counter; `tool_load` was observed to run nothing for two tool ids, not proven for every id; the output size of reports is not capped.
+- Known data exposure, not fixed: the rehearsal copy holds a dump of the real database and SQL error text is returned to the agent (three lines, 300 characters, `DETAIL`/`CONTEXT`/`QUERY` lines dropped). An agent can therefore read small amounts of real data through error messages. A masked or sampled copy would close it; it is not in this PR.
+
+### Second review of PR A (`justrunme-skeptic`, read-only): PASS WITH WARNINGS, no P1
+
+Closed items: the allowlist names only implemented tools, claims corrected, `$TMP` masking. Warnings taken in this PR:
+
+- P2, the "no route out" claim was stronger than the test. The wording is now "an `internal` Docker network, confirmed through Docker before any real data is loaded"; `assertIsolated` (`src/rehearsal/compose.js`) inspects the db container and every network it is on and refuses host or shared network mode and any network that is not internal, so a Compose file that names its own networks cannot silently defeat the override (the rehearsal then ends FAILED, with the copy removed). Unit test with a fake `docker` (`test/isolation.test.js`); the routing-table test now rejects any `default` route, with the non-isolated control kept. Not tested, and now said so in README: a host service on the bridge address, IPv6, DNS, Docker Desktop.
+- P2, `assertMissionNarrow` compared paths as text. It now follows links and ignores case on both sides (tests: `sql/` linked to `demo/`, `Demo/`, `.KIRO/hooks/`).
+- P2, the data-exposure statement was incomplete. README now lists the numeric channels as open (row counts of tables the plan creates, `content_changed`, attempts) and calls the problem open. Narrowed in code: error text is cut to its first line and 160 characters; the name of an object the plan created is shown only if the plan's own SQL text contains it, others are counted (`unnamed_new_objects`), which stops names built from data at run time. Test with a plan that creates a table named from data.
+- P2, a rehearsal cannot prove that agent SQL behaves the same on the real database (it can tell the copy apart, for example by its routing table). Written down in README; the approval screen of the next PR shows the SQL that will run. This is the main open design point before the real run exists in the MCP server.
+- P3 taken: the tool description no longer says "nothing real is changed" (the real database is read to make the copy); `next_action` is `ASK_OPERATOR` until `request_approval` exists, instead of pointing the agent at a tool the hook refuses; a test for the link re-check in `executeSteps`.
+- P3 recorded, not taken: no resource limits on the copy (memory, disk, CPU; a step times out after 120 s); the Compose file's own `include`, `env_file`, `build` context and bind mounts are not examined; the hook matches tool names only, so a second server called `justrunme*` would be indistinguishable (`.kiro/settings` is protected only while the gate is on); `planId` hashes the plan's paths, file content enters through the fingerprint's base hash.

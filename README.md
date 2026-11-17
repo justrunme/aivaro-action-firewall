@@ -22,7 +22,7 @@ feature until it has a passing end-to-end test.
 | Undo and recovery verification | Implemented for files under `allowed_paths`, contract config files and the named Postgres database; Demo B (failed real run, undo, verification of schema, row counts, checksums, files, images and `/health`, negative controls) passes against real Docker and Postgres. Containers and volumes are verified, not restored |
 | Receipts (Ed25519, hash chain) | Implemented for rehearsal, authorization, run, undo, verification and every hook decision, with a head anchor outside the workspace and ordering rules; a one-byte change anywhere fails verification (property test); 24 parallel hook processes produce one gap-free chain (test) |
 | Plan comparison (counterfactual replay) | Implemented as a library: stored rehearsals are compared only with equal `base_hash` (same source state and environment), equal rehearsal conditions, operator signatures and matching rehearsal receipts; a fixed rule picks the plan, names the deciding rule, and the choice is a signed `plan_selected` receipt. A replay checks that the choice follows from the signed measurements; it does not measure the database again. When several plans were rehearsed on the current state, only the selected one can be authorized; a selection made on another state grants nothing. Demo A compares its dangerous and safe plans against real Postgres. No `compare` CLI command yet |
-| MCP server, Kiro Power, `justrunme-operator` agent | Not implemented |
+| MCP server (`node src/mcp/server.js`, official SDK, stdio) | In progress. Implemented and tested against real Postgres: `rehearse`, `get_impact_report`, `compare`, `get_receipt`, `replay_mission`. An agent proposes only SQL migration files inside the operator's mission; a denied plan comes back with the measured loss, the constraints a revision must meet and the next action; nothing here says a revision will be safe, only a new rehearsal does. Not yet: `request_approval`, `run_mission`, `undo_mission`, `verify_recovery`, the approver key, the `justrunme-operator` agent, a run with a real Kiro agent |
 | Judge mode (`justrunme judge`) | Implemented as a one-command demo: a throwaway Postgres 16 container, a throwaway operator key and workspace; a dangerous plan is rehearsed (rows lost measured), its authorization is denied, the safe plan is rehearsed on the same base, compared, authorized, run and undone, then the receipt chain is verified again with no Docker and an empty `PATH`, and a one-byte change to the chain must be detected. Prints a PASS/FAIL report with counts, per-step results and the signed receipts. The Docker test asserts under 60 s when the Postgres image is already on the machine (about 45 s on the author's Mac). Judge does not take a mission ID; `verify` and `replay` re-check any recorded mission |
 | CLI (`justrunme`) | Implemented: JSON output, stable exit codes, every refusal named; the whole mission (rehearse, compare, authorize, run, undo, verify, replay) runs through the CLI against real Docker and Postgres in a test |
 | Console UI | Not implemented |
@@ -58,6 +58,29 @@ Limits that matter today:
   your user can reach; nothing detects that. Signatures and receipts prove what
   was decided and recorded, not that rehearsed code was harmless. Run JustRunMe
   under a dedicated OS user or in a VM if plans come from an untrusted agent.
+- Plans an agent proposes through the MCP server are rehearsed in a disposable
+  database copy on an `internal` Docker network. Before any real data is loaded
+  the engine asks Docker to confirm that every network of the copy is internal
+  and refuses to continue otherwise, and a test reads the copy's routing table
+  (no default route, against a non-isolated control). The SQL runs there as the
+  database superuser and can run programs inside that container. What is not
+  tested: a host service listening on the bridge address, IPv6, DNS, Docker
+  Desktop behaviour; and the Compose file's own `include`, `env_file` or bind
+  mounts are not examined.
+- **Open: the rehearsal copy holds a dump of the real database and the agent
+  writes the SQL that runs in it, so the agent has channels to read real data.**
+  Error text reaches it (cut to the first line, 160 characters), and so do
+  numbers (row counts of tables it creates, `content_changed`, the number of
+  attempts). The names of objects the plan created are shown only if the plan's
+  own SQL text contains them, which stops names built from data at run time but
+  not the numeric channels. A masked or sampled copy would close this; it does
+  not exist yet.
+- A rehearsal cannot prove that agent-written SQL behaves the same on the real
+  database: SQL can tell the copy from the real database (for example by its
+  routing table) and act differently. The human who approves a run reads the SQL
+  that will run (next PR); nothing else binds the behaviour.
+- The agent can record a signed plan selection with `compare`; that steers which
+  plan the operator is asked about and authorizes nothing.
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
   removes these yet; clean them up by hand until a pruning command exists.
 - The environment identity in the fingerprint covers the Compose project, db

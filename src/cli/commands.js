@@ -22,6 +22,7 @@ import { plansOnBase } from '../compare/gate.js'
 import { AuthorizationRefused, signatureProblem } from '../authorize/authorization.js'
 import { authorizationPath, authorizeMission, runMission } from '../run/mission.js'
 import { UndoRefused, undoMission } from '../undo/undo.js'
+import { PlanRefused, loadStoredPlan } from '../mission/plans.js'
 import { JudgeEnvironmentError, createBackend } from '../judge/env.js'
 import { runJudge } from '../judge/index.js'
 import { EXIT, verdictExit } from './codes.js'
@@ -39,7 +40,19 @@ export class CliError extends Error {
 
 const CAPTURE_RE = /^cap-\d{14}-[0-9a-f]{6}$/
 
-function contractOf(repoDir) {
+/**
+ * The contract a command works on: the operator's mission file, or with --plan the
+ * stored plan an agent proposed through the MCP server (operator mission + that plan).
+ */
+function contractOf(repoDir, opts = {}) {
+  if (opts.plan !== undefined) {
+    try {
+      return loadStoredPlan(repoDir, opts.plan)
+    } catch (err) {
+      if (err instanceof PlanRefused) throw new CliError(EXIT.CONFIG, err.code, err.message, err.detail)
+      throw err
+    }
+  }
   const file = path.join(repoDir, CONTRACT_FILE)
   if (!existsSync(file)) throw new CliError(EXIT.CONFIG, 'NO_CONTRACT', `${CONTRACT_FILE} not found in the workspace`)
   const parsed = parseContract(readFileSync(file, 'utf8'))
@@ -126,8 +139,8 @@ export function keysInit() {
   return { exit: EXIT.OK, result: { created: !existed, public_key: publicKeyHex(keys.publicKey) } }
 }
 
-export async function rehearseCmd({ repoDir }) {
-  const c = contractOf(repoDir)
+export async function rehearseCmd({ repoDir, opts = {} }) {
+  const c = contractOf(repoDir, opts)
   const { target } = targetOf(repoDir)
   const keys = operatorKeys()
   preflight(repoDir, c.contract.id)
@@ -197,8 +210,8 @@ export function compareCmd({ repoDir, opts, planIds }) {
   }
 }
 
-export async function authorizeCmd({ repoDir }) {
-  const c = contractOf(repoDir)
+export async function authorizeCmd({ repoDir, opts = {} }) {
+  const c = contractOf(repoDir, opts)
   const { target } = targetOf(repoDir)
   const keys = operatorKeys()
   preflight(repoDir, c.contract.id)
@@ -212,8 +225,8 @@ export async function authorizeCmd({ repoDir }) {
   return { exit: EXIT.OK, result: { mission_id: auth.mission_id, plan_id: auth.plan_id, selection: auth.selection ?? null, expires_at: auth.expires_at, fingerprint_hash: auth.fingerprint_hash } }
 }
 
-export async function runCmd({ repoDir }) {
-  const c = contractOf(repoDir)
+export async function runCmd({ repoDir, opts = {} }) {
+  const c = contractOf(repoDir, opts)
   const { target } = targetOf(repoDir)
   const keys = operatorKeys()
   preflight(repoDir, c.contract.id)

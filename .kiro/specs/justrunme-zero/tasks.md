@@ -256,6 +256,29 @@ T19 notes (`justrunme judge`, modules in `src/judge/`, tests in `test/judge.test
 
 ---
 
+## T21 to T26 — Kiro integration and the agent loop (operator-approved plan, 2026-11-17)
+
+Goal: a real Kiro agent repairs a dangerous plan on its own and can run a plan only with a signed approval it cannot give itself. Order of PRs: A (T21 + T22), B (T23), C (T24), D (T25), E (T26). Video and submission text only after the real-agent run (C, D).
+
+Decisions fixed by the operator: official MCP SDK from plain JavaScript (no TypeScript, no build); an approver key the MCP process never loads; agent plans are `sql_migration` steps only, inside the operator's mission; one-time approvals; no connection parameters in any tool; rehearsals of agent SQL only in the disposable copy; PRs may be merged by the agent after green CI and a clean `justrunme-skeptic` review.
+
+| ID | Description | Tests |
+|----|-------------|-------|
+| T21.1 | MCP server (stdio) on `@modelcontextprotocol/server` 2.4.0; tools call the CLI command functions where one exists; closed input schemas; serialized calls; paths and secrets redacted | test/mcp.test.js (plain JSON-RPC client against the real process) |
+| T21.2 | Hook: exact agent-tool names `mcp_justrunme_<tool>` allowed, everything else under the server name denied (`MCP_REENTRY`); `tool_load` is bookkeeping; `migrations` paths checked against the key directory | test/hook.test.js |
+| T21.3 | Agent plans: `src/mission/plans.js`; sql_migration only, inside `allowed_paths`, regular files, no symlinks, size and count limits; stored effective contract re-validated on every load; `--plan` in the CLI | test/plans.test.js (incl. property test) |
+| T21.4 | Live check with Kiro CLI 3.4.0: tool names, hook events | docs/KIRO_LOG.md Run 18 |
+| T22.1 | Structured remediation from the signed report: reason, rule, measured impact, constraints, next action; attempt limit; no promise of safety | test/remediation.test.js, test/mcp.test.js |
+| T22.2 | Agent loop against real Postgres through MCP: DENIED, revise, SAFE, compare, verify | test/demo-mcp.test.js (Linux, Docker) |
+| T23 | `request_approval`, `justrunme approve` / `approvals`, approver key, one-time signed approval bound to plan, fingerprint and report; `run_mission`, `undo_mission`, `verify_recovery` | PR B |
+| T24 | `justrunme-operator` agent, steering, `mcp.json`; full loop in real Kiro CLI | PR C |
+| T25 | Real-agent evaluation, preregistered set, all runs kept | PR D |
+| T26 | `init`, `doctor`, Evidence Timeline | PR E |
+
+- [ ] T21.1 · [ ] T21.2 · [ ] T21.3 · [x] T21.4 · [ ] T22.1 · [ ] T22.2 · [ ] T23 · [ ] T24 · [ ] T25 · [ ] T26
+
+---
+
 ## T20 — Submission
 
 | ID | Description | R-IDs | Tests |
