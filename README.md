@@ -21,7 +21,8 @@ feature until it has a passing end-to-end test.
 | Signed run authorization | Implemented: operator Ed25519 key outside the workspace, bound to the fingerprint, single use |
 | Undo and recovery verification | Implemented for files under `allowed_paths`, contract config files and the named Postgres database; Demo B (failed real run, undo, verification of schema, row counts, checksums, files, images and `/health`, negative controls) passes against real Docker and Postgres. Containers and volumes are verified, not restored |
 | Receipts (Ed25519, hash chain) | Implemented for rehearsal, authorization, run, undo, verification and every hook decision, with a head anchor outside the workspace and ordering rules; a one-byte change anywhere fails verification (property test); 24 parallel hook processes produce one gap-free chain (test) |
-| MCP server, Kiro Power, `justrunme-operator` agent | Not implemented (T17) |
+| Plan comparison (counterfactual replay) | Implemented as a library: stored rehearsals are compared only with equal `base_hash` (same source state and environment), equal rehearsal conditions, operator signatures and matching rehearsal receipts; a fixed rule picks the plan, names the deciding rule, and the choice is a signed `plan_selected` receipt. A replay checks that the choice follows from the signed measurements; it does not measure the database again. When several plans were rehearsed on the current state, only the selected one can be authorized; a selection made on another state grants nothing. Demo A compares its dangerous and safe plans against real Postgres. No `compare` CLI command yet |
+| MCP server, Kiro Power, `justrunme-operator` agent | Not implemented |
 | Judge mode (one command, under 60 s) | Not implemented (T19) |
 | Console UI | Not implemented (T18, after Demo A and B work) |
 | Phone passkey approval (WebAuthn) | Deferred to P2 |

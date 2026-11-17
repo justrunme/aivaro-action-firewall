@@ -28,6 +28,17 @@ import { executeSteps } from './steps.js'
 
 export const planId = (contract) => 'plan-' + hashValue(contract.plan).slice(7, 19)
 
+/** Inputs of the verdict other than the plan and the base state. */
+export function rehearsalConditions(contract, target) {
+  return {
+    protected_tables: [...contract.protected_tables].sort(),
+    impact_thresholds: contract.impact_thresholds ?? {},
+    db_name: target.dbName,
+    // Tests are not run during rehearsal yet: nothing is measured, nothing is claimed.
+    tests_measured: false,
+  }
+}
+
 export function reportPath(repoDir, missionId, id) {
   return path.join(repoDir, STATE_DIR, 'missions', missionId, 'rehearsals', `${id}.json`)
 }
@@ -124,6 +135,9 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
     steps,
     irreversible_actions: contract.irreversible_actions,
     all_reversible: contract.irreversible_actions.length === 0,
+    // What the verdict was measured against (R15 comparability): two plans judged
+    // with different protected tables or thresholds are not comparable.
+    conditions: rehearsalConditions(contract, target),
     database: failure ? null : { name: target.dbName, before, after },
     cleanup,
     ...impact,

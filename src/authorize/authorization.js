@@ -57,7 +57,7 @@ export function entriesForPlan(plan, cwd) {
  * @param {number} a.now
  * @param {number} [a.ttlSeconds]
  */
-export function issueAuthorization({ cwd, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds }) {
+export function issueAuthorization({ cwd, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds, selection = null }) {
   if (!report || report.mission_id !== contract.id) throw new AuthorizationRefused('NO_REHEARSAL', 'no rehearsal report for this mission')
   if (report.contract_hash !== contractHash) throw new AuthorizationRefused('CONTRACT_CHANGED', 'contract changed after rehearsal')
   if (report.verdict !== 'SAFE') {
@@ -77,6 +77,8 @@ export function issueAuthorization({ cwd, contract, contractHash, report, curren
     issued_at: new Date(now).toISOString(),
     expires_at: new Date(now + ttl * 1000).toISOString(),
     entries: entriesForPlan(contract.plan, cwd),
+    // How the plan was chosen (T17): 'selected' names the plan_selected receipt.
+    ...(selection ? { selection } : {}),
     operator_pubkey: publicKeyHex(keys.publicKey),
   }
   return { ...body, signature: signValue(keys.privateKey, body) }

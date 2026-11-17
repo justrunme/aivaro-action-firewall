@@ -487,3 +487,56 @@ Audit lines now carry `evidence: "unsigned_diagnostic"` unless a signed receipt 
 ### Verification (local, macOS)
 
 `test/hook.test.js`: 61 pass, 0 fail. New tests: reanchor crash between receipt and anchor gives `REANCHOR_PENDING`, hook denies, second call completes without a second receipt, hook allows; all four before/after states verify only with the reanchor receipt; an empty lock blocks the hook, recovery without a reason, without a hash or with a wrong hash is refused and leaves the lock untouched, recovery with the inspected hash removes it, keeps the file, records `lock_recovered`, passes policy and the hook allows; changing the kept file afterwards fails verification; a live owner's lock is never recovered; a garbage lock plus anchor behind is recovered in three recorded steps; 50 acquisitions always see a full owner token and leave no temp files. `npm test`: 212 pass, 0 fail (Docker demos skipped on macOS). Docker Demo A and B with `JRM_DOCKER_TESTS=1`: 15 pass, 0 fail, 0 skipped (173 s). `git diff --check`: clean.
+
+---
+
+## Run 15 — T17 Counterfactual Replay (R15)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t17-counterfactual`, from `main` at `d35149a` (PR 8 merged by the operator) |
+
+### Numbering
+
+The operator's order is T16.1, counterfactual replay, CLI with exit codes, final demo. Replay is recorded as T17.R1 to T17.R5 in `tasks.md`; the MCP tasks keep T17.1 to T17.5 and come later. The library covers the core of T18.5; the `justrunme compare` command is CLI work.
+
+### Written
+
+- `src/rehearsal/engine.js`: each report records `conditions` (sorted protected tables, impact thresholds, database name, `tests_measured: false`), signed with the rest of the report.
+- `src/compare/compare.js`: `loadComparable` refuses with a code unless every report exists, is signed by the operator key, belongs to the mission and plan, has `base_hash` equal to the hash of its own fingerprint base, and is the report recorded by the latest rehearsal receipt for its plan in a chain that verifies. Then all `base_hash` must be equal (`BASE_MISMATCH` names every differing component, for example `base.target.project` or a table checksum) and all conditions and report versions equal (`CONDITIONS_MISMATCH`). Plan ids must match `plan-<12 hex>` before any path is built.
+- `src/compare/rank.js`: pure ranking from measured values only (verdict, rows lost per protected table, failing tests, duration, reversibility). Rules R15.4.1 verdict (removes `DATA LOSS` and `FAILED`), R15.4.2 failing tests (reported as not applied while tests are not measured), R15.4.3 irreversible actions (kept if every remaining plan has them), R15.4.4 lowest duration, R15.4.5 smallest `plan_id` in code-unit order. Input is sorted first, so order never matters. The report names the deciding rule and, for every removed plan, the rule and reason.
+- `src/compare/select.js`: `comparePlans` writes a signed comparison file and appends `plan_selected` (verdict `selected` or `none`) with refs to each rehearsal receipt; refusals append `plan_comparison_refused` (not when the chain itself fails to verify). `verifySelection` replays a recorded choice: comparison file hash and signature, each plan bound to its rehearsal receipt (report hash, base, verdict, duration), measured values re-derived from stored reports that still match, and the rule run again.
+- `src/receipts/policy.js`: `plan_selected` must refer to earlier rehearsal receipts of every compared plan with the same report and base, and must not recommend a plan whose rehearsal was not SAFE.
+
+### Decisions
+
+- `FAILED` is excluded with `DATA LOSS`; this is stricter than the R15.4 text.
+- Duration is wall-clock and used as measured, with no tolerance; it is deterministic for the stored inputs, not across re-rehearsals.
+- Reports from before T17 have no conditions and are refused (`CONDITIONS_UNKNOWN`) rather than assumed comparable.
+- The selection gates authorization (added after the operator's review, see below).
+
+### Verification (local, macOS)
+
+`test/compare.test.js`: 15 pass. Covered: each rule and the deciding rule; nothing recommended when nothing survives, with the removing rule per plan; property test (300 runs) that input order never changes the result and that a recommended plan is SAFE, reversible when possible and has the lowest duration of its pool; signed choice with a verifying chain, passing policy and a replay that re-derives both reports; refusal for a changed table checksum, another Compose project with identical data, different protected tables, missing conditions, an edited report, a report signed by another key, a report never recorded, an older report put back, too few, duplicate and malformed plan ids, and a chain that does not verify (nothing written); replay detects an edited comparison file; an operator-signed choice that contradicts the rule is caught by replay and by policy.
+
+Demo A now compares its dangerous and safe plans after both rehearsals on real Postgres: the safe plan is selected by R15.4.1, the dangerous one is removed with "verdict DATA LOSS" and 1 row lost in `orders`, the replay re-derives both reports, and the chain story is rehearsal, plan_selected, authorization, run. `npm test`: 227 pass, 0 fail. Docker Demo A and B with `JRM_DOCKER_TESTS=1`: 15 pass, 0 fail, 0 skipped.
+
+### PR 9 review (operator decisions and evidence checks)
+
+Operator decisions: `FAILED` stays excluded by R15.4.1; `failing_tests: null` is never read as zero failures and R15.4.2 stays "not applied" until tests are measured; the selection must bind authorization, a stale selection must grant nothing, and single-rehearsal mode stays; numbering stays.
+
+Checked in code, gaps closed, each with a test in `test/compare.test.js`:
+
+1. Stale signed report: a report is compared only if it is the one the latest rehearsal receipt for its plan recorded (an older genuine report put back is `NOT_IN_CHAIN`). For authorization, a selection counts only for the current base (below).
+2. Changed conditions or measured values: both are inside the signed report body; editing `conditions`, `rows_lost` or `duration_ms` is `REPORT_INVALID`. The measured rows are copied into the signed comparison file.
+3. Replay of every plan: `verifySelection` already walked every compared plan. Gap found: it did not check that the plan sets agree, so an extra row in `plans` would have taken part in the ranking unchecked. Now the plan sets of receipt, comparison file, measured rows and refs must be equal, and the report hashes of receipt and file must match. Tested with an operator-signed file whose losing plan has a changed duration (two findings for the loser) and one with an extra row.
+4. Selection from another state: new `src/compare/gate.js`, called by `authorizeMission` after the verdict and fidelity checks, on a verified chain. Only the latest `plan_selected` with the current `base_hash` counts. It must replay, recommend a plan, recommend this plan (`PLAN_NOT_SELECTED`), have compared exactly this report (`SELECTION_OUTDATED`) and cover every plan whose latest rehearsal is on this base (`SELECTION_INCOMPLETE`). Without a selection for this base: one plan is single-rehearsal mode; several plans are `COMPARISON_REQUIRED`. A selection on another base grants nothing and blocks nothing. The plan's latest rehearsal must be this report on this base (`REHEARSAL_NOT_ON_BASE`). The signed authorization carries `selection: { mode, receipt }`; the `authorization_issued` receipt carries the mode and a ref to the selection. Policy checks the same binding from the chain alone.
+5. `plan_comparison_refused` is a record only: it grants nothing and does not replace a selection. Retrying with a smaller set of plans cannot help: a comparison that leaves out a plan rehearsed on the same base is `SELECTION_INCOMPLETE`, and so is a selection made before a new plan was rehearsed.
+
+Demo A: authorizing the safe plan before the comparison is `COMPARISON_REQUIRED`; after it, the authorization carries `selection.mode = selected` and the `plan_selected` receipt. Demo B (one plan) runs in single-rehearsal mode unchanged.
+
+Residual: replay proves that the choice follows from signed measurements, not that the measurements were right. `rows_lost` is measured once, in the rehearsal copy (`measureDatabase` before and after the plan, `buildImpact` in `src/rehearsal/impact.js`), signed with the report, and the comparison reads it only after the report signature and its rehearsal receipt check out. Replay does not measure again. When a stored report has since been replaced, replay checks its verdict and duration against the rehearsal receipt but cannot re-read rows lost; `reports_rechecked` says how many reports were re-read.
+
+Verification (local, macOS): `test/compare.test.js` 24 pass; `npm test` 236 pass, 0 fail; Docker Demo A and B with `JRM_DOCKER_TESTS=1` 15 pass, 0 fail, 0 skipped.

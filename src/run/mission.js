@@ -13,13 +13,15 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from '
 import path from 'node:path'
 import { hashValue } from '../util/canonical.js'
 import { computeFingerprint } from '../fidelity/fingerprint.js'
-import { compareFingerprints } from '../fidelity/gate.js'
+import { baseHash, compareFingerprints } from '../fidelity/gate.js'
 import { STATE_DIR } from '../fidelity/source.js'
+import { selectionGate } from '../compare/gate.js'
+import { verifySelection } from '../compare/select.js'
 import { AuthorizationRefused, issueAuthorization, signatureProblem } from '../authorize/authorization.js'
 import { executeSteps } from '../rehearsal/steps.js'
 import { captureState } from '../capture/capture.js'
 import { loadReport, planId, reportSignatureProblem } from '../rehearsal/engine.js'
-import { appendReceipt, findLast, readChain } from '../receipts/chain.js'
+import { appendReceipt, findLast, readChain, verifyChain } from '../receipts/chain.js'
 
 export const authorizationPath = (repoDir) => path.join(repoDir, STATE_DIR, 'authorization.json')
 
@@ -49,10 +51,23 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
     const problem = reportSignatureProblem(report, keys.publicKey)
     if (problem) throw new AuthorizationRefused('REPORT_INVALID', problem)
     if (report.plan_id !== plan_id) throw new AuthorizationRefused('REPORT_INVALID', 'report is for a different plan')
-    const rehearsal = findLast(readChain(repoDir, contract.id), (r) => r.kind === 'rehearsal' && r.subject?.report_hash === hashValue(report))
+    // Decisions below read the chain, so it must verify first.
+    const chain = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId: contract.id })
+    if (!chain.ok) throw new AuthorizationRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}`)
+    const reportHash = hashValue(report)
+    const rehearsal = findLast(chain.receipts, (r) => r.kind === 'rehearsal' && r.subject?.report_hash === reportHash)
     if (!rehearsal) throw new AuthorizationRefused('REPORT_INVALID', 'no rehearsal receipt matches this report')
     const currentFingerprint = await computeFingerprint({ repoDir, target: realTargetOf(repoDir, target), contract, contractHash })
-    const auth = issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds })
+    // Verdict and fidelity first (issueAuthorization is pure); then the selection gate on the current base.
+    issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds })
+    const selection = selectionGate({
+      receipts: chain.receipts,
+      planId: plan_id,
+      reportHash,
+      baseHash: baseHash(currentFingerprint),
+      replay: (receiptHash) => verifySelection({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId: contract.id, receiptHash }),
+    })
+    const auth = issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds, selection: { mode: selection.mode, receipt: selection.receipt } })
     mkdirSync(path.join(repoDir, STATE_DIR), { recursive: true })
     writeFileSync(authorizationPath(repoDir), JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 })
     appendReceipt({
@@ -61,8 +76,16 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
       missionId: contract.id,
       kind: 'authorization_issued',
       verdict: 'allow',
-      subject: { plan_id, authorization_hash: hashValue(auth), fingerprint_hash: auth.fingerprint_hash, expires_at: auth.expires_at },
-      refs: { rehearsal: rehearsal.hash },
+      subject: {
+        plan_id,
+        authorization_hash: hashValue(auth),
+        fingerprint_hash: auth.fingerprint_hash,
+        base_hash: baseHash(currentFingerprint),
+        expires_at: auth.expires_at,
+        selection_mode: selection.mode,
+        stale_selection_ignored: selection.stale_selection_ignored,
+      },
+      refs: { rehearsal: rehearsal.hash, ...(selection.receipt ? { selection: selection.receipt } : {}) },
       now,
     })
     return auth
