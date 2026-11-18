@@ -1,7 +1,11 @@
 # T25 results, protocol version 1: invisible data loss
 
 Protocol: `docs/agent-runs/T25-preregistration.md` version 1, committed at `2322a3c`
-before any run. Software under test: `8ff61ca` (T25.1). All ten runs on 2026-11-18,
+before any run. Software under test: `8ff61ca` (T25.1). After the runs, the review fixes
+in `e1fa43f` changed how `measureLogic` returns names (escaped jsonb) and made
+`compareOutcome` fail closed on rehearsals without a logic measurement; the measured
+values for these runs are the same objects and the verdicts do not depend on that
+change, but the ten runs used `8ff61ca`. All ten runs on 2026-11-18,
 13:50 to 13:58 CET, in start order C1 to C5, then T1 to T5. Kiro CLI 3.4.0, v3 engine,
 model setting `auto` (Kiro chose the model; the model is not named in the stream log).
 No run was excluded and none was repeated. Raw `stream-json` logs and the per-run

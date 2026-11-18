@@ -8,7 +8,7 @@
       "matcher": "\\.(js|mjs)$",
       "action": {
         "type": "command",
-        "command": "npm test --silent"
+        "command": "npm run test:smoke --silent"
       }
     }
   ]

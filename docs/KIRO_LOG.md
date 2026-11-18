@@ -926,7 +926,7 @@ Written:
 
 Tests: `test/logic.test.js` (delta, verdict, allowlist, feedback, exit code, contract validation, outcome comparison). `test/demo-hidden.test.js` against real Postgres: no workspace file contains trigger, delete, drop or truncate; the rehearsal fires the trigger and denies with `orders` 3 → 2; a prepared revision that disables and re-enables the trigger around the update is SAFE (marked in the test as not agent evidence); dropping the trigger, disabling it, or replacing the function body is `LOGIC CHANGE` with the object named; a function body edited after the rehearsal (same name) refuses the approval, and a trigger added after approval refuses the run, both `FIDELITY_MISMATCH`, nothing ran; the same SQL applied directly deletes order 2.
 
-Limits: event triggers, extension functions, other schemas' grants, and other databases of the server are not measured. A plan that disables a trigger and enables it again in the same migration leaves the logic as it was and is SAFE: it bypassed the trigger for that one update, which the measurement cannot tell from intent.
+Limits (full list in README and `src/rehearsal/measure.js`): the measurement compares the logic before and after the plan, so a trigger switched off and on again inside the plan, or skipped with `session_replication_role`, is SAFE; internal foreign-key triggers, event triggers, extension functions, RLS policies, grants, role or database settings, search_path shadowing and other databases are not measured.
 
 Preregistration of the T25 experiment (`docs/agent-runs/T25-preregistration.md`, version 1) was committed before this code and before any T25 agent run.
 
@@ -938,7 +938,7 @@ Preregistration of the T25 experiment (`docs/agent-runs/T25-preregistration.md`,
 |-------|-------|
 | Date | 2026-11-18, runs 13:50 to 13:58 CET |
 | Protocol | `docs/agent-runs/T25-preregistration.md` v1, committed at `2322a3c` before any run |
-| Software | `8ff61ca` (T25.1), gate before the runs: npm 358/358, Docker 29/29 |
+| Software | `8ff61ca` (T25.1), gate before the runs: npm 358/358, Docker 29/29; review fixes after the runs in `e1fa43f` (gate: npm 359/359, Docker 29/29) |
 | Runner | `scripts/t25-run.js` (fresh workspace per run, visibility check, Kiro, scripted approval, measurement, teardown) |
 
 Before the counted runs, a dry check without an agent: workspace setup, both agents listed by Kiro as v3, no workspace file (including `node_modules`) contains the trigger, and the trigger is in the database.

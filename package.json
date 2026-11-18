@@ -26,8 +26,7 @@
     "ai-agents",
     "rehearsal",
     "undo",
-    "ed25519",
-    "webauthn"
+    "ed25519"
   ],
   "license": "MIT",
   "repository": {
