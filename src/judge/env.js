@@ -23,7 +23,7 @@ import { down, psql, up, writeNoPortsOverride } from '../rehearsal/compose.js'
 import { measureDatabase } from '../rehearsal/measure.js'
 import { chainPath, receiptHash, verifyChain } from '../receipts/chain.js'
 import { loadPublicKey, publicKeyHex } from '../receipts/keys.js'
-import { run } from '../util/exec.js'
+import { groupAlive, killGroup, run } from '../util/exec.js'
 
 const DEMO_DIR = fileURLToPath(new URL('../../demo/', import.meta.url))
 const CLI_FILE = fileURLToPath(new URL('../cli/index.js', import.meta.url))
@@ -86,16 +86,40 @@ async function pinLocalDocker(env) {
 /** Names that identify what this judge run created, for removal when it ends early. */
 export const projectNames = (suffix) => ({ stack: `jrm-judge-${suffix}`, rehearsalPrefix: `jrm-reh-judge${suffix}-` })
 
-/** Containers, volumes and networks of the rehearsal copies the child CLI started. */
+/**
+ * Containers, volumes and networks of the rehearsal copies the child CLI started.
+ * @returns {Promise<number>} how many objects were found (and removal was attempted for)
+ */
 async function sweepRehearsalCopies(prefix, env) {
+  let found = 0
   for (const [list, rm] of [
     [['ps', '-a', '-q', '--filter', `name=${prefix}`], ['rm', '-f', '-v']],
     [['volume', 'ls', '-q', '--filter', `name=${prefix}`], ['volume', 'rm', '-f']],
     [['network', 'ls', '-q', '--filter', `name=${prefix}`], ['network', 'rm']],
   ]) {
     const ids = (await run('docker', list, { env, timeoutMs: 30000 })).stdout.split('\n').filter(Boolean)
+    found += ids.length
     if (ids.length > 0) await run('docker', [...rm, ...ids], { env, timeoutMs: 60000 })
   }
+  return found
+}
+
+const pause = (ms) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * Sweep until the daemon is quiet. A `docker compose up` that was killed may have
+ * requests in flight that the daemon still completes (a volume can appear after a
+ * single sweep; CI saw exactly that). Stop after two clean sweeps in a row, or at
+ * the deadline (then whatever is left is reported by the caller's own check).
+ */
+export async function sweepUntilQuiet(sweep, { deadlineMs = 30000, intervalMs = 500, now = Date.now, sleep = pause } = {}) {
+  const end = now() + deadlineMs
+  let clean = 0
+  while (clean < 2 && now() < end) {
+    clean = (await sweep()) === 0 ? clean + 1 : 0
+    if (clean < 2) await sleep(intervalMs)
+  }
+  return clean >= 2
 }
 
 /** @returns {Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<void> }>} */
@@ -122,9 +146,13 @@ export async function createBackend({ env = process.env } = {}) {
     child.on('close', () => children.delete(child))
   }
   const cleanup = async () => {
-    for (const c of children) c.kill('SIGKILL')
+    // The CLI children lead their own process groups: this stops them and the docker
+    // processes they started, then waits (bounded) until those groups are gone.
+    const groups = [...children].map((c) => c.pid).filter(Boolean)
+    for (const c of children) killGroup(c)
+    for (let i = 0; i < 50 && groups.some(groupAlive); i++) await pause(100)
     if (real && real.env && !stackDown) stackDown = (await down(real)).code === 0
-    await sweepRehearsalCopies(names.rehearsalPrefix, cleanEnv)
+    await sweepUntilQuiet(() => sweepRehearsalCopies(names.rehearsalPrefix, cleanEnv))
     for (const d of [repoDir, home, overrideFile && path.dirname(overrideFile)]) if (d) rmSync(d, { recursive: true, force: true })
   }
   // Installed before anything is created: Ctrl-C during the first `up` removes it too.
@@ -170,7 +198,7 @@ export async function createBackend({ env = process.env } = {}) {
     }
 
     const cli = async (args, environment) => {
-      const r = await run(process.execPath, [CLI_FILE, ...args, '--repo', repoDir], { env: environment, timeoutMs: 120000, onSpawn: track })
+      const r = await run(process.execPath, [CLI_FILE, ...args, '--repo', repoDir], { env: environment, timeoutMs: 120000, group: true, onSpawn: track })
       let out = null
       try {
         out = JSON.parse(r.stdout)
