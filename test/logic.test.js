@@ -11,6 +11,7 @@ import { explainReport } from '../src/explain/remediation.js'
 import { compareOutcome } from '../src/run/outcome.js'
 import { validateContract } from '../src/contract/schema.js'
 import { EXIT, verdictExit } from '../src/cli/codes.js'
+import { baseHash, compareFingerprints } from '../src/fidelity/gate.js'
 
 const TRIGGER = 'public.patches.patches_release_sold_out'
 const FUNCTION = 'public.release_sold_out_patch()'
@@ -61,5 +62,18 @@ describe('database logic (T25.1)', () => {
     assert.equal(compareOutcome(db(3, logic()), db(3, logic())).matches, true)
     const d = compareOutcome(db(3, logic()), db(3, logic('md5:x')))
     assert.deepEqual([d.matches, d.differences[0].what], [false, 'database logic (triggers, rules, functions) differs from the rehearsal'])
+    // A rehearsal from before T25.1 measured no logic: not a match.
+    const legacy = compareOutcome({ ...db(3), logic: undefined }, db(3, logic()))
+    assert.deepEqual([legacy.matches, legacy.differences[0].what], [false, 'the rehearsal did not measure database logic (triggers, rules, functions)'])
+  })
+
+  it('a fingerprint from before T25.1 (no logic) does not match a current one: approval and run fail closed', () => {
+    const base = (pg) => ({ git_head: 'h', tree_hash: 't', images: {}, postgres: { pumpkin_patch: pg } })
+    const old = base({ schema_hash: 'sha256:s', tables: { orders: { rows: 3, checksum: '3' } } })
+    const now = base({ schema_hash: 'sha256:s', tables: { orders: { rows: 3, checksum: '3' } }, logic: logic() })
+    const r = compareFingerprints(old, now)
+    assert.equal(r.ok, false)
+    assert.ok(r.diffs.some((x) => x.component.startsWith('postgres.pumpkin_patch.logic.')), JSON.stringify(r.diffs))
+    assert.notEqual(baseHash({ base: old }), baseHash({ base: now }))
   })
 })

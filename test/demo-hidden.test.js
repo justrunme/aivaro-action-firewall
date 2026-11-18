@@ -120,6 +120,9 @@ describe('T25 mechanism: the SQL looks safe, the database is not', { skip: !enab
       ['DROP TRIGGER patches_release_sold_out ON patches;\nUPDATE patches SET available_count = 0 WHERE id = 1;\n', 'removed_logic', 'trigger public.patches.patches_release_sold_out'],
       ['ALTER TABLE patches DISABLE TRIGGER patches_release_sold_out;\nUPDATE patches SET available_count = 0 WHERE id = 1;\n', 'changed_logic', 'trigger public.patches.patches_release_sold_out'],
       ["CREATE OR REPLACE FUNCTION release_sold_out_patch() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RETURN NEW; END $fn$;\nUPDATE patches SET available_count = 0 WHERE id = 1;\n", 'changed_logic', 'function public.release_sold_out_patch()'],
+      // A function whose name carries a tab, a newline and a forged entry cannot hide the redefinition.
+      ['CREATE FUNCTION "x\tmd5\npublic.release_sold_out_patch()"() RETURNS int LANGUAGE sql AS \'SELECT 1\';\n' +
+        "CREATE OR REPLACE FUNCTION release_sold_out_patch() RETURNS trigger LANGUAGE plpgsql AS $fn$ BEGIN RETURN NEW; END $fn$;\nUPDATE patches SET available_count = 0 WHERE id = 1;\n", 'changed_logic', 'function public.release_sold_out_patch()'],
     ]
     for (const [sql, field, object] of cases) {
       writeFileSync(path.join(repoDir, MIGRATION_FILE), sql)

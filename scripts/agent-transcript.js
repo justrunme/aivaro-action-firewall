@@ -82,8 +82,10 @@ const summarize = (c) => {
   return scrub(String(c.output ?? '').slice(0, 200)).replace(/\s+/g, ' ')
 }
 
-// No trailing whitespace: the transcript is committed and `git diff --check` must pass.
-const print = (s) => console.log(s.split('\n').map((l) => l.trimEnd()).join('\n'))
+// No trailing whitespace and no blank lines at the end: the transcript is committed and
+// `git diff --check` must pass.
+const lines = []
+const print = (s) => lines.push(...s.split('\n').map((l) => l.trimEnd()))
 for (const item of order) {
   if (item.kind === 'text') print(`AGENT: ${scrub(item.text)}\n`)
   else if (item.kind === 'error') print(`ERROR: ${scrub(item.text)}\n`)
@@ -94,3 +96,6 @@ for (const item of order) {
     print('')
   }
 }
+while (lines.length > 0 && lines.at(-1) === '') lines.pop()
+// Blank lines inside an agent message are kept but never doubled.
+process.stdout.write(lines.filter((l, i) => !(l === '' && lines[i - 1] === '')).join('\n') + '\n')

@@ -4,8 +4,10 @@
  * Pure function of the measurements. Verdict rules, in order:
  *   FAILED     a rehearsed step did not complete
  *   DATA LOSS  a table or a column disappeared, or a protected table lost rows
- *   LOGIC CHANGE  an existing trigger, rule or function was removed or redefined (or a
- *                 trigger switched off) and the contract's allowed_logic_changes does not name it
+ *   LOGIC CHANGE  after the plan, an existing trigger, rule or function is gone, redefined,
+ *                 or (a trigger) left switched off, and the contract's allowed_logic_changes
+ *                 does not name it. A trigger switched off and on again inside the plan, or
+ *                 skipped with session_replication_role, leaves no trace here (measure.js).
  *   SAFE       otherwise
  */
 
