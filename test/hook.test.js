@@ -323,6 +323,22 @@ describe('hook: bypass categories (R10.2, R10.3, R10.4, R10.7)', () => {
     assert.equal(evaluate({ tool_name: 'read_file', tool_input: { path: 'package.json' } }, c).decision, 'allow')
   })
 
+  it('PR C review: a search of a directory that contains the key directory is denied; reads stay inside the workspace', () => {
+    const keyHome = mkdtempSync(path.join(os.tmpdir(), 'jrm-keys-'))
+    dirs.push(keyHome)
+    const c = { ...ctx, keyHome }
+    // The key directory is a sibling of the workspace in the system temp directory (scripts/agent-workspace.js).
+    for (const input of [{ path: os.tmpdir() }, { path: path.dirname(keyHome) }, { directory: path.dirname(keyHome) }, { path: '/' }]) {
+      assert.equal(evaluate({ tool_name: 'grep_search', tool_input: { query: 'passphrase', ...input } }, c).category, 'PROTECTED_PATH', JSON.stringify(input))
+    }
+    // Without a key directory in reach, a read outside the workspace is still refused.
+    for (const input of [{ path: '..' }, { path: '/etc' }, { directory: '..' }, { query: 'x', includePattern: '../**' }, { query: 'x', pattern: '/etc/*' }]) {
+      assert.equal(evaluate({ tool_name: 'grep_search', tool_input: input }, ctx).category, 'OUT_OF_CONTRACT', JSON.stringify(input))
+    }
+    assert.equal(evaluate({ tool_name: 'list_directory', tool_input: { path: '.' } }, c).decision, 'allow')
+    assert.equal(evaluate({ tool_name: 'grep_search', tool_input: { query: 'x', includePattern: 'demo/**/*.sql' } }, c).decision, 'allow')
+  })
+
   it('analyzeShell reports scripts and categories', () => {
     assert.deepEqual(analyzeShell('node demo/migrations/run.js').scripts, ['demo/migrations/run.js'])
     assert.equal(analyzeShell('docker compose ps').category, null)

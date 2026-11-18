@@ -85,15 +85,46 @@ function protectedRoots(root) {
   return roots
 }
 
-/** The operator key directory is never readable or writable through agent tools. */
+// Fields that name a directory a read tool searches or lists (besides PATH_KEYS), and glob fields.
+const DIR_KEYS = ['directory', 'dir', 'cwd', 'root', 'folder']
+const GLOB_KEYS = ['pattern', 'glob', 'includePattern', 'excludePattern', 'include', 'exclude']
+
+/**
+ * The operator key directory is never readable or writable through agent tools: not a
+ * path inside it, and not a directory that contains it (a recursive search of `..` or
+ * of the temp directory would otherwise list or grep the key files).
+ */
 function touchesKeyHome(input, ctx) {
   if (!ctx.keyHome) return false
   const home = realResolve(path.resolve(ctx.keyHome)).toLowerCase()
   const spelled = path.resolve(ctx.keyHome).toLowerCase()
   const root = realpathSync(ctx.cwd)
   const command = typeof input.command === 'string' ? input.command.toLowerCase() : ''
-  return collectPaths(input).some((p) => inside(realResolve(path.resolve(root, p)).toLowerCase(), home)) ||
+  const paths = [...collectPaths(input), ...DIR_KEYS.filter((k) => typeof input[k] === 'string').map((k) => input[k])]
+  return paths.some((p) => {
+    const abs = realResolve(path.resolve(root, p)).toLowerCase()
+    // `abs` is the key directory, inside it, or contains it (also the file system root).
+    const down = path.relative(abs, home)
+    return inside(abs, home) || down === '' || (!down.startsWith('..') && !path.isAbsolute(down))
+  }) ||
     (command !== '' && (command.includes(home) || command.includes(spelled) || command.includes('.justrunme/operator') || command.includes('operator.key')))
+}
+
+/**
+ * Read tools stay inside the workspace (T24 review): every path or directory they name
+ * resolves under the workspace root, and glob fields are relative without `..`.
+ * @returns {string | null} problem
+ */
+function readOutsideWorkspace(input, ctx) {
+  const root = realpathSync(ctx.cwd)
+  const paths = [...collectPaths(input), ...DIR_KEYS.filter((k) => typeof input[k] === 'string').map((k) => input[k])]
+  for (const p of paths) if (!inside(realResolve(path.resolve(root, p)), root)) return 'read outside the workspace'
+  for (const k of GLOB_KEYS) {
+    const g = input[k]
+    if (typeof g !== 'string') continue
+    if (path.isAbsolute(g) || g.startsWith('~') || g.split(/[\\/]/).includes('..')) return `pattern ${k} reaches outside the workspace`
+  }
+  return null
 }
 
 function checkWrite(input, ctx) {
@@ -135,6 +166,10 @@ export function evaluate(event, ctx) {
   const name = event.tool_name.toLowerCase()
   const kind = classify(name)
   if (touchesKeyHome(input, ctx)) return deny('PROTECTED_PATH', 'access to the operator key directory')
+  if (kind === 'read') {
+    const problem = readOutsideWorkspace(input, ctx)
+    if (problem) return deny('OUT_OF_CONTRACT', problem)
+  }
   if (kind === 'read' || kind === 'noop') return { decision: 'allow', category: 'ALLOWED', reason: `${kind} tool` }
   // The agent's own tools of the JustRunMe MCP server (exact names only). The server
   // enforces fidelity, selection, signed authorization and receipts itself; any other
