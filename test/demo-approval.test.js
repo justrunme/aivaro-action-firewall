@@ -193,6 +193,19 @@ describe('Demo approval: the agent asks, the operator approves once, the run mat
     const kinds = (await server.call('get_receipt', {})).payload
     assert.equal(kinds.chain_ok, true)
 
+    // T27.1: the story from the signed chain and the history archive, for the operator.
+    const story = operator('history')
+    assert.equal(story.code, 0, JSON.stringify(story.out))
+    const s = story.out.result
+    assert.deepEqual(s.versions.map((v) => [v.plan_id, v.verdict, v.impact.rows_lost]), [[denied.plan_id, 'DATA LOSS', 1], [safe.plan_id, 'SAFE', 0]])
+    assert.deepEqual(s.versions.map((v) => v.files[0].sql), [DANGEROUS, SAFE])
+    assert.ok(s.versions[0].impact.schema_delta.removed_columns.some((c) => c.startsWith('orders.')), 'the denied version removed a column')
+    assert.deepEqual(s.requests.map((q) => [q.request_id, q.state, q.authorization.passphrase_source]), [[asked.request_id, 'approved', 'env']])
+    assert.deepEqual(s.runs.map((r) => [r.verdict, r.matches_rehearsal, r.request_id, r.undo?.verdict]), [['completed', true, asked.request_id, 'undo']])
+    assert.equal(s.runs[0].undo.verification, 'PASS')
+    assert.deepEqual(s.links.map((l) => [l.ok, l.links.map((x) => x.code)]), [[true, ['APPROVED_VERSION_SAFE', 'AUTHORIZED_AS_REQUESTED', 'EXECUTED_AS_AUTHORIZED', 'RESULT_AS_REHEARSED']]])
+    assert.deepEqual([s.history.ok, s.history.versions], [true, 2])
+
     const text = JSON.stringify([asked, early, ran, undone, checked, replay])
     assert.ok(!text.includes(repoDir) && !text.includes(home), 'no local path in anything the agent sees')
     assert.ok(!text.includes(passphrase))

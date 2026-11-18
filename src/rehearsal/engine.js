@@ -26,6 +26,7 @@ import { assertIsolated, down, dump, psql, up, writeNoPortsOverride } from './co
 import { measureDatabase } from './measure.js'
 import { buildImpact } from './impact.js'
 import { executeSteps } from './steps.js'
+import { archiveRehearsal, snapshotPlanFiles } from '../history/archive.js'
 
 export const planId = (contract) => 'plan-' + hashValue(contract.plan).slice(7, 19)
 
@@ -104,6 +105,9 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
   const started = clock()
   const realTarget = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
   const fingerprint = await computeFingerprint({ repoDir, target: realTarget, contract, contractHash })
+  // The SQL as rehearsed, by content hash (T27.1 plan history): the plan id names the
+  // file paths only, so two versions of a file share an id but not these hashes.
+  const snapshot = snapshotPlanFiles(contract.plan, repoDir)
   const id = planId(contract)
   const copy = await createWorkspaceCopy(repoDir)
   const suffix = randomBytes(4).toString('hex')
@@ -161,6 +165,7 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
     // What the verdict was measured against (R15 comparability): two plans judged
     // with different protected tables or thresholds are not comparable.
     conditions: rehearsalConditions(contract, target),
+    plan_files: snapshot.files,
     database: failure ? null : { name: target.dbName, before, after },
     cleanup,
     ...impact,
@@ -170,6 +175,8 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
   const file = reportPath(repoDir, contract.id, id)
   mkdirSync(path.dirname(file), { recursive: true })
   writeFileSync(file, JSON.stringify(signed, null, 2) + '\n')
+  // Before the receipt: a receipt never names a version the archive does not hold.
+  archiveRehearsal(repoDir, contract.id, signed, snapshot.blobs)
   try {
     appendReceipt({
       repoDir,
@@ -177,7 +184,7 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
       missionId: contract.id,
       kind: 'rehearsal',
       verdict: signed.verdict,
-      subject: { plan_id: id, report_hash: hashValue(signed), base_hash: signed.base_hash, duration_ms: signed.duration_ms, evidence: signed.evidence },
+      subject: { plan_id: id, report_hash: hashValue(signed), base_hash: signed.base_hash, duration_ms: signed.duration_ms, evidence: signed.evidence, files_hash: hashValue(signed.plan_files) },
     })
   } catch (err) {
     // The verdict is still returned; without its receipt the report cannot be

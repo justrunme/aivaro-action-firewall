@@ -15,6 +15,7 @@
  *   justrunme approvals [request_id]
  *   justrunme approve <request_id> --confirm <plan_id> [--passphrase-stdin]
  *   justrunme deny <request_id> --reason "<text>"
+ *   justrunme history                       # versions, approvals, runs and the links between them
  * Common options: --repo <dir> (default: current directory), --mission <id>, --text.
  */
 
@@ -45,7 +46,7 @@ const OPTIONS = {
   help: { type: 'boolean', short: 'h', default: false },
 }
 
-const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny> [options]'
+const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny|history> [options]'
 
 async function dispatch(command, rest, repoDir, opts) {
   const ctx = { repoDir, opts }
@@ -86,6 +87,8 @@ async function dispatch(command, rest, repoDir, opts) {
       return cmd.approveCmd({ ...ctx, id: rest[0] })
     case 'deny':
       return cmd.denyCmd({ ...ctx, id: rest[0] })
+    case 'history':
+      return cmd.historyCmd(ctx)
   }
   throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
 }

@@ -848,3 +848,28 @@ Cause: on SIGINT the judge killed its child CLI with SIGKILL, but the `docker co
 Fix (`src/util/exec.js`, `src/judge/env.js`): the judge's CLI children now lead their own process groups (`run(..., { group: true })`); cleanup kills each group whole, waits (up to 5 s) until the groups are gone, and then sweeps the rehearsal-copy prefix until two sweeps in a row find nothing, with a 30 s limit. The Docker test was not changed or relaxed. Unit tests (`test/cleanup.test.js`): a child's grandchild dies with its group; a volume that appears after a clean sweep is still removed; the sweep stops at its deadline. Local: the interrupt test passed three times in a row on macOS with no volume left; the Linux check is CI, run more than once.
 
 Linux check of the cleanup fix: the interrupt test passed in all four `Test (Node 24)` runs on GitHub Actions (two runs of the head commit, both rerun once). One of the four runs failed on another test: `demo-a.test.js` "an UPDATE that keeps the row count still blocks authorization" rehearsed `CREATE INDEX` as `FAILED` instead of `SAFE` after 14 s, on a runner that was about 1.5 minutes slower than the others. The assertion did not print the reason. Likely cause, not proven from that log: the demo healthcheck ran `pg_isready` over the Unix socket, which also answers while the postgres image runs its temporary init server (socket only) before restarting it, so a rehearsal copy could be "healthy" and then lose its connection during the dump load or the step. Fix: `pg_isready -h 127.0.0.1` (the init server does not listen on TCP), and the assertion now prints the evidence. Not done: skipping or retrying the test.
+
+---
+
+## Run 21 — T27.1: plan history (Console PR, first part)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-18 |
+| Branch | `kiro/t27-console`, from `main` at `0c91e8c` (PR 14 merged) |
+
+Why: in run 1 of the real agent (Run 20) the agent edited the SQL file and rehearsed again; the plan id names paths only, so the DENIED report was replaced by the SAFE one. The Console has to show Plan A next to Plan B from signed data.
+
+Decision (operator, 2026-11-18): keep `plan_id` as it is (authorization, run, comparison and chain policy depend on it) and keep every version immutably, linked to the signed chain, with tampering and deletion detected.
+
+Written:
+
+- `src/history/archive.js`: `reports/<report hash>.json` and `sql/<sha256>.sql` under `.justrunme/missions/<id>/history/`, written once (temporary file, rename, mode 0444). `verifyHistory` walks the verified chain: each `rehearsal` receipt's report must be present and hash to its name, its `plan_files` must hash to the receipt's `files_hash`, and every SQL file it names must be present and unchanged (`HISTORY_MISSING`, `HISTORY_TAMPERED`, with the receipt's seq). Receipts without `files_hash` (written before this change) are counted as legacy.
+- `src/rehearsal/engine.js`: the signed report gets `plan_files` (path and SHA-256 of each SQL file, taken with the fingerprint); the archive is written before the receipt; the receipt gets `files_hash`.
+- `src/run/outcome.js` and `src/run/mission.js`: the comparison of the real result with the rehearsal moved from the MCP tool into `runMission`; `run_result` records `plan_files_hash` (the files checked against the authorization just before executing), `report_hash`, `matches_rehearsal` and the number of differences. The MCP tool reports what the run recorded.
+- `src/history/story.js` and `justrunme history`: versions with SQL and measured impact, requests and their answers, runs with undo and verification, and four links per approved request: `APPROVED_VERSION_SAFE`, `AUTHORIZED_AS_REQUESTED`, `EXECUTED_AS_AUTHORIZED`, `RESULT_AS_REHEARSED`. Exit 30 when the chain, the archive or a link does not hold.
+- `justrunme verify` (and so MCP `replay_mission`) now also fails when the archive does not match the chain.
+
+Tests: `test/history.test.js` (two versions under one plan id stay readable; a deleted report, an edited SQL file and a report filed under another name are each reported; legacy receipts pass; the story's links hold for A denied, B approved and run; a run of other files and a result unlike the rehearsal break the named links; approving a non-SAFE version is reported). `test/demo-approval.test.js` case 1 now reads `justrunme history` after the real run and undo: Plan A `DATA LOSS` with 1 row lost and a removed column, Plan B `SAFE`, the request approved (`passphrase_source: env`), the run `completed` with `matches_rehearsal: true`, undone and verified, all four links hold, two archived versions.
+
+Limits: the archive is a folder; anyone with the operator's OS user can delete it, and then `verify` and `history` report the gap but cannot restore it. The same plan id with two versions is tested in the unit test; the Docker test uses two file names.
