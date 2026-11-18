@@ -5,6 +5,8 @@
  * Reports table names and counts only, never row values.
  */
 
+import { logicDelta } from '../rehearsal/measure.js'
+
 /**
  * @param {{ schema_hash: string, tables: Record<string, { rows: number, checksum: string }> } | null | undefined} predicted
  * @param {{ schema_hash: string, tables: Record<string, { rows: number, checksum: string }> }} actual
@@ -14,6 +16,12 @@ export function compareOutcome(predicted, actual) {
   if (!predicted) return { matches: false, differences: [{ what: 'no rehearsal measurement to compare with' }] }
   const differences = []
   if (actual.schema_hash !== predicted.schema_hash) differences.push({ what: 'schema differs from the rehearsal' })
+  // T25: triggers, rules and functions, when both measurements have them.
+  // A rehearsal from before T25.1 has no logic measurement: that is not a match.
+  if (actual.logic && !predicted.logic) differences.push({ what: 'the rehearsal did not measure database logic (triggers, rules, functions)' })
+  else if (predicted.logic && actual.logic && JSON.stringify(logicDelta(predicted.logic, actual.logic)) !== JSON.stringify({ removed: [], changed: [], added: [] })) {
+    differences.push({ what: 'database logic (triggers, rules, functions) differs from the rehearsal' })
+  }
   for (const t of [...new Set([...Object.keys(predicted.tables), ...Object.keys(actual.tables)])].sort()) {
     const a = predicted.tables[t]
     const b = actual.tables[t]

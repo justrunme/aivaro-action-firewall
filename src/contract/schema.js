@@ -21,7 +21,9 @@ const TOP_REQUIRED = [
   'plan',
   'resources',
 ]
-const TOP_OPTIONAL = ['impact_thresholds']
+const TOP_OPTIONAL = ['impact_thresholds', 'allowed_logic_changes']
+// "trigger <schema>.<table>.<name>", "rule <schema>.<table>.<name>", "function <schema>.<name>(<args>)"
+const LOGIC_OBJECT_RE = /^(trigger|rule) [^\s.]+\.[^\s.]+\.[^\s.]+$|^function [^\s.]+\.[^\s(]+\([^)]*\)$/
 const STEP_KEYS = ['id', 'tool', 'args', 'reversibility']
 const RESOURCE_KEYS = ['databases', 'config_files', 'compose_services']
 const THRESHOLD_KEYS = ['max_rows_deleted', 'max_external_calls']
@@ -83,6 +85,8 @@ export function validateContract(doc) {
     stringArray(doc.allowed_paths, 'allowed_paths', errors, { min: 1, item: isSafeRelativePath })
   }
   if ('protected_tables' in doc) stringArray(doc.protected_tables, 'protected_tables', errors)
+  // T25: database logic the operator allows a plan to remove or redefine (default: none).
+  if ('allowed_logic_changes' in doc) stringArray(doc.allowed_logic_changes, 'allowed_logic_changes', errors, { item: (v) => v.length <= 300 && LOGIC_OBJECT_RE.test(v) })
   if ('time_limit_seconds' in doc) {
     const t = doc.time_limit_seconds
     if (!(Number.isInteger(t) && t >= 1 && t <= 86400)) {

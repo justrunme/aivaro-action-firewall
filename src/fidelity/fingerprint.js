@@ -35,7 +35,9 @@ export async function computeFingerprint({ repoDir, target, contract, contractHa
       git_head: source.git_head,
       tree_hash: source.tree_hash,
       images: await imageDigests(target),
-      postgres: { [target.dbName]: { schema_hash: db.schema_hash, tables: db.tables } },
+      // T25: triggers, rules and functions by definition hash. A trigger added or edited
+      // after the rehearsal changes the base, so the run is refused (FIDELITY_MISMATCH).
+      postgres: { [target.dbName]: { schema_hash: db.schema_hash, tables: db.tables, logic: db.logic } },
     },
     plan: { source, contract_hash: contractHash, plan_hash: hashValue(contract.plan) },
   }

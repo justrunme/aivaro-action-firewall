@@ -8,7 +8,8 @@ the contest.
 
 | Idea | What it would do | Priority | Spec |
 |------|------------------|----------|------|
-| Plan comparison (counterfactual replay) | Show two or more rehearsed plans side by side from stored, measured results, with a deterministic choice of plan | P1 | R15 |
+| Counterfactual Replay screen in the Console | A Console view over the existing comparison (T17, `justrunme compare`, which is implemented): the rehearsed plans side by side, the fixed rule and the signed `plan_selected` receipt. The comparison itself is not on this page because it is implemented | P1 | R15 |
+| LOGIC BYPASS detection | See a trigger or constraint switched off inside a plan (event trigger in the rehearsal copy, statement log, trigger firing counts); found by T25 v1 | P1 | none yet |
 | Chaos Twin | Rehearse a plan with one injected fault at a named operation marker and report the resulting state | P2 | R16 |
 | Phone passkey approval | WebAuthn assertion bound to the action payload hash | P2 | R6.8 |
 | Fidelity override with signed justification | Operator overrides a fingerprint mismatch with a signed reason | P2 | R3.4 |

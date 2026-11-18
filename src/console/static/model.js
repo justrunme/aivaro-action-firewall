@@ -53,6 +53,8 @@ export function losses(v) {
     removed_columns: d.removed_columns ?? [],
     added_tables: d.added_tables ?? [],
     added_columns: d.added_columns ?? [],
+    removed_logic: d.removed_logic ?? [],
+    changed_logic: d.changed_logic ?? [],
   }
 }
 

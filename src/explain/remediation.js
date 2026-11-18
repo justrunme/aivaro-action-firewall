@@ -14,6 +14,7 @@ export const ATTEMPT_LIMIT = 8
 const NEXT = Object.freeze({
   SAFE: 'REQUEST_APPROVAL',
   'DATA LOSS': 'REVISE_AND_REHEARSE',
+  'LOGIC CHANGE': 'REVISE_AND_REHEARSE',
   FAILED: 'FIX_AND_REHEARSE',
   LIMIT: 'ASK_OPERATOR',
 })
@@ -27,6 +28,10 @@ function constraintsFor(evidence, failedSteps) {
       out.push({ kind: 'table_preserved', table: e.table, measured: { rows_before: e.rows_before }, text: `Table ${e.table} must still exist after the plan (it had ${e.rows_before} rows and was gone afterwards).` })
     } else if (e.kind === 'column_removed') {
       out.push({ kind: 'column_preserved', column: e.column, measured: {}, text: `Column ${e.column} must still exist after the plan.` })
+    } else if (e.kind === 'logic_removed') {
+      out.push({ kind: 'logic_preserved', object: e.object, measured: {}, text: `The existing ${e.object} must still exist after the plan.` })
+    } else if (e.kind === 'logic_changed') {
+      out.push({ kind: 'logic_unchanged', object: e.object, measured: {}, text: `The existing ${e.object} must have the same definition, and a trigger must be enabled, after the plan.` })
     } else if (e.kind === 'rehearsal_error') {
       out.push({ kind: 'rehearsal_must_complete', measured: {}, text: 'The rehearsal itself did not complete; the plan could not be measured.' })
     }
@@ -68,15 +73,22 @@ export function explainReport(report, attempts, { sqlText = null } = {}) {
     if (!ok) hidden.add(String(name))
     return ok
   })
-  const schemaDelta = report.schema_delta ? { ...report.schema_delta, added_tables: shown(report.schema_delta.added_tables), added_columns: shown(report.schema_delta.added_columns) } : null
+  const schemaDelta = report.schema_delta
+    ? {
+        ...report.schema_delta,
+        added_tables: shown(report.schema_delta.added_tables),
+        added_columns: shown(report.schema_delta.added_columns),
+        ...(report.schema_delta.added_logic ? { added_logic: shown(report.schema_delta.added_logic.map((o) => o.replace(/\(.*$/, ''))) } : {}),
+      }
+    : null
   const evidence = (report.evidence ?? []).map((e) => (e.detail === undefined ? e : { ...e, detail: firstLine(e.detail) }))
   const failedSteps = (report.steps ?? []).filter((s) => s.status !== 'ok').map((s) => ({ id: s.id, status: s.status, detail: firstLine(s.detail) }))
   const safe = report.verdict === 'SAFE'
   return {
     status: safe ? 'SAFE' : 'DENIED',
     verdict: report.verdict,
-    reason: safe ? null : report.verdict === 'DATA LOSS' ? 'DATA_LOSS' : 'REHEARSAL_FAILED',
-    rule: safe ? null : report.verdict === 'DATA LOSS' ? 'R2.6' : 'R2.5',
+    reason: safe ? null : report.verdict === 'DATA LOSS' ? 'DATA_LOSS' : report.verdict === 'LOGIC CHANGE' ? 'LOGIC_CHANGE' : 'REHEARSAL_FAILED',
+    rule: safe ? null : report.verdict === 'DATA LOSS' ? 'R2.6' : report.verdict === 'LOGIC CHANGE' ? 'T25.1' : 'R2.5',
     plan_id: report.plan_id,
     base_hash: report.base_hash,
     measured_in: 'a disposable copy of the database, started for this rehearsal and removed afterwards',
@@ -91,7 +103,12 @@ export function explainReport(report, attempts, { sqlText = null } = {}) {
     remediation: safe
       ? null
       : {
-          aim: report.verdict === 'DATA LOSS' ? 'Revise the plan so that it destroys no data, then rehearse the revision.' : 'Make the plan apply cleanly, then rehearse it again.',
+          aim:
+            report.verdict === 'DATA LOSS'
+              ? 'Revise the plan so that it destroys no data, then rehearse the revision.'
+              : report.verdict === 'LOGIC CHANGE'
+                ? 'Revise the plan so that it keeps the existing database logic (triggers, rules, functions) as it is, then rehearse the revision.'
+                : 'Make the plan apply cleanly, then rehearse it again.',
           constraints: constraintsFor(evidence, failedSteps),
           next_action: exhausted ? NEXT.LIMIT : NEXT[report.verdict] ?? NEXT.FAILED,
           caution: 'These are measurements of the plan just rehearsed, not a proof that a revised plan is safe. Only a new rehearsal with verdict SAFE shows that.',

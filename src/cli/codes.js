@@ -28,7 +28,9 @@ export const EXIT = Object.freeze({
   JUDGE_ENVIRONMENT: 41, // judge: Docker unavailable or the demo database could not be prepared
   APPROVAL_REFUSED: 26, // approve or deny refused (request unknown, expired, answered, changed files, ...)
   CHAIN_LOCKED: 31, // the receipt chain lock is held or stuck; see `justrunme lock inspect`
+  LOGIC_CHANGE: 18, // rehearse: verdict LOGIC CHANGE (an existing trigger, rule or function removed or redefined)
 })
 
 /** Exit code for a rehearsal verdict. */
-export const verdictExit = (verdict) => (verdict === 'SAFE' ? EXIT.OK : verdict === 'DATA LOSS' ? EXIT.DATA_LOSS : EXIT.REHEARSAL_FAILED)
+export const verdictExit = (verdict) =>
+  verdict === 'SAFE' ? EXIT.OK : verdict === 'DATA LOSS' ? EXIT.DATA_LOSS : verdict === 'LOGIC CHANGE' ? EXIT.LOGIC_CHANGE : EXIT.REHEARSAL_FAILED

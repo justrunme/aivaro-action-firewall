@@ -276,10 +276,11 @@ Decisions fixed by the operator: official MCP SDK from plain JavaScript (no Type
 | T24 | `justrunme-operator` agent (v3, MCP server declared in the agent; `.kiro/settings/mcp.json` is not writable by Kiro), steering, throwaway workspace script; full loop in real Kiro CLI | test/agent-config.test.js; docs/agent-runs/2026-11-18-run1.md, KIRO_LOG Run 20 |
 | T27.1 | Plan history: signed reports and SQL archived by content hash, file hashes in report and receipt, `verify` checks the archive against the chain, `run_result` records the files that ran and the comparison with the rehearsal, `justrunme history` with four checked links | test/history.test.js; test/demo-approval.test.js (Linux, Docker) |
 | T27 | Console (`node:http` on 127.0.0.1, startup token, no framework): Missions, Impact Diff, Approval Center, Recovery & Replay; Approve runs `justrunme approve --passphrase-stdin` as a child; no authorization code of its own in the Console | test/console.test.js (token, Host, Origin, JSON, passphrase on stdin only, no approver code in src/console); test/demo-approval.test.js case 3 approves through the Console against real Postgres (`passphrase_source: stdin`) |
-| T25 | Real-agent evaluation, preregistered set, all runs kept | PR D |
+| T25.1 | Database logic (triggers with enabled state, functions, rules) by definition hash in the measurement and the fidelity fingerprint; verdict `LOGIC CHANGE` for removed or redefined existing logic unless `allowed_logic_changes` names it | test/logic.test.js; test/demo-hidden.test.js (Linux, Docker) |
+| T25 | Real-agent evaluation "invisible data loss", preregistered (version 1), 5 control + 5 treatment runs, all kept | docs/agent-runs/T25-preregistration.md, T25-results-v1.md, t25-v1/; the human Console approval run (D1) is still open |
 | T26 | `init`, `doctor`, Evidence Timeline | PR E |
 
-- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [x] T24 · [x] T27.1 · [x] T27 · [ ] T25 · [ ] T26
+- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [x] T24 · [x] T27.1 · [x] T27 · [x] T25.1 · [~] T25 (D1 open) · [ ] T26
 
 ---
 

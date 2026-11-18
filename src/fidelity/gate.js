@@ -2,7 +2,8 @@
  * Fidelity gate: compare two fingerprints component by component (R3.2, R3.3).
  *
  * Fingerprint shape (built by fingerprint.js):
- *   { base: { git_head, tree_hash, images, postgres: { <db>: { schema_hash, tables: { <t>: { rows, checksum } } } } },
+ *   { base: { git_head, tree_hash, images, postgres: { <db>: { schema_hash, tables: { <t>: { rows, checksum } },
+ *             logic: { triggers, functions, rules: { <name>: <definition hash> } } } } },
  *     plan: { source: { git_head, tree_hash, uncommitted_hash }, contract_hash, plan_hash } }
  * "base" is the state a plan starts from; two rehearsals are comparable only if
  * their base hashes are equal (R15.2). "plan" adds the plan's own files.

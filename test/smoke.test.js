@@ -209,7 +209,9 @@ describe('hook definitions', () => {
     const hook = def.hooks[0]
     assert.equal(hook.trigger, 'PostFileSave')
     assert.equal(hook.action.type, 'command')
-    assert.ok(typeof hook.action.command === 'string' && hook.action.command.includes('npm test'))
+    // The save hook runs the fast smoke suite, as its description says; the full suite takes minutes.
+    assert.ok(typeof hook.action.command === 'string' && hook.action.command.includes('npm run test:smoke'))
+    assert.match(hook.description, /smoke/)
   })
 
   it('stop-checklist uses the documented Stop trigger and references justrunme-zero tasks.md', () => {
