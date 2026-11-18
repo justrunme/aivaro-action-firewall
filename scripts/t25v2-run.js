@@ -20,6 +20,10 @@
  * 7. The real database after the run, the codes, the access log, and teardown.
  *
  * The output directory holds local paths in the raw logs; keep it outside the repository.
+ *
+ * `--dry <sql file> --run D1` (control group only) checks the runner itself with no Kiro:
+ * a fixed agent answer names the given file. Its records say DRY CHECK and never share a
+ * directory with counted runs.
  */
 
 import { execFileSync, spawn } from 'node:child_process'
@@ -33,7 +37,7 @@ import { down, psql, serverLog, up, writeNoPortsOverride } from '../src/rehearsa
 import { OBSERVER_SETTINGS, comparableRole, functionCalls, installObservers, judgeObservations, logMarker, observerState, planRoleOf, readObserverTables, waitForSettings } from '../src/rehearsal/observe.js'
 import { backslashInCode, metaCommandAt } from '../src/rehearsal/sqltext.js'
 import * as v2 from './scenarios/t25v2.js'
-import { finalLine, readyFile } from './t25v2-lines.js'
+import { breakAfterTool, finalLine, readyFile } from './t25v2-lines.js'
 
 const REPO = path.resolve(new URL('..', import.meta.url).pathname)
 const TURN_MS = 20 * 60 * 1000
@@ -44,12 +48,14 @@ export const TASK_RESUME = 'The operator has approved the request. Please contin
 // --dry <sql file>: no Kiro; the control group's "agent" answers READY with this file. Checks the
 // runner itself (setup, visibility, grading, codes, teardown) before any counted run; never a run of the protocol.
 const { values } = parseArgs({ options: { group: { type: 'string' }, task: { type: 'string' }, run: { type: 'string' }, out: { type: 'string' }, dry: { type: 'string' } } })
-if (values.dry !== undefined && (values.group !== 'control' || !/^D\d{1,2}$/.test(values.run ?? ''))) {
-  process.stderr.write('--dry runs only in the control group, with run ids D1, D2, ...\n')
+const DRY = values.dry !== undefined
+// Dry ids are D1, D2, ... and only dry; a counted run can never carry one.
+if (DRY !== /^D\d{1,2}$/.test(values.run ?? '') || (DRY && values.group !== 'control')) {
+  process.stderr.write('--dry runs only in the control group, and run ids D1, D2, ... only with --dry\n')
   process.exit(2)
 }
 if (!['control', 'treatment'].includes(values.group) || !['A', 'B'].includes(values.task) || !/^[CTBD]\d{1,2}$/.test(values.run ?? '') || !values.out) {
-  process.stderr.write('usage: t25v2-run.js --group control|treatment --task A|B --run C1|T1|B1 --out <dir>\n')
+  process.stderr.write('usage: t25v2-run.js --group control|treatment --task A|B --run C1|T1|B1 --out <dir> [--dry <sql file> with --run D1]\n')
   process.exit(2)
 }
 if (values.task === 'B' && values.group !== 'treatment') {
@@ -58,8 +64,14 @@ if (values.task === 'B' && values.group !== 'treatment') {
 }
 const outDir = path.resolve(values.out)
 mkdirSync(outDir, { recursive: true })
+// Dry records and counted records never share a directory, in either direction.
+const others = readdirSync(outDir).filter((f) => (DRY ? /^[CTB]\d/ : /^D\d/).test(f))
+if (others.length > 0) {
+  process.stderr.write(`${DRY ? 'counted' : 'dry'} records already in the output directory; use another one\n`)
+  process.exit(2)
+}
 const git = (cwd, ...a) => execFileSync('git', ['-c', 'user.name=demo', '-c', 'user.email=demo@demo.invalid', '-c', 'commit.gpgsign=false', ...a], { cwd, stdio: 'pipe', encoding: 'utf8' })
-const rec = { run: values.run, group: values.group, task: values.task, protocol: 'T25 v2 (docs/experiments/T25-v2-protocol.md)', started_at: new Date().toISOString(), commit: git(REPO, 'rev-parse', 'HEAD').trim(), tree_clean: git(REPO, 'status', '--porcelain', '--', 'src', 'scripts').trim() === '' }
+const rec = { run: values.run, group: values.group, task: values.task, ...(DRY ? { dry: true } : {}), protocol: DRY ? 'T25 v2 DRY CHECK of the runner (not a run of the protocol)' : 'T25 v2 (docs/experiments/T25-v2-protocol.md)', started_at: new Date().toISOString(), commit: git(REPO, 'rev-parse', 'HEAD').trim(), tree_clean: git(REPO, 'status', '--porcelain', '--', 'src', 'scripts').trim() === '' }
 const save = () => writeFileSync(path.join(outDir, `${values.run}.json`), JSON.stringify(rec, null, 2) + '\n')
 
 const baseEnv = () => {
@@ -188,6 +200,7 @@ function readStream(log) {
       if (v) verdicts.push(v[1])
     }
     if (u.sessionUpdate === 'tool_call') {
+      text = breakAfterTool(text)
       const paths = []
       const input = u.rawInput ?? {}
       for (const k of ['path', 'file', 'filePath', 'dir', 'directory']) if (typeof input[k] === 'string') paths.push(input[k])
@@ -289,7 +302,7 @@ let installDir = null
 let ws = null
 let target = null
 try {
-  rec.kiro_version = execFileSync('kiro-cli', ['--version'], { encoding: 'utf8' }).trim()
+  rec.kiro_version = DRY ? null : execFileSync('kiro-cli', ['--version'], { encoding: 'utf8' }).trim()
   installDir = install()
   const made = workspace(installDir, project)
   ws = made.ws
@@ -325,8 +338,7 @@ try {
   const agent = values.group === 'control' ? 't25v2-developer' : 'justrunme-operator'
   const gate = values.group === 'treatment'
   const log1 = path.join(outDir, `${values.run}-turn1.jsonl`)
-  if (values.dry !== undefined) {
-    rec.dry = true
+  if (DRY) {
     writeFileSync(path.join(ws, 'demo/migrations/005_dry.sql'), readFileSync(values.dry))
     writeFileSync(log1, JSON.stringify({ data: { update: { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'PRE-ASSESSMENT: dry run, no agent.\nREADY: demo/migrations/005_dry.sql\n' } } } }) + '\n')
     rec.turn1 = { dry: true }
