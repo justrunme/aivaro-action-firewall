@@ -8,10 +8,12 @@ import fc from 'fast-check'
 import { stringify } from 'yaml'
 import { parseContract } from '../src/contract/parser.js'
 import { hashValue } from '../src/util/canonical.js'
-import { loadOrCreateKeys, signValue } from '../src/receipts/keys.js'
+import { signValue } from '../src/receipts/keys.js'
+import { loadOrCreateTestKeys } from './support/keys.js'
 import { sourceState } from '../src/fidelity/source.js'
 import { compareFingerprints, baseHash } from '../src/fidelity/gate.js'
-import { AuthorizationRefused, issueAuthorization, signatureProblem, entriesForPlan } from '../src/authorize/authorization.js'
+import { AuthorizationRefused, changedPlanFiles, issueAuthorization, signatureProblem, entriesForPlan } from '../src/authorize/authorization.js'
+import { createHash } from 'node:crypto'
 
 const HOOK = new URL('../src/hook/pretooluse.js', import.meta.url).pathname
 const CONTRACT = {
@@ -66,7 +68,7 @@ function fingerprintOf(dir, parsed, rows = 3) {
 function setup({ verdict = 'SAFE' } = {}) {
   const dir = repo()
   const home = tmp('jrm-home-')
-  const keys = loadOrCreateKeys(home)
+  const keys = loadOrCreateTestKeys(home)
   const parsed = parseContract(readFileSync(path.join(dir, 'justrunme.mission.yaml'), 'utf8'))
   const fp = fingerprintOf(dir, parsed)
   const report = { mission_id: parsed.contract.id, plan_id: 'plan-x', contract_hash: parsed.hash, verdict, fingerprint: fp, evidence: [] }
@@ -74,17 +76,35 @@ function setup({ verdict = 'SAFE' } = {}) {
 }
 
 const issue = (s, over = {}) =>
-  issueAuthorization({ cwd: s.dir, contract: s.parsed.contract, contractHash: s.parsed.hash, report: s.report, currentFingerprint: s.fp, keys: s.keys, now: Date.now(), ...over })
+  issueAuthorization({ cwd: s.dir, contract: s.parsed.contract, contractHash: s.parsed.hash, report: s.report, currentFingerprint: s.fp, approver: s.keys.approver, now: Date.now(), ...over })
 
 describe('authorization issuance (R2.7, R3.3, R3.6)', () => {
   it('issues a signed authorization for a SAFE rehearsal with an unchanged fingerprint', () => {
     const s = setup()
     const auth = issue(s)
-    assert.equal(signatureProblem(auth, s.keys.publicKey), null)
+    assert.equal(signatureProblem(auth, s.keys.approver.publicKey), null)
+    // The operator key is not the approver key: it does not verify an authorization.
+    assert.notEqual(signatureProblem(auth, s.keys.publicKey), null)
     assert.equal(auth.entries.length, 1) // sql_migration runs inside JustRunMe; only the shell step is a hook entry
     assert.deepEqual(auth.entries[0].action, { tool: 'shell', argv: ['node', 'demo/check.js'] })
     assert.match(auth.entries[0].script_hashes['demo/check.js'], /^sha256:/)
     assert.equal(auth.fingerprint_hash, hashValue(s.fp))
+  })
+
+  it('PR B review: binds the SQL files byte for byte, and refuses when they differ from the approval request', () => {
+    const s = setup()
+    const auth = issue(s)
+    const sql = readFileSync(path.join(s.dir, 'demo/migrations/003_add.sql'))
+    assert.deepEqual(auth.plan_files, [{ path: 'demo/migrations/003_add.sql', sha256: 'sha256:' + createHash('sha256').update(sql).digest('hex') }])
+    assert.deepEqual(changedPlanFiles(auth.plan_files, s.dir), [])
+    // Edited after authorization: the runner's re-check names the file (also when git ignores it).
+    writeFileSync(path.join(s.dir, 'demo/migrations/003_add.sql'), 'DROP TABLE orders;\n')
+    assert.deepEqual(changedPlanFiles(auth.plan_files, s.dir), ['demo/migrations/003_add.sql'])
+    // Answering a request whose files are not the current ones is refused.
+    const approval = { request_id: 'apr-0000000000000000', request_hash: 'sha256:' + '1'.repeat(64), files: auth.plan_files }
+    assert.throws(() => issue(s, { approval }), (e) => e.code === 'FILES_CHANGED' && e.detail.files[0] === 'demo/migrations/003_add.sql')
+    rmSync(path.join(s.dir, 'demo/migrations/003_add.sql'))
+    assert.throws(() => issue(s), (e) => e.code === 'UNBINDABLE_STEP')
   })
 
   it('refuses DATA LOSS and FAILED verdicts and returns the evidence', () => {
@@ -120,7 +140,7 @@ describe('authorization issuance (R2.7, R3.3, R3.6)', () => {
     fc.assert(
       fc.property(fc.constantFrom(...fields), fc.string({ minLength: 1, maxLength: 8 }), (field, junk) => {
         const forged = { ...auth, [field]: typeof auth[field] === 'string' ? auth[field] + junk : junk }
-        return signatureProblem(forged, s.keys.publicKey) !== null
+        return signatureProblem(forged, s.keys.approver.publicKey) !== null
       }),
       { numRuns: 100 }
     )
@@ -128,10 +148,19 @@ describe('authorization issuance (R2.7, R3.3, R3.6)', () => {
 
   it('a signature from another key is rejected even if it is valid for that key', () => {
     const s = setup()
-    const other = loadOrCreateKeys(tmp('jrm-other-'))
+    const other = loadOrCreateTestKeys(tmp('jrm-other-'))
     const { signature, ...body } = issue(s)
-    const forged = { ...body, signature: signValue(other.privateKey, body) }
-    assert.notEqual(signatureProblem(forged, s.keys.publicKey), null)
+    const forged = { ...body, signature: signValue(other.approver.privateKey, body) }
+    assert.notEqual(signatureProblem(forged, s.keys.approver.publicKey), null)
+    // Signed with the operator key (what the MCP server holds): rejected too.
+    const byOperator = { ...body, signature: signValue(s.keys.privateKey, body) }
+    assert.notEqual(signatureProblem(byOperator, s.keys.approver.publicKey), null)
+  })
+
+  it('refuses to issue without an approver key', () => {
+    const s = setup()
+    assert.throws(() => issue(s, { approver: undefined }), (e) => e instanceof AuthorizationRefused && e.code === 'NO_APPROVER_KEY')
+    assert.throws(() => issue(s, { approver: { publicKey: s.keys.publicKey } }), (e) => e.code === 'NO_APPROVER_KEY')
   })
 })
 
@@ -204,7 +233,7 @@ describe('hook process with a signed authorization (R3.6, R3.7, R10.5)', () => {
     const s = setup()
     write(s, issue(s))
     const otherHome = tmp('jrm-home2-')
-    loadOrCreateKeys(otherHome)
+    loadOrCreateTestKeys(otherHome)
     const r = hook(s.dir, otherHome, 'node demo/check.js')
     assert.equal(r.status, 2)
     assert.equal(JSON.parse(r.stderr.trim()).category, 'AUTHORIZATION_INVALID')

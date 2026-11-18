@@ -26,9 +26,17 @@ import { AGENT_TOOLS } from './names.js'
 import { PLAN_ID_RE, PlanRefused, loadBase, loadStoredPlan, proposePlan } from '../mission/plans.js'
 import { redactDeep } from '../privacy/redact.js'
 import { loadReport, reportSignatureProblem } from '../rehearsal/engine.js'
-import { keyHome, loadPublicKey } from '../receipts/keys.js'
-import { verifyChain } from '../receipts/chain.js'
+import { keyHome, loadExistingKeys, loadPublicKey } from '../receipts/keys.js'
+import { findLast, verifyChain } from '../receipts/chain.js'
+import { plansOnBase } from '../compare/gate.js'
+import { createRequest, listRequests, loadRequest, sha256File } from '../approval/requests.js'
+import { loadManifest } from '../capture/capture.js'
+import { verifyRecovery } from '../undo/verify.js'
+import { loadTarget } from '../cli/target.js'
+import { measureDatabase } from '../rehearsal/measure.js'
+import { psql } from '../rehearsal/compose.js'
 import { hashValue } from '../util/canonical.js'
+import { sourceState } from '../fidelity/source.js'
 
 const planIdSchema = z.string().regex(PLAN_ID_RE)
 const RESET_KINDS = new Set(['run_result', 'authorization_issued', 'undo'])
@@ -108,6 +116,40 @@ function sqlTextOf(repoDir, id) {
 
 /** The next step is named only if the agent can take it: until request_approval exists the agent hands over to the operator. */
 const nextActionFor = (payload) => (payload.next_action === 'REQUEST_APPROVAL' && !AGENT_TOOLS.includes('request_approval') ? { ...payload, next_action: 'ASK_OPERATOR' } : payload)
+// (kept as a guard: if a tool is ever removed from the allowlist, the agent is not pointed at it)
+
+const pendingPayload = (request, already) => ({
+  status: 'PENDING_APPROVAL',
+  request_id: request.request_id,
+  plan_id: request.plan_id,
+  expires_at: request.expires_at,
+  already_requested: already,
+  files: request.files.map((f) => f.path),
+  next_action: 'WAIT_FOR_OPERATOR',
+  operator_steps: [`justrunme approvals ${request.request_id}`, `justrunme approve ${request.request_id} --confirm ${request.plan_id}`],
+  note: 'Nothing is authorized yet and you cannot authorize it. Tell the user the request is waiting; call run_mission after the operator has answered.',
+})
+
+/**
+ * After a real run: is the database what the rehearsal predicted? Compares schema hash,
+ * row counts and content checksums of every table; reports table names and counts only.
+ */
+async function compareToRehearsal(repoDir, report) {
+  const predicted = report.database?.after
+  if (!predicted) return { matches: false, differences: [{ what: 'no rehearsal measurement to compare with' }] }
+  const { target } = loadTarget(repoDir)
+  const real = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
+  const now = await measureDatabase((sql) => psql(real, { sql }))
+  const differences = []
+  if (now.schema_hash !== predicted.schema_hash) differences.push({ what: 'schema differs from the rehearsal' })
+  for (const t of new Set([...Object.keys(predicted.tables), ...Object.keys(now.tables)])) {
+    const a = predicted.tables[t]
+    const b = now.tables[t]
+    if (!a || !b) differences.push({ table: t, what: a ? 'missing after the run' : 'not predicted by the rehearsal' })
+    else if (a.rows !== b.rows || a.checksum !== b.checksum) differences.push({ table: t, what: 'rows or content differ from the rehearsal', rows_rehearsed: a.rows, rows_real: b.rows })
+  }
+  return { matches: differences.length === 0, differences }
+}
 
 const guard = (fn) => async (ctx, args) => {
   try {
@@ -183,6 +225,114 @@ export const TOOLS = [
     run: guard(async ({ repoDir }, { receipt }) => {
       const r = receipt === undefined ? await viaCli(cmd.verifyCmd, { repoDir, opts: {} }) : await viaCli(cmd.replayCmd, { repoDir, opts: { receipt } })
       return r.ok ? { status: r.exit === 0 ? 'PASS' : 'FAIL', ...r.result } : r.refusal
+    }),
+  },
+  {
+    name: 'request_approval',
+    title: 'Ask the operator to approve a SAFE plan',
+    description:
+      'Ask the human operator to approve running one plan that was rehearsed with verdict SAFE. This only creates a request; it authorizes nothing. The operator reviews the exact SQL and the measured impact and approves or denies in a separate step you cannot take. After this, wait: call run_mission once the operator has answered.',
+    inputSchema: z.strictObject({ plan_id: planIdSchema, note: z.string().max(300).optional().describe('One or two sentences for the operator: what this change is for. Shown to the operator as your words.') }),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: guard(async ({ repoDir }, { plan_id, note }) => {
+      const base = loadBase(repoDir)
+      const stored = loadStoredPlan(repoDir, plan_id)
+      const report = verifiedReport(repoDir, base.contract.id, plan_id)
+      if (report.verdict !== 'SAFE') {
+        return { ...nextActionFor(explainReport(report, { used: attemptsUsed(repoDir, base.contract.id) }, { sqlText: sqlTextOf(repoDir, plan_id) })), error: { code: 'NOT_SAFE', message: 'approval can be requested only for a plan whose rehearsal verdict is SAFE' } }
+      }
+      const publicKey = loadPublicKey(keyHome())
+      const chain = verifyChain({ repoDir, home: keyHome(), publicKey, missionId: base.contract.id })
+      if (!chain.ok) return refusal('CHAIN_INVALID', 'the receipt chain does not verify; nothing was requested')
+      const reportHash = hashValue(report)
+      const rehearsal = findLast(chain.receipts, (r) => r.kind === 'rehearsal' && r.subject?.report_hash === reportHash)
+      const latest = chain.receipts.filter((r) => r.kind === 'rehearsal').at(-1)
+      if (!rehearsal || latest.subject?.base_hash !== report.base_hash) return refusal('PLAN_NOT_CURRENT', 'another state was rehearsed after this plan; rehearse this plan again before asking', { next_action: 'REHEARSE_AGAIN' })
+      // The workspace must still be what was rehearsed; otherwise the operator would get a request that approve refuses.
+      const rehearsedSource = report.fingerprint?.plan?.source
+      if (!rehearsedSource || hashValue(sourceState(repoDir)) !== hashValue(rehearsedSource)) return refusal('PLAN_NOT_CURRENT', 'the workspace changed after this plan was rehearsed; rehearse it again before asking', { next_action: 'REHEARSE_AGAIN' })
+      // Several plans rehearsed on this state: the fixed rule picks one; only that one can be asked about.
+      if (plansOnBase(chain.receipts, report.base_hash).size > 1) {
+        const c = await viaCli(cmd.compareCmd, { repoDir, opts: {}, planIds: [] })
+        if (!c.ok) return c.refusal
+        if (c.result.recommended !== plan_id) return refusal('NOT_RECOMMENDED', `the comparison recommends ${c.result.recommended ?? 'no plan'} (decided by ${c.result.decided_by}), not ${plan_id}`, { recommended: c.result.recommended, next_action: 'REQUEST_THE_RECOMMENDED_PLAN' })
+      }
+      const files = stored.contract.plan.map((s) => ({ path: s.args[0], sha256: sha256File(path.join(repoDir, s.args[0])) }))
+      // Asking twice about the same rehearsed files returns the request that is already waiting.
+      for (const existing of listRequests({ repoDir, missionId: base.contract.id, publicKey, home: keyHome() }).filter((x) => x.state === 'pending' && x.plan_id === plan_id)) {
+        const { request } = loadRequest({ repoDir, missionId: base.contract.id, id: existing.request_id, publicKey, receipts: chain.receipts })
+        if (request.report_hash === reportHash && JSON.stringify(request.files) === JSON.stringify(files)) return pendingPayload(request, true)
+      }
+      const keys = loadExistingKeys(keyHome())
+      if (!keys) return refusal('NO_OPERATOR_KEY', 'no operator key is installed')
+      const made = createRequest({ repoDir, keys, contract: stored.contract, contractHash: stored.hash, report, rehearsalReceipt: rehearsal.hash, files, note })
+      return pendingPayload(made.request, false)
+    }),
+  },
+  {
+    name: 'run_mission',
+    title: 'Run a plan the operator approved',
+    description:
+      'Run one plan on the real database. It runs only if the operator has approved it (a signed, single-use authorization exists for exactly this plan and the database and files are still as rehearsed); otherwise it is refused and nothing runs. Before the run the engine captures the state for undo. The answer compares the real result with what the rehearsal predicted and names the capture to use with undo_mission.',
+    inputSchema: z.strictObject({ plan_id: planIdSchema }),
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    run: guard(async ({ repoDir }, { plan_id }) => {
+      const base = loadBase(repoDir)
+      loadStoredPlan(repoDir, plan_id)
+      const r = await viaCli(cmd.runCmd, { repoDir, opts: { plan: plan_id } })
+      if (!r.ok) {
+        const waiting = listRequests({ repoDir, missionId: base.contract.id, publicKey: loadPublicKey(keyHome()), home: keyHome() }).filter((x) => x.plan_id === plan_id).slice(0, 3)
+        const noAuth = r.refusal.error.code === 'NO_AUTHORIZATION'
+        return { ...r.refusal, plan_id, approval_requests: waiting.map((x) => ({ request_id: x.request_id, state: x.state, expires_at: x.expires_at })), next_action: noAuth ? (waiting.some((x) => x.state === 'pending') ? 'WAIT_FOR_OPERATOR' : 'REQUEST_APPROVAL') : 'ASK_OPERATOR' }
+      }
+      const res = r.result
+      const steps = res.steps.map((s) => ({ id: s.id, status: s.status, detail: String(s.detail ?? '').split('\n')[0].slice(0, 160) }))
+      if (!res.ok) return { status: 'FAILED', plan_id, capture_id: res.capture_id, steps, receipt_hash: res.receipt_hash, next_action: 'UNDO_MISSION', undo: { tool: 'undo_mission', capture_id: res.capture_id } }
+      // The run has happened: a failed comparison must not lose the capture id the agent needs for undo.
+      let check
+      try {
+        check = await compareToRehearsal(repoDir, verifiedReport(repoDir, base.contract.id, plan_id))
+      } catch (err) {
+        check = { matches: null, differences: [{ what: `could not compare with the rehearsal: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}` }] }
+      }
+      return {
+        status: check.matches === true ? 'COMPLETED' : check.matches === false ? 'COMPLETED_WITH_DIVERGENCE' : 'COMPLETED_UNCHECKED',
+        plan_id,
+        capture_id: res.capture_id,
+        steps,
+        receipt_hash: res.receipt_hash,
+        matches_rehearsal: check.matches,
+        differences: check.differences,
+        next_action: check.matches === true ? 'REPORT_TO_USER' : 'ASK_OPERATOR',
+        undo: { tool: 'undo_mission', capture_id: res.capture_id },
+      }
+    }),
+  },
+  {
+    name: 'undo_mission',
+    title: 'Restore the state captured before a run',
+    description: 'Restore the files and the Postgres database captured before a run, then verify the recovery (row counts, checksums, schema, files). Covers only the resource types listed in the mission contract. Use it when run_mission failed or the result is not what the operator wants.',
+    inputSchema: z.strictObject({ capture_id: z.string().regex(/^cap-\d{14}-[0-9a-f]{6}$/) }),
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    run: guard(async ({ repoDir }, { capture_id }) => {
+      const r = await viaCli(cmd.undoCmd, { repoDir, opts: {}, captureId: capture_id })
+      if (!r.ok) return r.refusal
+      return { status: r.result.status, capture_id, verification: r.result.verification, resources: r.result.resources.map((x) => ({ resource: x.resource, status: x.status })), evidence_status: r.result.evidence_status, receipts: r.result.receipts, next_action: r.result.status === 'RECOVERED' ? 'REPORT_TO_USER' : 'ASK_OPERATOR' }
+    }),
+  },
+  {
+    name: 'verify_recovery',
+    title: 'Check the current state against a capture',
+    description: 'Read-only: compare the current files and database with the state captured before a run (row counts, checksums, schema hash, files, images). Changes nothing and writes no receipt.',
+    inputSchema: z.strictObject({ capture_id: z.string().regex(/^cap-\d{14}-[0-9a-f]{6}$/) }),
+    annotations: { readOnlyHint: true, openWorldHint: false },
+    run: guard(async ({ repoDir }, { capture_id }) => {
+      const base = loadBase(repoDir)
+      const { manifest, problem } = loadManifest(repoDir, base.contract.id, capture_id, loadPublicKey(keyHome()))
+      if (problem) return refusal('CAPTURE_INVALID', problem)
+      const { target, health } = loadTarget(repoDir)
+      const v = await verifyRecovery({ repoDir, manifest, target: { ...target, composeFile: path.resolve(repoDir, target.composeFile) }, health })
+      return { status: v.status, capture_id, checks: v.checks.length, failed: v.failed.map((c) => ({ check: c.check, resource: c.resource })) }
     }),
   },
 ]

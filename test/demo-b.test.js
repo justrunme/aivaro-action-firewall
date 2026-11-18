@@ -22,6 +22,7 @@ import path from 'node:path'
 import { stringify } from 'yaml'
 import { parseContract } from '../src/contract/parser.js'
 import { loadOrCreateKeys, signValue } from '../src/receipts/keys.js'
+import { loadOrCreateTestKeys } from './support/keys.js'
 import { rehearse } from '../src/rehearsal/engine.js'
 import { measureDatabase } from '../src/rehearsal/measure.js'
 import { down, psql, up, writeNoPortsOverride } from '../src/rehearsal/compose.js'
@@ -64,7 +65,7 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
   const measureReal = () => measureDatabase((sql) => psql(realTarget, { sql }))
   const git = (...args) => execFileSync('git', ['-c', 'user.name=demo', '-c', 'user.email=demo@demo.invalid', ...args], { cwd: repoDir, stdio: 'pipe' })
   const fileText = (rel) => (existsSync(path.join(repoDir, rel)) ? readFileSync(path.join(repoDir, rel), 'utf8') : null)
-  const keys = loadOrCreateKeys(home)
+  const keys = loadOrCreateTestKeys(home)
   let contract
   let baseline
   let captureId
@@ -111,13 +112,13 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
 
     const report = await rehearse({ repoDir, contract: parsed.contract, contractHash: parsed.hash, target, keys })
     assert.equal(report.verdict, 'SAFE', JSON.stringify(report.evidence))
-    await authorizeMission({ repoDir, contract: parsed.contract, contractHash: parsed.hash, target, keys })
+    await authorizeMission({ repoDir, contract: parsed.contract, contractHash: parsed.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey })
 
     baseline = { db: await measureReal(), log: fileText('demo/migrations/applied.log'), config: fileText('demo/app.config.json') }
     process.env.DEMO_NOTIFY_FAIL = '1'
     let result
     try {
-      result = await runMission({ repoDir, contract: parsed.contract, contractHash: parsed.hash, target, keys })
+      result = await runMission({ repoDir, contract: parsed.contract, contractHash: parsed.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey })
     } finally {
       delete process.env.DEMO_NOTIFY_FAIL
     }

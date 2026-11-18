@@ -50,4 +50,10 @@ const isEntry = (() => {
   }
 })()
 
-if (isEntry) await createServer().connect(new StdioServerTransport())
+if (isEntry) {
+  // The server never approves. If the operator's shell exported the approver
+  // passphrase, drop it here so no code path of this process, and no child it
+  // starts (plan steps, git, docker), can use it.
+  delete process.env.JUSTRUNME_APPROVER_PASSPHRASE
+  await createServer().connect(new StdioServerTransport())
+}

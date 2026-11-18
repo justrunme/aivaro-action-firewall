@@ -26,6 +26,7 @@ export const EXIT = Object.freeze({
   //               or a command did its work but could not record it (error.code RESULT_UNRECORDED)
   JUDGE_FAILED: 40, // judge: a step did not match, or the 60 s budget was exceeded
   JUDGE_ENVIRONMENT: 41, // judge: Docker unavailable or the demo database could not be prepared
+  APPROVAL_REFUSED: 26, // approve or deny refused (request unknown, expired, answered, changed files, ...)
   CHAIN_LOCKED: 31, // the receipt chain lock is held or stuck; see `justrunme lock inspect`
 })
 

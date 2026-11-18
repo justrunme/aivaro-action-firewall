@@ -24,7 +24,7 @@ import { STATE_DIR } from '../fidelity/source.js'
 import { publicKeyHex, signValue, verifyValue } from './keys.js'
 import { inspectLock, removeInspectedLock, withLock } from './lock.js'
 
-export const KINDS = ['rehearsal', 'authorization_issued', 'authorization_refused', 'run_result', 'run_refused', 'undo', 'verification', 'hook_decision', 'chain_reanchored', 'lock_recovered', 'plan_selected', 'plan_comparison_refused']
+export const KINDS = ['rehearsal', 'authorization_issued', 'authorization_refused', 'run_result', 'run_refused', 'undo', 'verification', 'hook_decision', 'chain_reanchored', 'lock_recovered', 'plan_selected', 'plan_comparison_refused', 'approval_requested', 'approval_denied']
 const MISSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/
 
 export const chainPath = (repoDir, missionId) => path.join(repoDir, STATE_DIR, 'missions', missionId, 'receipts.jsonl')

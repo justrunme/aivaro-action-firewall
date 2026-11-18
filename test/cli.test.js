@@ -12,6 +12,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { stringify } from 'yaml'
 import { loadOrCreateKeys, publicKeyHex, signValue } from '../src/receipts/keys.js'
+import { TEST_PASSPHRASE, loadOrCreateTestKeys } from './support/keys.js'
 import { appendReceipt, chainPath } from '../src/receipts/chain.js'
 import { hashValue } from '../src/util/canonical.js'
 import { baseHash } from '../src/fidelity/gate.js'
@@ -55,7 +56,7 @@ function workspace({ contract = CONTRACT, target = TARGET } = {}) {
 
 /** @returns {{ code: number, out: any, raw: string }} */
 function cli(dir, args, { home } = {}) {
-  const r = spawnSync(process.execPath, [CLI, ...args, '--repo', dir], { encoding: 'utf8', env: { ...process.env, JUSTRUNME_HOME: home ?? keysHome, NO_COLOR: '' } })
+  const r = spawnSync(process.execPath, [CLI, ...args, '--repo', dir], { encoding: 'utf8', env: { ...process.env, JUSTRUNME_HOME: home ?? keysHome, JUSTRUNME_APPROVER_PASSPHRASE: TEST_PASSPHRASE, NO_COLOR: '' } })
   let out = null
   try {
     out = JSON.parse(r.stdout)
@@ -66,7 +67,7 @@ function cli(dir, args, { home } = {}) {
 }
 
 const keysHome = tmp('jrm-cli-keys-')
-const keys = loadOrCreateKeys(keysHome)
+const keys = loadOrCreateTestKeys(keysHome)
 
 const BASE = {
   target: { project: 'jrm-cli-test', db_service: 'db', db_name: 'pumpkin_patch', compose_file_hash: 'sha256:' + 'c'.repeat(64) },
@@ -343,14 +344,14 @@ describe('PR 10 review: status, verify and replay report only what checks out', 
     const body = { mission_id: MISSION, plan_id: planId(CONTRACT), verdict: 'SAFE', operator_pubkey: publicKeyHex(otherKeys.publicKey) }
     mkdirSync(path.dirname(reportPath(dir, MISSION, planId(CONTRACT))), { recursive: true })
     writeFileSync(reportPath(dir, MISSION, planId(CONTRACT)), JSON.stringify({ ...body, signature: signValue(otherKeys.privateKey, body) }))
-    const auth = { mission_id: MISSION, plan_id: planId(CONTRACT), expires_at: '2099-01-01T00:00:00.000Z', operator_pubkey: publicKeyHex(otherKeys.publicKey) }
+    const auth = { mission_id: MISSION, plan_id: planId(CONTRACT), expires_at: '2099-01-01T00:00:00.000Z', approver_pubkey: publicKeyHex(otherKeys.publicKey) }
     writeFileSync(path.join(dir, '.justrunme/authorization.json'), JSON.stringify({ ...auth, signature: signValue(otherKeys.privateKey, auth) }))
     const s = cli(dir, ['status'])
     assert.equal(s.code, EXIT.OK)
     assert.equal(s.out.result.rehearsal.valid, false)
     assert.equal(s.out.result.rehearsal.verdict, undefined)
     assert.equal(s.out.result.authorization.valid, false)
-    assert.match(s.out.result.authorization.problem, /different key/)
+    assert.match(s.out.result.authorization.problem, /not signed by the installed approver key/)
   })
 
   it('verify of an empty or mistyped mission exits 2, not 0; replay --receipt of a non-selection exits 2', () => {

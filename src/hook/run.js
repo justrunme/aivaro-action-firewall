@@ -10,7 +10,8 @@ import path from 'node:path'
 import { parseContract } from '../contract/parser.js'
 import { hashValue } from '../util/canonical.js'
 import { redact } from '../privacy/redact.js'
-import { keyHome, loadExistingKeys, loadPublicKey } from '../receipts/keys.js'
+import { keyHome, loadExistingKeys } from '../receipts/keys.js'
+import { loadApproverPublicKey } from '../receipts/approver.js'
 import { appendReceipt } from '../receipts/chain.js'
 import { signatureProblem } from '../authorize/authorization.js'
 import { sourceState } from '../fidelity/source.js'
@@ -35,11 +36,11 @@ async function readAll(stream) {
 
 /**
  * Signature, then source binding: the authorization must be signed by the
- * operator key, and git HEAD, tree and uncommitted changes must be exactly what
+ * approver key (verified with approver.pub only), and git HEAD, tree and uncommitted changes must be exactly what
  * they were when it was issued. Database state is re-checked by the runner.
  */
 function authorizationCheck(auth, home, cwd) {
-  const problem = signatureProblem(auth, loadPublicKey(home))
+  const problem = signatureProblem(auth, loadApproverPublicKey(home))
   if (problem) return { category: 'AUTHORIZATION_INVALID', reason: problem }
   let current
   try {

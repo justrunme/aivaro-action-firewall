@@ -2,7 +2,7 @@
  * T21/T22 against real Docker and Postgres, through the MCP server only: the
  * agent proposes a dangerous plan, is told what was measured, proposes a revised
  * plan, gets SAFE, and the choice and every decision are in one verifying chain.
- * (Approval and the real run are the next PR.)
+ * (Approval, the real run and undo: test/demo-approval.test.js.)
  *
  * Runs on Linux (CI) or when JRM_DOCKER_TESTS=1 is set locally.
  */
@@ -100,8 +100,7 @@ describe('Demo MCP: an agent is told why its plan was denied and revises it', { 
     const second = await server.call('rehearse', { migrations: ['demo/migrations/003_add_order_status.sql'] })
     assert.equal(second.isError, false, JSON.stringify(second.payload))
     const safe = second.payload
-    // request_approval does not exist yet (next PR), so the agent is not pointed at it: it hands over to the operator.
-    assert.deepEqual([safe.status, safe.verdict, safe.reason, safe.remediation, safe.next_action], ['SAFE', 'SAFE', null, null, 'ASK_OPERATOR'])
+    assert.deepEqual([safe.status, safe.verdict, safe.reason, safe.remediation, safe.next_action], ['SAFE', 'SAFE', null, null, 'REQUEST_APPROVAL'])
     assert.notEqual(safe.plan_id, denied.plan_id)
     assert.deepEqual(safe.attempts, { used: 2, limit: 8 })
     assert.deepEqual(await measureReal(), before)
