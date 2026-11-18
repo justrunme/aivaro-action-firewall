@@ -100,6 +100,8 @@ jobs:
             ".kiro/steering/scope.md"
             ".kiro/agents/justrunme-builder.json"
             ".kiro/agents/justrunme-skeptic.json"
+            ".kiro/agents/justrunme-operator.json"
+            ".kiro/steering/operator-loop.md"
             ".kiro/hooks/test-on-save.json"
             ".kiro/hooks/stop-checklist.json"
             "docs/KIRO_LOG.md"

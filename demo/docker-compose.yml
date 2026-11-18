@@ -17,7 +17,10 @@ services:
     ports:
       - "5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U demo_user -d pumpkin_patch"]
+      # Over TCP on purpose: during first start the image runs a temporary server on the
+      # Unix socket only, then restarts it. A socket check reports healthy too early and
+      # the next psql can hit the restart (seen as a FAILED rehearsal on a slow CI runner).
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U demo_user -d pumpkin_patch"]
       interval: 5s
       timeout: 5s
       retries: 10

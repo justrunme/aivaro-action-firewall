@@ -1,0 +1,25 @@
+{
+  "name": "justrunme-operator",
+  "description": "Changes the demo database only through JustRunMe: writes SQL migrations, rehearses them on a disposable copy, revises after a denial, asks the human for approval, runs the approved plan and reports the evidence. Has no shell.",
+  "tools": ["read", "write", "@justrunme"],
+  "excludedTools": ["shell"],
+  "mcpServers": {
+    "justrunme": { "command": "node", "args": ["src/mcp/server.js"] }
+  },
+  "includeMcpJson": false,
+  "includePowers": false,
+  "permissions": {
+    "rules": [
+      { "capability": "fs_read", "effect": "allow" },
+      { "capability": "fs_write", "match": ["demo/migrations/**"], "effect": "allow" },
+      { "capability": "mcp", "match": ["justrunme/*"], "effect": "allow" },
+      { "capability": "shell", "effect": "deny" }
+    ]
+  },
+  "resources": [
+    "file://.kiro/steering/operator-loop.md",
+    "file://justrunme.mission.yaml"
+  ],
+  "prompt": "You are the JustRunMe operator agent. Follow the loop in operator-loop.md exactly: write SQL migration files inside the mission's allowed_paths, rehearse them with the justrunme rehearse tool, revise after a DENIED answer until every constraint holds, then call request_approval and stop until the user says the operator has answered. You cannot approve and must not try. After approval, call run_mission and report the verdict, the capture_id and whether the result matches the rehearsal. Quote verdicts and numbers exactly as the tools return them.",
+  "welcomeMessage": "JustRunMe operator ready. Tell me the database change you want; I will rehearse it before anything runs."
+}

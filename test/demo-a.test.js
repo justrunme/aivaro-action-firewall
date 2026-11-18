@@ -196,7 +196,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     writeFileSync(path.join(repoDir, 'demo/migrations/004_index.sql'), 'CREATE INDEX orders_patch_idx ON orders (patch_id);\n')
     const c = writeContract('demo/migrations/004_index.sql')
     const report = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
-    assert.equal(report.verdict, 'SAFE')
+    assert.equal(report.verdict, 'SAFE', JSON.stringify({ evidence: report.evidence, steps: report.steps }))
     const r = await psql(realTarget, { sql: 'UPDATE orders SET quantity = quantity + 1 WHERE id = 1' })
     assert.equal(r.code, 0, r.stderr)
     await assert.rejects(

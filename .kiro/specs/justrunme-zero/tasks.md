@@ -273,12 +273,12 @@ Decisions fixed by the operator: official MCP SDK from plain JavaScript (no Type
 | T23.1 | Approver key: separate Ed25519 key sealed at rest (scrypt + AES-256-GCM, owner-only file), opened only by the human-run CLI; signs authorizations only; the hook and `run` verify with its public half | test/approver.test.js, test/authorization.test.js, test/cli.test.js |
 | T23.2 | Approval requests: `request_approval` (SAFE, current, recommended plan only), signed and recorded, bound to report hash, base, SQL file hashes and expiry; `justrunme approvals` / `approve <id> --confirm <plan_id>` / `deny <id> --reason`; chain policy rule 7 (answered once, not after denial or expiry, same plan) | test/approval.test.js |
 | T23.3 | `run_mission` (refused without an approval; post-run comparison with the rehearsal), `undo_mission`, `verify_recovery` against real Postgres; the MCP server runs without the passphrase and with the sealed key unreadable | test/demo-approval.test.js (Linux, Docker) |
-| T24 | `justrunme-operator` agent, steering, `mcp.json`; full loop in real Kiro CLI | PR C |
+| T24 | `justrunme-operator` agent (v3, MCP server declared in the agent; `.kiro/settings/mcp.json` is not writable by Kiro), steering, throwaway workspace script; full loop in real Kiro CLI | test/agent-config.test.js; docs/agent-runs/2026-11-18-run1.md, KIRO_LOG Run 20 |
 | T27 | Console (`node:http` on 127.0.0.1, startup token, no framework): Missions, Impact Diff, Approval Center, Recovery & Replay; Approve runs `justrunme approve --passphrase-stdin` as a child; no authorization path over HTTP | PR Console |
 | T25 | Real-agent evaluation, preregistered set, all runs kept | PR D |
 | T26 | `init`, `doctor`, Evidence Timeline | PR E |
 
-- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [ ] T24 · [ ] T27 · [ ] T25 · [ ] T26
+- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [x] T24 · [ ] T27 · [ ] T25 · [ ] T26
 
 ---
 
