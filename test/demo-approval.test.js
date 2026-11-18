@@ -1,7 +1,8 @@
 /**
  * T23 against real Docker and Postgres. The agent side uses only the MCP server; the
  * human side uses only the CLI (approvals, approve, deny), in a separate process that
- * is the only one holding the approver passphrase.
+ * is the only one holding the approver passphrase. In the third case the human approves
+ * in the Console (T27), whose process never has the passphrase in its environment.
  *
  *   rehearse (DENIED) -> revise -> rehearse (SAFE) -> request_approval (PENDING)
  *   -> run_mission refused -> approve --confirm -> run_mission COMPLETED, matches the
@@ -19,7 +20,9 @@
 
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
+import { createInterface } from 'node:readline'
 import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import os from 'node:os'
@@ -281,9 +284,33 @@ describe('Demo approval: the agent asks, the operator approves once, the run mat
     const asked = (await server.call('request_approval', { plan_id: safe.plan_id })).payload
     assert.equal(asked.status, 'PENDING_APPROVAL', JSON.stringify(asked))
     if (canLockOut) unlockKey()
-    const approved = operator('approve', asked.request_id, '--confirm', safe.plan_id)
-    assert.equal(approved.code, 0, JSON.stringify(approved.out))
-    assert.equal(approved.out.result.passphrase_source, 'env', 'a scripted approval says so')
+    // T27: this time the operator approves in the Console. The Console process has no
+    // passphrase in its environment; the passphrase is posted once and reaches
+    // `justrunme approve --passphrase-stdin` on stdin.
+    const consoleEnv = baseEnv()
+    assert.equal(consoleEnv.JUSTRUNME_APPROVER_PASSPHRASE, undefined)
+    const con = spawn(process.execPath, [CLI, 'console', '--port', '0'], { cwd: repoDir, env: consoleEnv, stdio: ['ignore', 'pipe', 'pipe'] })
+    try {
+      const [line] = await once(createInterface({ input: con.stdout }), 'line')
+      const started = JSON.parse(line)
+      assert.equal(started.ok, true, line)
+      const url = new URL(started.result.url)
+      const token = url.hash.replace('#token=', '')
+      const headers = { authorization: `Bearer ${token}`, origin: url.origin, 'content-type': 'application/json' }
+      const shownInConsole = await (await fetch(new URL(`/api/approvals/${asked.request_id}`, url.origin), { headers })).json()
+      assert.deepEqual([shownInConsole.result.state, shownInConsole.result.report.verdict], ['pending', 'SAFE'], JSON.stringify(shownInConsole))
+      const res = await fetch(new URL('/api/approve', url.origin), { method: 'POST', headers, body: JSON.stringify({ request_id: asked.request_id, confirm: safe.plan_id, passphrase }) })
+      const text = await res.text()
+      assert.equal(res.status, 200, text)
+      assert.ok(!text.includes(passphrase), 'the passphrase is not echoed')
+      const approved = JSON.parse(text)
+      assert.deepEqual([approved.command, approved.ok, approved.result.request_id, approved.result.passphrase_source], ['approve', true, asked.request_id, 'stdin'], text)
+      const story = await (await fetch(new URL('/api/state', url.origin), { headers })).json()
+      const q = story.story.result.requests.find((x) => x.request_id === asked.request_id)
+      assert.deepEqual([q.state, q.authorization.passphrase_source], ['approved', 'stdin'])
+    } finally {
+      con.kill('SIGTERM')
+    }
     if (canLockOut) lockKey()
 
     // Edited after approval: the source fingerprint catches it first; the authorization's own file

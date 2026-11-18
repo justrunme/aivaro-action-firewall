@@ -47,7 +47,7 @@ const link = (code, ok, why) => ({ code, ok, ...(ok ? {} : { why }) })
  * @param {{ repoDir: string, missionId: string, chain: { ok: boolean, receipts: any[], findings: any[] }, now?: number }} a
  */
 export function buildStory({ repoDir, missionId, chain, now = Date.now() }) {
-  if (!chain.ok) return { mission_id: missionId, chain_ok: false, chain_findings: chain.findings, versions: [], requests: [], runs: [], links: [], history: null }
+  if (!chain.ok) return { mission_id: missionId, chain_ok: false, chain_findings: chain.findings, versions: [], requests: [], runs: [], links: [], timeline: [], history: null }
   const receipts = chain.receipts
   const byHash = new Map(receipts.map((r) => [receiptHash(r), r]))
   const versions = receipts.filter((r) => r.kind === 'rehearsal').map((r) => versionOf(repoDir, missionId, r))
@@ -116,5 +116,7 @@ export function buildStory({ repoDir, missionId, chain, now = Date.now() }) {
     links.push({ request_id: q.request_id, plan_id: q.plan_id, run: run?.receipt ?? null, links: chainLinks, ok: chainLinks.every((l) => l.ok) })
   }
 
-  return { mission_id: missionId, chain_ok: true, chain_findings: [], versions, requests, runs, links, history: verifyHistory(repoDir, missionId, receipts) }
+  // Every receipt in order, without its subject: what happened, when, and the hash to look it up by.
+  const timeline = receipts.map((r) => ({ seq: r.seq, kind: r.kind, verdict: r.verdict, at: r.timestamp, hash: receiptHash(r) }))
+  return { mission_id: missionId, chain_ok: true, chain_findings: [], versions, requests, runs, links, timeline, history: verifyHistory(repoDir, missionId, receipts) }
 }

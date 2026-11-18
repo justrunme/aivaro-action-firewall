@@ -873,3 +873,30 @@ Written:
 Tests: `test/history.test.js` (two versions under one plan id stay readable; a deleted report, an edited SQL file and a report filed under another name are each reported; legacy receipts pass; the story's links hold for A denied, B approved and run; a run of other files and a result unlike the rehearsal break the named links; approving a non-SAFE version is reported). `test/demo-approval.test.js` case 1 now reads `justrunme history` after the real run and undo: Plan A `DATA LOSS` with 1 row lost and a removed column, Plan B `SAFE`, the request approved (`passphrase_source: env`), the run `completed` with `matches_rehearsal: true`, undone and verified, all four links hold, two archived versions.
 
 Limits: the archive is a folder; anyone with the operator's OS user can delete it, and then `verify` and `history` report the gap but cannot restore it. The same plan id with two versions is tested in the unit test; the Docker test uses two file names.
+
+---
+
+## Run 22 — T27: the Console (Console PR, second part)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-18 |
+| Branch | `kiro/t27-console` (on top of T27.1) |
+
+Written:
+
+- `src/console/server.js`: `node:http` on 127.0.0.1 only. Every `/api` call needs `Authorization: Bearer <token>`; the 32-byte token is new on every start and reaches the browser in the URL fragment, which browsers do not send to servers. The Host header must be `127.0.0.1:<port>` or `localhost:<port>` (DNS rebinding); a POST needs the Origin of this server and a JSON body (no cross-site form posts). A strict Content-Security-Policy allows only our own script and style; the static page holds no data. Writes run one at a time (409 when busy).
+- `src/console/api.js`: reads call `main()` of the CLI in process with an allowlist (`history`, `verify`, `approvals`, `status`, `receipt`, `replay`), so the Console shows exactly the redacted CLI output. Approve, deny and undo start `src/cli/index.js` as a child. The passphrase goes to `approve --passphrase-stdin` on stdin, never in argv or the environment; `JUSTRUNME_APPROVER_PASSPHRASE` is removed from the child environment. Request ids, plan ids, capture ids and the one-line passphrase are checked before a child is started.
+- `src/console/static/`: `index.html`, `style.css` (dark theme), `app.js` (token, routing, refresh while nobody types), `ui.js` (DOM helper that only sets text and plain attributes, line diff), `model.js` (pipeline and Plan A / Plan B selection, no DOM), `screens.js` (Missions, Impact Diff, Approval Center, Recovery & Replay).
+- `justrunme console [--port n] [--repo] [--mission]` prints one JSON line with the URL and runs until Ctrl+C.
+- `justrunme history` now also returns `timeline` (seq, kind, verdict, time, hash of every receipt).
+
+Tests: `test/console.test.js`: missing, wrong or malformed token gives 401; a foreign Host gives 403 even with the token; a POST without the Origin or with another one gives 403, with a non-JSON body 415; the state shows the CLI's story, verification and approvals without local paths; the pipeline model gives PROPOSED to VERIFIED for A denied, B approved and run, and `broken` when a link fails; with a stand-in CLI, approve passes `--passphrase-stdin`, the passphrase arrives on stdin, is not in argv, not in the child environment, not in the response; malformed input never starts the child; no file under `src/console/` names the approver key module or the approve and authorize functions. `test/demo-approval.test.js` case 3 now approves through the Console HTTP API against real Postgres: the Console process has no passphrase in its environment, and the authorization records `passphrase_source: stdin`.
+
+Checked by hand: screenshots of the four screens with headless Chrome on synthetic chain data (Missions, Impact Diff, Approval Center with a pending request, Recovery & Replay). Not committed.
+
+`justrunme-skeptic` review: no blocker. Fixed: a deny reason starting with "-" was refused by the CLI's option parser (now passed as `--reason=<text>`, tested with option-like reasons); the read allowlist is now a tested function (`readArgv`), and a spy `main` shows every in-process call is a read command; a request path like `//host/x` is refused; a token of the wrong length cannot throw; the passphrase field asks the browser not to store it; README now says Origin is checked on POST only, that the approve code is loaded with the CLI but only reachable through the child, and that `passphrase_source: stdin` names the channel, not the person (a script piping into `--passphrase-stdin` records the same); tasks.md no longer says "no authorization path over HTTP" (Approve does lead to an authorization, through the CLI); scope.md names Deny and Undo.
+
+Found in the Docker run: `justrunme console` hung before printing its URL. The CLI entry awaited `runConsole` at top level, and the Console imports the CLI module for `main`, so that import waited for a module that was still evaluating. The entry now starts the Console without a top-level await; `test/console.test.js` starts `justrunme console` as a process and calls its API. Gate after the fix: npm 353/353, Docker 23/23 (macOS, JRM_DOCKER_TESTS=1).
+
+Limits: the passphrase passes through the Console process memory on its way to the child; anyone who has both the token and the passphrase can approve, as at the terminal; wrong passphrases are not rate-limited beyond one write at a time and the scrypt cost. The Console has no browser test; layout was checked by screenshots only.

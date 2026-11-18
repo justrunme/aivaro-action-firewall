@@ -275,11 +275,11 @@ Decisions fixed by the operator: official MCP SDK from plain JavaScript (no Type
 | T23.3 | `run_mission` (refused without an approval; post-run comparison with the rehearsal), `undo_mission`, `verify_recovery` against real Postgres; the MCP server runs without the passphrase and with the sealed key unreadable | test/demo-approval.test.js (Linux, Docker) |
 | T24 | `justrunme-operator` agent (v3, MCP server declared in the agent; `.kiro/settings/mcp.json` is not writable by Kiro), steering, throwaway workspace script; full loop in real Kiro CLI | test/agent-config.test.js; docs/agent-runs/2026-11-18-run1.md, KIRO_LOG Run 20 |
 | T27.1 | Plan history: signed reports and SQL archived by content hash, file hashes in report and receipt, `verify` checks the archive against the chain, `run_result` records the files that ran and the comparison with the rehearsal, `justrunme history` with four checked links | test/history.test.js; test/demo-approval.test.js (Linux, Docker) |
-| T27 | Console (`node:http` on 127.0.0.1, startup token, no framework): Missions, Impact Diff, Approval Center, Recovery & Replay; Approve runs `justrunme approve --passphrase-stdin` as a child; no authorization path over HTTP | PR Console |
+| T27 | Console (`node:http` on 127.0.0.1, startup token, no framework): Missions, Impact Diff, Approval Center, Recovery & Replay; Approve runs `justrunme approve --passphrase-stdin` as a child; no authorization code of its own in the Console | test/console.test.js (token, Host, Origin, JSON, passphrase on stdin only, no approver code in src/console); test/demo-approval.test.js case 3 approves through the Console against real Postgres (`passphrase_source: stdin`) |
 | T25 | Real-agent evaluation, preregistered set, all runs kept | PR D |
 | T26 | `init`, `doctor`, Evidence Timeline | PR E |
 
-- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [x] T24 · [x] T27.1 · [ ] T27 · [ ] T25 · [ ] T26
+- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [x] T24 · [x] T27.1 · [x] T27 · [ ] T25 · [ ] T26
 
 ---
 
