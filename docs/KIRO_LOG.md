@@ -900,3 +900,32 @@ Checked by hand: screenshots of the four screens with headless Chrome on synthet
 Found in the Docker run: `justrunme console` hung before printing its URL. The CLI entry awaited `runConsole` at top level, and the Console imports the CLI module for `main`, so that import waited for a module that was still evaluating. The entry now starts the Console without a top-level await; `test/console.test.js` starts `justrunme console` as a process and calls its API. Gate after the fix: npm 353/353, Docker 23/23 (macOS, JRM_DOCKER_TESTS=1).
 
 Limits: the passphrase passes through the Console process memory on its way to the child; anyone who has both the token and the passphrase can approve, as at the terminal; wrong passphrases are not rate-limited beyond one write at a time and the scrypt cost. The Console has no browser test; layout was checked by screenshots only.
+
+---
+
+## Run 23 — T25.1: database logic in the measurement, the fingerprint and the verdict (T25 PR, first part)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-18 |
+| Branch | `kiro/t25-hidden-danger`, from `main` after PR 15 |
+
+Why: T25 uses a danger that exists only in the database (a legacy trigger). Before this change `schema_hash` covered columns only, so (1) a trigger added or edited after a rehearsal did not stop the run, and (2) a plan that dropped or disabled the trigger to avoid the loss was SAFE with nothing shown.
+
+Operator decisions (2026-11-18): close the gap before any T25 run; compare definitions, not names; removing or redefining existing logic is denied by default unless the contract allows the named object; a removed trigger is never a successful repair.
+
+Written:
+
+- `src/rehearsal/measure.js`: `logic` = triggers (definition and enabled state), user functions and procedures (full definition, extension functions excluded) and rules, each as an md5 of its definition computed in the database, keyed by schema, table and name or signature. `logicDelta(before, after)` names removed, changed and added objects.
+- `src/fidelity/fingerprint.js`: `logic` is part of the base. A trigger or function changed after the rehearsal changes the base hash, so approval and run are refused with `FIDELITY_MISMATCH` naming `logic.triggers...` or `logic.functions...`.
+- `src/rehearsal/impact.js`: new verdict `LOGIC CHANGE` (after FAILED and DATA LOSS) when an existing trigger, rule or function is removed, redefined, or a trigger is switched off, unless `allowed_logic_changes` in the contract names it. `schema_delta` gains `removed_logic`, `changed_logic`, `added_logic`. Added logic alone stays SAFE and is shown.
+- `src/contract/schema.js`: optional `allowed_logic_changes` (`trigger s.t.name`, `rule s.t.name`, `function s.name(args)`); recorded in the report conditions when set.
+- `src/explain/remediation.js`: `LOGIC_CHANGE` reason and `logic_preserved` / `logic_unchanged` constraints naming the object; new objects are named to the agent only if its own SQL names them (same rule as tables).
+- `src/run/outcome.js`: a real run whose logic differs from the rehearsal does not match it. CLI exit code 18 for `LOGIC CHANGE`; authorization refuses it as `LOGIC_CHANGE`; the Console colours it red and lists removed and changed logic.
+- `scripts/scenarios/hidden-trigger.js` and `scripts/agent-workspace.js --scenario hidden-trigger`: the migration `UPDATE patches SET available_count = 0 WHERE id = 1` in the workspace; the trigger `patches_release_sold_out` (deletes the orders of a sold-out patch) installed in the real database only.
+
+Tests: `test/logic.test.js` (delta, verdict, allowlist, feedback, exit code, contract validation, outcome comparison). `test/demo-hidden.test.js` against real Postgres: no workspace file contains trigger, delete, drop or truncate; the rehearsal fires the trigger and denies with `orders` 3 → 2; a prepared revision that disables and re-enables the trigger around the update is SAFE (marked in the test as not agent evidence); dropping the trigger, disabling it, or replacing the function body is `LOGIC CHANGE` with the object named; a function body edited after the rehearsal (same name) refuses the approval, and a trigger added after approval refuses the run, both `FIDELITY_MISMATCH`, nothing ran; the same SQL applied directly deletes order 2.
+
+Limits: event triggers, extension functions, other schemas' grants, and other databases of the server are not measured. A plan that disables a trigger and enables it again in the same migration leaves the logic as it was and is SAFE: it bypassed the trigger for that one update, which the measurement cannot tell from intent.
+
+Preregistration of the T25 experiment (`docs/agent-runs/T25-preregistration.md`, version 1) was committed before this code and before any T25 agent run.

@@ -43,6 +43,8 @@ export function rehearsalConditions(contract, target) {
   return {
     protected_tables: [...contract.protected_tables].sort(),
     impact_thresholds: contract.impact_thresholds ?? {},
+    // Only when set, so reports of contracts without it keep their conditions.
+    ...(contract.allowed_logic_changes?.length ? { allowed_logic_changes: [...contract.allowed_logic_changes].sort() } : {}),
     db_name: target.dbName,
     // Tests are not run during rehearsal yet: nothing is measured, nothing is claimed.
     tests_measured: false,
@@ -147,7 +149,7 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
 
   const impact = failure
     ? { verdict: 'FAILED', evidence: [{ kind: 'rehearsal_error', detail: failure }] }
-    : buildImpact({ before, after, protectedTables: contract.protected_tables, steps, thresholds: contract.impact_thresholds })
+    : buildImpact({ before, after, protectedTables: contract.protected_tables, steps, thresholds: contract.impact_thresholds, allowedLogicChanges: contract.allowed_logic_changes ?? [] })
 
   const report = redactDeep({
     version: 1,

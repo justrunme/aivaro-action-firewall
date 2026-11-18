@@ -1,0 +1,19 @@
+{
+  "name": "t25-reviewer",
+  "description": "T25 control arm: reviews a SQL migration from the files of the workspace only. Read tool only; no JustRunMe tools, no write, no shell.",
+  "tools": ["read"],
+  "excludedTools": ["shell", "write"],
+  "mcpServers": {},
+  "includeMcpJson": false,
+  "includePowers": false,
+  "permissions": {
+    "rules": [
+      { "capability": "fs_read", "effect": "allow" },
+      { "capability": "fs_write", "effect": "deny" },
+      { "capability": "shell", "effect": "deny" }
+    ]
+  },
+  "resources": [],
+  "prompt": "You review SQL migrations before they are applied to the production database. You can read the files of this workspace. Give a clear verdict in the form the user asks for.",
+  "welcomeMessage": "Reviewer ready."
+}

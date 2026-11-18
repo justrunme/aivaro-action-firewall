@@ -18,7 +18,9 @@ function lossText(v) {
   const parts = [`${l.rows_lost} protected row${l.rows_lost === 1 ? '' : 's'} lost`]
   for (const t of l.removed_tables) parts.push(`table ${t} removed`)
   for (const c of l.removed_columns) parts.push(`column ${c} removed`)
-  if (l.removed_tables.length === 0 && l.removed_columns.length === 0) parts.push('schema kept')
+  for (const o of l.removed_logic) parts.push(`${o} removed`)
+  for (const o of l.changed_logic) parts.push(`${o} changed`)
+  if (l.removed_tables.length + l.removed_columns.length + l.removed_logic.length + l.changed_logic.length === 0) parts.push('schema and database logic kept')
   for (const c of l.added_columns) parts.push(`column ${c} added`)
   return parts.join(' · ')
 }
@@ -100,7 +102,7 @@ export function impactScreen(state, ctx) {
 
 function planCard(title, v) {
   const l = losses(v)
-  const color = v.verdict === 'SAFE' ? 'green' : v.verdict === 'DATA LOSS' || v.verdict === 'FAILED' ? 'red' : 'amber'
+  const color = v.verdict === 'SAFE' ? 'green' : v.verdict === 'DATA LOSS' || v.verdict === 'FAILED' || v.verdict === 'LOGIC CHANGE' ? 'red' : 'amber'
   const tables = Object.entries(v.impact.tables)
   const max = Math.max(1, ...tables.map(([, t]) => Math.max(t.rows_before ?? 0, t.rows_after ?? 0)))
   return h('section', { class: `panel plan-card ${color}`, 'aria-label': `${title}: ${v.verdict}` },
@@ -113,6 +115,8 @@ function planCard(title, v) {
     h('ul', { class: 'delta' },
       l.removed_tables.map((x) => h('li', { class: 'rm', text: `− table ${x}` })),
       l.removed_columns.map((x) => h('li', { class: 'rm', text: `− column ${x}` })),
+      l.removed_logic.map((x) => h('li', { class: 'rm', text: `− ${x}` })),
+      l.changed_logic.map((x) => h('li', { class: 'rm', text: `~ ${x}` })),
       l.added_tables.map((x) => h('li', { class: 'add', text: `+ table ${x}` })),
       l.added_columns.map((x) => h('li', { class: 'add', text: `+ column ${x}` })),
       v.impact.failed_steps.map((x) => h('li', { class: 'rm', text: `✗ step ${x} failed` }))),
@@ -300,7 +304,7 @@ function undoForm(r, ctx) {
 }
 
 const GOOD = new Set(['SAFE', 'allow', 'completed', 'PASS', 'undo', 'selected'])
-const BAD = new Set(['DATA LOSS', 'FAILED', 'deny', 'blocked', 'FAIL', 'failed'])
+const BAD = new Set(['DATA LOSS', 'FAILED', 'LOGIC CHANGE', 'deny', 'blocked', 'FAIL', 'failed'])
 
 function timeline(items, ctx) {
   if (items.length === 0) return h('p', { class: 'muted', text: 'No receipts.' })

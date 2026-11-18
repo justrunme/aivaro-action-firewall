@@ -36,7 +36,7 @@ export function pill(text, kind = '') {
   return h('span', { class: `pill ${kind}`, text })
 }
 
-export const verdictKind = (v) => (v === 'SAFE' ? 'ok' : v === 'DATA LOSS' || v === 'FAILED' ? 'bad' : 'warn')
+export const verdictKind = (v) => (v === 'SAFE' ? 'ok' : v === 'DATA LOSS' || v === 'FAILED' || v === 'LOGIC CHANGE' ? 'bad' : 'warn')
 
 /** Line diff by longest common subsequence: [{ sign: ' ' | '-' | '+', text }]. */
 export function lineDiff(a, b) {

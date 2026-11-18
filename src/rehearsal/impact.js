@@ -4,8 +4,12 @@
  * Pure function of the measurements. Verdict rules, in order:
  *   FAILED     a rehearsed step did not complete
  *   DATA LOSS  a table or a column disappeared, or a protected table lost rows
+ *   LOGIC CHANGE  an existing trigger, rule or function was removed or redefined (or a
+ *                 trigger switched off) and the contract's allowed_logic_changes does not name it
  *   SAFE       otherwise
  */
+
+import { logicDelta } from './measure.js'
 
 /**
  * @param {object} a
@@ -14,8 +18,9 @@
  * @param {string[]} a.protectedTables
  * @param {{ id: string, status: string }[]} a.steps
  * @param {{ max_rows_deleted?: number }} [a.thresholds]
+ * @param {string[]} [a.allowedLogicChanges] entries like "trigger public.patches.name" the operator allows to change
  */
-export function buildImpact({ before, after, protectedTables, steps, thresholds = {} }) {
+export function buildImpact({ before, after, protectedTables, steps, thresholds = {}, allowedLogicChanges = [] }) {
   const names = [...new Set([...Object.keys(before.tables), ...Object.keys(after.tables)])].sort()
   const tables = {}
   const removedTables = []
@@ -58,8 +63,17 @@ export function buildImpact({ before, after, protectedTables, steps, thresholds 
       evidence.push({ kind: 'protected_rows_lost', table: t, rows_before: row.rows_before, rows_after: row.rows_after })
     }
   }
+  // T25: existing database logic (triggers, rules, functions) removed or redefined. A
+  // plan that avoids a loss by switching off the logic that caused it has changed what
+  // the database does; it is denied unless the operator's contract names the object.
+  const logic = logicDelta(before.logic, after.logic)
+  const logicEvidence = []
+  for (const [kind, list] of [['logic_removed', logic.removed], ['logic_changed', logic.changed]]) {
+    for (const object of list) if (!allowedLogicChanges.includes(object)) logicEvidence.push({ kind, object })
+  }
   const failed = steps.filter((s) => s.status !== 'ok')
-  const verdict = failed.length > 0 ? 'FAILED' : evidence.length > 0 ? 'DATA LOSS' : 'SAFE'
+  const verdict = failed.length > 0 ? 'FAILED' : evidence.length > 0 ? 'DATA LOSS' : logicEvidence.length > 0 ? 'LOGIC CHANGE' : 'SAFE'
+  evidence.push(...logicEvidence)
 
   const threshold_breaches = []
   if (Number.isInteger(thresholds.max_rows_deleted) && rowsDeleted > thresholds.max_rows_deleted) {
@@ -72,11 +86,14 @@ export function buildImpact({ before, after, protectedTables, steps, thresholds 
     rows_deleted: rowsDeleted,
     tables,
     schema_delta: {
-      changed: before.schema_hash !== after.schema_hash,
+      changed: before.schema_hash !== after.schema_hash || logic.removed.length + logic.changed.length + logic.added.length > 0,
       added_tables: addedTables,
       removed_tables: removedTables,
       added_columns: addedColumns,
       removed_columns: removedColumns,
+      removed_logic: logic.removed,
+      changed_logic: logic.changed,
+      added_logic: logic.added,
     },
     failed_steps: failed.map((s) => s.id),
     threshold_breaches,

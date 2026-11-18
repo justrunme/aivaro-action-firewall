@@ -42,5 +42,57 @@ export async function measureDatabase(exec) {
     tables[t] = { rows: Number(count), checksum }
   }
   const schema_hash = 'sha256:' + sha256Hex(cols.map((c) => c.join('\t')).join('\n'))
-  return { schema_hash, columns, tables }
+  return { schema_hash, columns, tables, logic: await measureLogic(exec) }
+}
+
+// Schemas that belong to Postgres itself.
+const USER_SCHEMA = (col) => `${col} NOT IN ('pg_catalog', 'information_schema') AND ${col} NOT LIKE 'pg\\_toast%' AND ${col} NOT LIKE 'pg\\_temp%'`
+
+/**
+ * T25: database logic that runs when data changes, by definition. A trigger (with its
+ * enabled state), a rule or a function whose body changes gets another hash under the
+ * same name, so a change is seen even when every name stays. Definitions are hashed
+ * inside the database (one line of output each) and their text is not stored.
+ * Not covered: event triggers, functions installed by extensions, other databases.
+ */
+async function measureLogic(exec) {
+  const triggers = await query(
+    exec,
+    'SELECT n.nspname, c.relname, t.tgname, md5(pg_get_triggerdef(t.oid) || \' enabled=\' || t.tgenabled::text) FROM pg_trigger t ' +
+      'JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace ' +
+      `WHERE NOT t.tgisinternal AND ${USER_SCHEMA('n.nspname')} ORDER BY 1, 2, 3`
+  )
+  const functions = await query(
+    exec,
+    "SELECT n.nspname, p.proname || '(' || pg_get_function_identity_arguments(p.oid) || ')', md5(pg_get_functiondef(p.oid)) FROM pg_proc p " +
+      'JOIN pg_namespace n ON n.oid = p.pronamespace ' +
+      `WHERE p.prokind IN ('f', 'p') AND ${USER_SCHEMA('n.nspname')} ` +
+      "AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'e') ORDER BY 1, 2"
+  )
+  const rules = await query(exec, `SELECT schemaname, tablename, rulename, md5(definition) FROM pg_rules WHERE ${USER_SCHEMA('schemaname')} ORDER BY 1, 2, 3`)
+  const out = { triggers: {}, functions: {}, rules: {} }
+  for (const [s, t, name, h] of triggers) out.triggers[`${s}.${t}.${name}`] = 'md5:' + h
+  for (const [s, sig, h] of functions) out.functions[`${s}.${sig}`] = 'md5:' + h
+  for (const [s, t, name, h] of rules) out.rules[`${s}.${t}.${name}`] = 'md5:' + h
+  return out
+}
+
+/**
+ * What changed in the database logic between two measurements, by kind:
+ * removed, changed (same name, other definition or enabled state) and added.
+ * @returns {{ removed: string[], changed: string[], added: string[] }} entries like "trigger public.patches.x"
+ */
+export function logicDelta(before, after) {
+  const out = { removed: [], changed: [], added: [] }
+  for (const kind of ['triggers', 'functions', 'rules']) {
+    const b = before?.[kind] ?? {}
+    const a = after?.[kind] ?? {}
+    const label = kind.slice(0, -1)
+    for (const name of Object.keys(b).sort()) {
+      if (!(name in a)) out.removed.push(`${label} ${name}`)
+      else if (a[name] !== b[name]) out.changed.push(`${label} ${name}`)
+    }
+    for (const name of Object.keys(a).sort()) if (!(name in b)) out.added.push(`${label} ${name}`)
+  }
+  return out
 }
