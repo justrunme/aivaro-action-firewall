@@ -15,6 +15,8 @@
  *   justrunme approvals [request_id]
  *   justrunme approve <request_id> --confirm <plan_id> [--passphrase-stdin]
  *   justrunme deny <request_id> --reason "<text>"
+ *   justrunme history                       # versions, approvals, runs and the links between them
+ *   justrunme console [--port n]            # local Console on 127.0.0.1; keeps running
  * Common options: --repo <dir> (default: current directory), --mission <id>, --text.
  */
 
@@ -45,7 +47,7 @@ const OPTIONS = {
   help: { type: 'boolean', short: 'h', default: false },
 }
 
-const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny> [options]'
+const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny|history|console> [options]'
 
 async function dispatch(command, rest, repoDir, opts) {
   const ctx = { repoDir, opts }
@@ -86,6 +88,10 @@ async function dispatch(command, rest, repoDir, opts) {
       return cmd.approveCmd({ ...ctx, id: rest[0] })
     case 'deny':
       return cmd.denyCmd({ ...ctx, id: rest[0] })
+    case 'history':
+      return cmd.historyCmd(ctx)
+    case 'console':
+      throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'console is a long-running server; start it from the command line: justrunme console [--port n]')
   }
   throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
 }
@@ -189,7 +195,46 @@ const isEntry = (() => {
   }
 })()
 
-if (isEntry) {
+/**
+ * `justrunme console [--port n] [--repo dir] [--mission id]`: starts the local Console and
+ * keeps running until interrupted. It prints one JSON line with the URL; the token is in
+ * the fragment (#token=...), which the browser never sends to a server.
+ */
+async function runConsole(argv) {
+  let parsed
+  try {
+    parsed = parseArgs({ args: argv, options: { repo: { type: 'string' }, mission: { type: 'string' }, port: { type: 'string' } }, allowPositionals: false, strict: true })
+  } catch (err) {
+    process.stdout.write(JSON.stringify({ command: 'console', ok: false, exit_code: EXIT.USAGE, error: { code: 'USAGE', message: err.message } }) + '\n')
+    process.exitCode = EXIT.USAGE
+    return
+  }
+  const o = parsed.values
+  const port = o.port === undefined ? 0 : Number(o.port)
+  if (!Number.isInteger(port) || port < 0 || port > 65535 || (o.mission !== undefined && !MISSION_RE.test(o.mission))) {
+    process.stdout.write(JSON.stringify({ command: 'console', ok: false, exit_code: EXIT.USAGE, error: { code: 'USAGE', message: 'invalid --port or --mission' } }) + '\n')
+    process.exitCode = EXIT.USAGE
+    return
+  }
+  const { startConsole } = await import('../console/server.js')
+  const c = await startConsole({ repoDir: path.resolve(o.repo ?? process.cwd()), mission: o.mission, port })
+  process.stdout.write(JSON.stringify({ command: 'console', ok: true, exit_code: EXIT.OK, result: { url: c.url, port: c.port, stop: 'Ctrl+C' } }) + '\n')
+  const stop = async () => {
+    await c.close()
+    process.exit(EXIT.OK)
+  }
+  process.once('SIGINT', stop)
+  process.once('SIGTERM', stop)
+}
+
+if (isEntry && process.argv[2] === 'console') {
+  // Not awaited: the Console imports this module (for `main`), and a top-level await here
+  // would keep this module evaluating while that import waits for it (a deadlock).
+  runConsole(process.argv.slice(3)).catch((err) => {
+    process.stdout.write(JSON.stringify(redactDeep({ command: 'console', ok: false, exit_code: EXIT.INTERNAL, error: { code: 'INTERNAL', message: String(err?.message ?? err) } })) + '\n')
+    process.exitCode = EXIT.INTERNAL
+  })
+} else if (isEntry) {
   const { exit, text, output } = await main(process.argv.slice(2))
   process.stdout.write(text ? textOf(output) : JSON.stringify(output) + '\n')
   process.exitCode = exit

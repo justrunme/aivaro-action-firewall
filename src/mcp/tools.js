@@ -33,8 +33,6 @@ import { createRequest, listRequests, loadRequest, sha256File } from '../approva
 import { loadManifest } from '../capture/capture.js'
 import { verifyRecovery } from '../undo/verify.js'
 import { loadTarget } from '../cli/target.js'
-import { measureDatabase } from '../rehearsal/measure.js'
-import { psql } from '../rehearsal/compose.js'
 import { hashValue } from '../util/canonical.js'
 import { sourceState } from '../fidelity/source.js'
 
@@ -129,27 +127,6 @@ const pendingPayload = (request, already) => ({
   operator_steps: [`justrunme approvals ${request.request_id}`, `justrunme approve ${request.request_id} --confirm ${request.plan_id}`],
   note: 'Nothing is authorized yet and you cannot authorize it. Tell the user the request is waiting; call run_mission after the operator has answered.',
 })
-
-/**
- * After a real run: is the database what the rehearsal predicted? Compares schema hash,
- * row counts and content checksums of every table; reports table names and counts only.
- */
-async function compareToRehearsal(repoDir, report) {
-  const predicted = report.database?.after
-  if (!predicted) return { matches: false, differences: [{ what: 'no rehearsal measurement to compare with' }] }
-  const { target } = loadTarget(repoDir)
-  const real = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
-  const now = await measureDatabase((sql) => psql(real, { sql }))
-  const differences = []
-  if (now.schema_hash !== predicted.schema_hash) differences.push({ what: 'schema differs from the rehearsal' })
-  for (const t of new Set([...Object.keys(predicted.tables), ...Object.keys(now.tables)])) {
-    const a = predicted.tables[t]
-    const b = now.tables[t]
-    if (!a || !b) differences.push({ table: t, what: a ? 'missing after the run' : 'not predicted by the rehearsal' })
-    else if (a.rows !== b.rows || a.checksum !== b.checksum) differences.push({ table: t, what: 'rows or content differ from the rehearsal', rows_rehearsed: a.rows, rows_real: b.rows })
-  }
-  return { matches: differences.length === 0, differences }
-}
 
 const guard = (fn) => async (ctx, args) => {
   try {
@@ -288,13 +265,8 @@ export const TOOLS = [
       const res = r.result
       const steps = res.steps.map((s) => ({ id: s.id, status: s.status, detail: String(s.detail ?? '').split('\n')[0].slice(0, 160) }))
       if (!res.ok) return { status: 'FAILED', plan_id, capture_id: res.capture_id, steps, receipt_hash: res.receipt_hash, next_action: 'UNDO_MISSION', undo: { tool: 'undo_mission', capture_id: res.capture_id } }
-      // The run has happened: a failed comparison must not lose the capture id the agent needs for undo.
-      let check
-      try {
-        check = await compareToRehearsal(repoDir, verifiedReport(repoDir, base.contract.id, plan_id))
-      } catch (err) {
-        check = { matches: null, differences: [{ what: `could not compare with the rehearsal: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}` }] }
-      }
+      // Measured by the run itself and recorded in its signed run_result (T27.1).
+      const check = res.outcome ?? { matches: null, differences: [{ what: 'the run did not report a comparison' }] }
       return {
         status: check.matches === true ? 'COMPLETED' : check.matches === false ? 'COMPLETED_WITH_DIVERGENCE' : 'COMPLETED_UNCHECKED',
         plan_id,

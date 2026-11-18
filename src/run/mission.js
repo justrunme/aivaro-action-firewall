@@ -22,6 +22,9 @@ import { executeSteps } from '../rehearsal/steps.js'
 import { captureState } from '../capture/capture.js'
 import { loadReport, planId, reportSignatureProblem } from '../rehearsal/engine.js'
 import { appendReceipt, findLast, verifyChain } from '../receipts/chain.js'
+import { measureDatabase } from '../rehearsal/measure.js'
+import { psql } from '../rehearsal/compose.js'
+import { compareOutcome } from './outcome.js'
 
 export const authorizationPath = (repoDir) => path.join(repoDir, STATE_DIR, 'authorization.json')
 
@@ -193,7 +196,17 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
     const steps = await executeSteps({ plan: contract.plan, cwd: repoDir, target: realTarget, mode: 'real' })
     const ok = steps.every((s) => s.status === 'ok' || s.status === 'skipped_needs_approval')
     const skipped = steps.filter((s) => s.status === 'skipped_needs_approval').map((s) => s.id)
-    const result = { mission_id: contract.id, plan_id: auth.plan_id, capture_id: manifest.capture_id, steps, ok, skipped_needs_approval: skipped, receipt_hash: null }
+    // T27.1: the real result against the rehearsal's prediction, recorded in the signed
+    // run_result so that history and the Console show it from the chain, not from a tool reply.
+    let outcome = null
+    if (ok) {
+      try {
+        outcome = compareOutcome(report.database?.after, await measureDatabase((sql) => psql(realTarget, { sql })))
+      } catch (err) {
+        outcome = { matches: null, differences: [{ what: `could not measure after the run: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}` }] }
+      }
+    }
+    const result = { mission_id: contract.id, plan_id: auth.plan_id, capture_id: manifest.capture_id, steps, ok, skipped_needs_approval: skipped, outcome, receipt_hash: null }
     // The run has happened: if its receipt cannot be written (lock held after the
     // check above), report that instead of losing the result and the capture id.
     try {
@@ -203,7 +216,17 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
         missionId: contract.id,
         kind: 'run_result',
         verdict: ok ? 'completed' : 'failed',
-        subject: { plan_id, capture_id: manifest.capture_id, manifest_hash: hashValue(manifest), steps: steps.map((s) => ({ id: s.id, status: s.status, detail: s.detail })) },
+        subject: {
+          plan_id,
+          capture_id: manifest.capture_id,
+          manifest_hash: hashValue(manifest),
+          steps: steps.map((s) => ({ id: s.id, status: s.status, detail: s.detail })),
+          // The files that ran: checked byte for byte against the authorization just before executing.
+          plan_files_hash: expectedFiles ? hashValue(expectedFiles) : null,
+          report_hash: hashValue(report),
+          matches_rehearsal: outcome ? outcome.matches : null,
+          differences: outcome ? outcome.differences.length : null,
+        },
         refs: { authorization: issued.hash },
       }).hash
     } catch (err) {

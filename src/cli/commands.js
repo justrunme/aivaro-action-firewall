@@ -15,6 +15,8 @@ import { keyHome, loadExistingKeys, loadOrCreateKeys, loadPublicKey, publicKeyHe
 import { ApproverKeyError, MIN_PASSPHRASE, approverKeyExists, createApproverKey, loadApproverKey, loadApproverPublicKey } from '../receipts/approver.js'
 import { ApprovalError, listRequests, loadRequest, requestState, sha256File } from '../approval/requests.js'
 import { readPassphrase } from './passphrase.js'
+import { verifyHistory } from '../history/archive.js'
+import { buildStory } from '../history/story.js'
 import { appendReceipt, inspectChainLock, reanchorChain, receiptHash, recoverLock, verifyChain } from '../receipts/chain.js'
 import { checkPolicy } from '../receipts/policy.js'
 import { hashValue } from '../util/canonical.js'
@@ -280,7 +282,7 @@ export async function runCmd({ repoDir, opts = {} }) {
     if (err instanceof AuthorizationRefused) refused(EXIT.RUN_REFUSED, err)
     throw err
   }
-  const result = { mission_id: r.mission_id, plan_id: r.plan_id, ok: r.ok, capture_id: r.capture_id, skipped_needs_approval: r.skipped_needs_approval, steps: r.steps, receipt_hash: r.receipt_hash, receipt_error: r.receipt_error }
+  const result = { mission_id: r.mission_id, plan_id: r.plan_id, ok: r.ok, capture_id: r.capture_id, skipped_needs_approval: r.skipped_needs_approval, steps: r.steps, outcome: r.outcome, receipt_hash: r.receipt_hash, receipt_error: r.receipt_error }
   unrecorded(result)
   const exit = !r.ok ? EXIT.RUN_FAILED : r.skipped_needs_approval.length > 0 ? EXIT.RUN_INCOMPLETE : EXIT.OK
   return { exit, result }
@@ -337,11 +339,24 @@ export function verifyCmd({ repoDir, opts }) {
         return { seq: r.seq, recommended: r.subject?.recommended ?? null, ok: v.ok, findings: v.findings }
       })
     : []
-  const ok = chain.ok && policy.ok && selections.every((s) => s.ok)
+  // T27.1: every version the chain names must be in the history archive, unchanged.
+  const history = chain.ok ? verifyHistory(repoDir, missionId, chain.receipts) : { ok: false, versions: 0, legacy_versions: 0, findings: [] }
+  const ok = chain.ok && policy.ok && selections.every((s) => s.ok) && history.ok
   return {
     exit: ok ? EXIT.OK : EXIT.INTEGRITY,
-    result: { mission_id: missionId, ok, receipts: chain.count, chain_findings: chain.findings, policy_findings: policy.findings, selections },
+    result: { mission_id: missionId, ok, receipts: chain.count, chain_findings: chain.findings, policy_findings: policy.findings, selections, history },
   }
+}
+
+/** The mission story from the verified chain and the history archive (what the Console shows). */
+export function historyCmd({ repoDir, opts }) {
+  const { home, publicKey } = publicSide()
+  const missionId = missionOf(repoDir, opts)
+  const chain = verifiedChain({ repoDir, home, publicKey, missionId })
+  if (chain.ok && chain.count === 0) throw new CliError(EXIT.USAGE, 'NO_RECEIPTS', `mission ${missionId} has no receipts`)
+  const story = buildStory({ repoDir, missionId, chain })
+  const ok = story.chain_ok && story.history.ok && story.links.every((l) => l.ok)
+  return { exit: ok ? EXIT.OK : EXIT.INTEGRITY, result: story }
 }
 
 export function replayCmd({ repoDir, opts }) {
