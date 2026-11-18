@@ -2,18 +2,19 @@
 // The token arrives in the URL fragment (#token=...), is kept in sessionStorage for
 // this tab only, and is removed from the address bar at once.
 
-import { h, pill } from './ui.js'
+import { badge, h, stateBox } from './ui.js'
 import { approvalsScreen, impactScreen, missionsScreen, recoveryScreen } from './screens.js'
 
 const SCREENS = { missions: missionsScreen, impact: impactScreen, approvals: approvalsScreen, recovery: recoveryScreen }
 const KEY = 'justrunme-console-token'
 
-// #token=<hex> or #/<screen>&token=<hex>
+// #token=<hex> or #/<route>&token=<hex>
 const fromHash = /token=([0-9a-f]{64})/.exec(location.hash)
 if (fromHash) {
   sessionStorage.setItem(KEY, fromHash[1])
-  const screen = /^#\/(\w+)/.exec(location.hash)?.[1]
-  history.replaceState(null, '', `/#/${SCREENS[screen] ? screen : 'missions'}`)
+  // Keep the route (#/missions/<id>/<node>) and drop only the token.
+  const route = /^#\/(\w+(?:\/[\w.-]+){0,2})/.exec(location.hash)?.[1]
+  history.replaceState(null, '', `/#/${route && SCREENS[route.split('/')[0]] ? route : 'missions'}`)
 }
 const token = sessionStorage.getItem(KEY)
 
@@ -35,10 +36,12 @@ const ui = {}
 let state = null
 let lastText = ''
 
-const screenName = () => {
-  const m = /^#\/(\w+)/.exec(location.hash)
-  return m && SCREENS[m[1]] ? m[1] : 'missions'
+/** #/<screen>[/<arg>[/<sub>]]: for Missions, arg is the mission id and sub is a Flight Recorder node. */
+const routeOf = () => {
+  const m = /^#\/(\w+)(?:\/([\w.-]+))?(?:\/(\w+))?/.exec(location.hash)
+  return m && SCREENS[m[1]] ? { screen: m[1], arg: m[2] ?? null, sub: m[3] ?? null } : { screen: 'missions', arg: null, sub: null }
 }
+const screenName = () => routeOf().screen
 
 function renderChainState() {
   const v = state?.verify
@@ -46,11 +49,11 @@ function renderChainState() {
   const pills = []
   if (v?.result) {
     const chainOk = v.result.chain_findings.length === 0
-    pills.push(pill(chainOk ? `✓ chain verified · ${v.result.receipts}` : '✗ chain does not verify', chainOk ? 'ok' : 'bad'))
+    pills.push(badge(chainOk ? `chain verified · ${v.result.receipts}` : 'chain does not verify', chainOk ? 'ok' : 'bad', chainOk ? 'bolt' : 'cross'))
     const other = v.result.policy_findings.length + v.result.selections.filter((x) => !x.ok).length
-    if (chainOk && other > 0) pills.push(h('a', { href: '#/recovery', class: 'pill bad', text: `✗ ${other} policy finding${other === 1 ? '' : 's'}` }))
-  } else if (v?.error) pills.push(pill(v.error.code, 'warn'))
-  if (s?.history) pills.push(pill(s.history.ok ? '✓ history intact' : '✗ history tampered', s.history.ok ? 'ok' : 'bad'))
+    if (chainOk && other > 0) pills.push(h('a', { href: '#/recovery', class: 'pill bad', text: `${other} policy finding${other === 1 ? '' : 's'}` }))
+  } else if (v?.error) pills.push(badge(v.error.code, 'mute'))
+  if (s?.history) pills.push(badge(s.history.ok ? 'history intact' : 'history altered', s.history.ok ? 'ok' : 'bad', s.history.ok ? 'check' : 'cross'))
   const pending = state?.approvals?.result?.requests?.filter((q) => q.state === 'pending').length ?? 0
   if (pending > 0) pills.push(h('a', { href: '#/approvals', class: 'pill warn', text: `${pending} awaiting approval` }))
   chainstate.replaceChildren(...pills)
@@ -60,12 +63,12 @@ function render() {
   const name = screenName()
   for (const a of document.querySelectorAll('.tabs a')) a.classList.toggle('active', a.dataset.screen === name)
   if (!token) {
-    view.replaceChildren(h('div', { class: 'empty' }, h('h1', { text: 'No console token' }), h('p', { text: 'Open the URL that `justrunme console` printed; it carries the token for this session.' })))
+    view.replaceChildren(stateBox('empty', 'No console token', 'Open the URL that `justrunme console` printed; it carries the token for this session.'))
     return
   }
   if (!state) return
   renderChainState()
-  view.replaceChildren(SCREENS[name](state, { api, reload, rerender: render, ui }))
+  view.replaceChildren(SCREENS[name](state, { api, reload, rerender: render, ui, route: routeOf() }))
 }
 
 async function reload() {
@@ -73,7 +76,12 @@ async function reload() {
     state = await api('/api/state')
     lastText = JSON.stringify(state)
   } catch (e) {
-    view.replaceChildren(h('div', { class: 'banner bad', text: e.message }))
+    const retry = h('button', { type: 'button', text: 'Try again' })
+    retry.addEventListener('click', () => {
+      view.replaceChildren(stateBox('loading', 'Loading…', 'Reading the mission from the signed chain.'))
+      reload()
+    })
+    view.replaceChildren(stateBox('error', 'The Console cannot read the mission', e.message, retry))
     return
   }
   render()
@@ -98,7 +106,7 @@ async function poll() {
 }
 
 window.addEventListener('hashchange', () => {
-  view.focus()
+  view.focus({ preventScroll: true })
   render()
 })
 if (token) await reload()
