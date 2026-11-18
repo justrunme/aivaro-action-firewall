@@ -12,7 +12,10 @@ import path from 'node:path'
 import { parseContract } from '../contract/parser.js'
 import { CONTRACT_FILE } from '../hook/run.js'
 import { keyHome, loadExistingKeys, loadOrCreateKeys, loadPublicKey, publicKeyHex } from '../receipts/keys.js'
-import { inspectChainLock, reanchorChain, receiptHash, recoverLock, verifyChain } from '../receipts/chain.js'
+import { ApproverKeyError, approverKeyExists, createApproverKey, loadApproverKey, loadApproverPublicKey } from '../receipts/approver.js'
+import { ApprovalError, listRequests, loadRequest, requestState, sha256File } from '../approval/requests.js'
+import { readPassphrase } from './passphrase.js'
+import { appendReceipt, inspectChainLock, reanchorChain, receiptHash, recoverLock, verifyChain } from '../receipts/chain.js'
 import { checkPolicy } from '../receipts/policy.js'
 import { hashValue } from '../util/canonical.js'
 import { RehearsalRefused, loadReport, planId, rehearse, reportSignatureProblem } from '../rehearsal/engine.js'
@@ -210,14 +213,49 @@ export function compareCmd({ repoDir, opts, planIds }) {
   }
 }
 
+/** The decrypted approver key; only the commands a human runs at a terminal call this. */
+async function approverKey(opts, prompt) {
+  if (!approverKeyExists(keyHome())) throw new CliError(EXIT.CONFIG, 'NO_APPROVER_KEY', 'no approver key is installed; run `justrunme approver init`')
+  const passphrase = await readPassphrase({ fromStdin: opts['passphrase-stdin'] === true, prompt })
+  if (passphrase === null || passphrase === '') throw new CliError(EXIT.CONFIG, 'NO_PASSPHRASE', 'the approver passphrase must be typed at a terminal, or given with --passphrase-stdin or JUSTRUNME_APPROVER_PASSPHRASE')
+  try {
+    return loadApproverKey(keyHome(), passphrase)
+  } catch (err) {
+    if (err instanceof ApproverKeyError) throw new CliError(EXIT.CONFIG, err.code, err.message)
+    throw err
+  }
+}
+
+/** Run verifies an authorization with the public half only. */
+function approverPublic() {
+  const key = loadApproverPublicKey(keyHome())
+  if (!key) throw new CliError(EXIT.CONFIG, 'NO_APPROVER_KEY', 'no approver key is installed; run `justrunme approver init`')
+  return key
+}
+
+export async function approverInit({ opts }) {
+  const home = keyHome()
+  if (approverKeyExists(home)) throw new CliError(EXIT.CONFIG, 'APPROVER_EXISTS', 'an approver key already exists; remove approver.key.enc and approver.pub from the key directory to replace it')
+  const passphrase = await readPassphrase({ fromStdin: opts['passphrase-stdin'] === true, prompt: 'New approver passphrase (8+ characters): ' })
+  if (passphrase === null) throw new CliError(EXIT.CONFIG, 'NO_PASSPHRASE', 'the approver passphrase must be typed at a terminal, or given with --passphrase-stdin or JUSTRUNME_APPROVER_PASSPHRASE')
+  try {
+    const { publicKey } = createApproverKey(home, passphrase)
+    return { exit: EXIT.OK, result: { created: true, approver_public_key: publicKeyHex(publicKey) } }
+  } catch (err) {
+    if (err instanceof ApproverKeyError) throw new CliError(EXIT.CONFIG, err.code, err.message)
+    throw err
+  }
+}
+
 export async function authorizeCmd({ repoDir, opts = {} }) {
   const c = contractOf(repoDir, opts)
   const { target } = targetOf(repoDir)
   const keys = operatorKeys()
   preflight(repoDir, c.contract.id)
+  const approver = await approverKey(opts, 'Approver passphrase: ')
   let auth
   try {
-    auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
+    auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver })
   } catch (err) {
     if (err instanceof AuthorizationRefused) refused(EXIT.AUTHORIZATION_REFUSED, err)
     throw err
@@ -232,7 +270,7 @@ export async function runCmd({ repoDir, opts = {} }) {
   preflight(repoDir, c.contract.id)
   let r
   try {
-    r = await runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
+    r = await runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approverPublicKey: approverPublic() })
   } catch (err) {
     if (err instanceof AuthorizationRefused) refused(EXIT.RUN_REFUSED, err)
     throw err
@@ -344,7 +382,7 @@ export function statusCmd({ repoDir, opts }) {
     try {
       const auth = JSON.parse(readFileSync(authorizationPath(repoDir), 'utf8'))
       const problem =
-        signatureProblem(auth, publicKey) ??
+        signatureProblem(auth, loadApproverPublicKey(home)) ??
         (c && (auth.mission_id !== c.contract.id || auth.contract_hash !== c.hash) ? 'authorization is for another mission or contract' : null) ??
         (Date.now() > Date.parse(auth.expires_at) ? 'authorization expired' : null) ??
         (chain.receipts.some((r) => r.kind === 'authorization_issued' && r.subject?.authorization_hash === hashValue(auth)) ? null : 'no authorization_issued receipt matches it')
@@ -401,4 +439,142 @@ export function lockCmd({ repoDir, opts, action }) {
     if (err.code === 'CHAIN_LOCKED') throw err
     throw new CliError(EXIT.MAINTENANCE_REFUSED, 'LOCK_RECOVERY_REFUSED', err.message)
   }
+}
+
+// ---- Approval (T23): what the operator sees and decides -------------------------------
+
+function approvalRefusal(err) {
+  if (err instanceof ApprovalError) return new CliError(EXIT.APPROVAL_REFUSED, err.code, err.message, err.detail)
+  return err
+}
+
+function approvalContext(repoDir, opts) {
+  const missionId = missionOf(repoDir, opts)
+  const { home, publicKey } = publicSide()
+  const chain = verifiedChain({ repoDir, home, publicKey, missionId })
+  if (!chain.ok) throw new CliError(EXIT.APPROVAL_REFUSED, 'CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}`)
+  return { missionId, home, publicKey, chain }
+}
+
+const MAX_SHOWN_SQL = 20000
+
+/** Without an id: the requests of the mission. With an id: the whole request, the SQL that will run and the measured impact. */
+export function approvalsCmd({ repoDir, opts, id }) {
+  const ctx = approvalContext(repoDir, opts)
+  if (id === undefined) return { exit: EXIT.OK, result: { mission_id: ctx.missionId, requests: listRequests({ repoDir, missionId: ctx.missionId, publicKey: ctx.publicKey, home: ctx.home }) } }
+  let loaded
+  try {
+    loaded = loadRequest({ repoDir, missionId: ctx.missionId, id, publicKey: ctx.publicKey, receipts: ctx.chain.receipts })
+  } catch (err) {
+    throw approvalRefusal(err)
+  }
+  const { request, request_hash, receipt } = loaded
+  let report = null
+  try {
+    const rep = loadReport(repoDir, ctx.missionId, request.plan_id)
+    const problem = reportSignatureProblem(rep, ctx.publicKey) ?? (hashValue(rep) === request.report_hash ? null : 'the stored report is not the one this request is about')
+    report = problem ? { valid: false, problem } : { valid: true, verdict: rep.verdict, rows_deleted: rep.rows_deleted, tables: rep.tables, evidence: rep.evidence, schema_delta: rep.schema_delta, steps: rep.steps.map((s) => ({ id: s.id, status: s.status })), conditions: rep.conditions }
+  } catch {
+    report = { valid: false, problem: 'the rehearsal report cannot be read' }
+  }
+  const files = request.files.map((f) => {
+    let text = null
+    let sha = null
+    try {
+      const abs = path.join(repoDir, f.path)
+      sha = sha256File(abs)
+      text = readFileSync(abs, 'utf8')
+    } catch {
+      // the file is gone: reported as not matching
+    }
+    return { path: f.path, sha256: f.sha256, matches_now: sha === f.sha256, sql: text === null ? null : text.length > MAX_SHOWN_SQL ? text.slice(0, MAX_SHOWN_SQL) + '\n-- (cut)' : text }
+  })
+  return {
+    exit: EXIT.OK,
+    result: {
+      mission_id: ctx.missionId,
+      request_id: request.request_id,
+      plan_id: request.plan_id,
+      state: requestState(request, receipt, ctx.chain.receipts),
+      requested_at: request.requested_at,
+      expires_at: request.expires_at,
+      agent_note: request.agent_note,
+      agent_note_is: 'written by the agent; not verified',
+      files,
+      report,
+      request_hash,
+      receipt_hash: receiptHash(receipt),
+    },
+  }
+}
+
+/**
+ * Approve one request. Everything the request promised is checked again at this moment
+ * from signed data; the approver key is decrypted last, by the human at this terminal.
+ */
+export async function approveCmd({ repoDir, opts, id }) {
+  const ctx = approvalContext(repoDir, opts)
+  let loaded
+  try {
+    loaded = loadRequest({ repoDir, missionId: ctx.missionId, id, publicKey: ctx.publicKey, receipts: ctx.chain.receipts })
+  } catch (err) {
+    throw approvalRefusal(err)
+  }
+  const { request, request_hash, receipt } = loaded
+  const state = requestState(request, receipt, ctx.chain.receipts)
+  if (state !== 'pending') throw new CliError(EXIT.APPROVAL_REFUSED, `REQUEST_${state.toUpperCase()}`, `this request is ${state}; only a pending request can be approved`)
+  if (opts.confirm !== request.plan_id) throw new CliError(EXIT.USAGE, 'CONFIRMATION_REQUIRED', `approve needs --confirm ${request.plan_id} (the plan id of the request, typed again)`)
+  const c = contractOf(repoDir, { plan: request.plan_id })
+  if (c.hash !== request.contract_hash) throw new CliError(EXIT.APPROVAL_REFUSED, 'PLAN_CHANGED', 'the stored plan is not the one that was rehearsed and requested')
+  const planFiles = c.contract.plan.map((s) => s.args[0])
+  if (JSON.stringify(planFiles) !== JSON.stringify(request.files.map((f) => f.path))) throw new CliError(EXIT.APPROVAL_REFUSED, 'PLAN_CHANGED', 'the plan names other files than the request')
+  const changed = request.files.filter((f) => {
+    try {
+      return sha256File(path.join(repoDir, f.path)) !== f.sha256
+    } catch {
+      return true
+    }
+  })
+  if (changed.length > 0) throw new CliError(EXIT.APPROVAL_REFUSED, 'FILES_CHANGED', 'a migration file changed after it was requested; the agent must rehearse again', { files: changed.map((f) => f.path) })
+  let report
+  try {
+    report = loadReport(repoDir, ctx.missionId, request.plan_id)
+  } catch {
+    throw new CliError(EXIT.APPROVAL_REFUSED, 'NO_REPORT', 'the rehearsal report cannot be read')
+  }
+  const problem = reportSignatureProblem(report, ctx.publicKey) ?? (hashValue(report) === request.report_hash ? null : 'the stored report is not the one this request is about')
+  if (problem) throw new CliError(EXIT.APPROVAL_REFUSED, 'REPORT_INVALID', problem)
+  if (report.verdict !== 'SAFE') throw new CliError(EXIT.APPROVAL_REFUSED, 'NOT_SAFE', `the rehearsal verdict is ${report.verdict}`)
+
+  const keys = operatorKeys()
+  const { target } = targetOf(repoDir)
+  preflight(repoDir, ctx.missionId)
+  const approver = await approverKey(opts, `Approver passphrase to approve ${request.request_id} (plan ${request.plan_id}): `)
+  let auth
+  try {
+    auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver, approval: { request_id: request.request_id, request_hash, receipt: receiptHash(receipt) } })
+  } catch (err) {
+    if (err instanceof AuthorizationRefused) refused(EXIT.AUTHORIZATION_REFUSED, err)
+    throw err
+  }
+  return { exit: EXIT.OK, result: { mission_id: auth.mission_id, request_id: request.request_id, plan_id: auth.plan_id, selection: auth.selection ?? null, expires_at: auth.expires_at, fingerprint_hash: auth.fingerprint_hash, files: request.files.map((f) => f.path) } }
+}
+
+/** Deny one request. No passphrase: refusing needs no secret, and a denial cannot be turned into an approval. */
+export function denyCmd({ repoDir, opts, id }) {
+  const ctx = approvalContext(repoDir, opts)
+  let loaded
+  try {
+    loaded = loadRequest({ repoDir, missionId: ctx.missionId, id, publicKey: ctx.publicKey, receipts: ctx.chain.receipts })
+  } catch (err) {
+    throw approvalRefusal(err)
+  }
+  const { request, receipt } = loaded
+  const state = requestState(request, receipt, ctx.chain.receipts)
+  if (state !== 'pending') throw new CliError(EXIT.APPROVAL_REFUSED, `REQUEST_${state.toUpperCase()}`, `this request is ${state}; only a pending request can be denied`)
+  if (typeof opts.reason !== 'string' || opts.reason.trim().length < 3) throw new CliError(EXIT.USAGE, 'REASON_REQUIRED', 'deny needs --reason "<why>"')
+  const keys = operatorKeys()
+  preflight(repoDir, ctx.missionId)
+  const written = appendReceipt({ repoDir, keys, missionId: ctx.missionId, kind: 'approval_denied', verdict: 'deny', subject: { request_id: request.request_id, plan_id: request.plan_id, reason: opts.reason.trim().slice(0, 300) }, refs: { approval: receiptHash(receipt) } })
+  return { exit: EXIT.OK, result: { mission_id: ctx.missionId, request_id: request.request_id, plan_id: request.plan_id, denied: true, receipt_hash: written.hash } }
 }

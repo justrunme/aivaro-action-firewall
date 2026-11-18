@@ -64,6 +64,7 @@ export function buildReport({ stepResults, elapsedMs, imagesCached, missionId, p
     limits: [
       'The demo runs against a throwaway Postgres 16 container with demo-only credentials. Database and cloud credentials in your environment are not passed to it; HOME and the DOCKER_* client settings are, because the Docker client needs them. The Docker daemon must be a local socket (DOCKER_HOST, DOCKER_CONTEXT and the configured context are checked); a socket forwarded to another machine cannot be detected.',
       'Undo covers the resource types named in the contract (here: the Postgres database and tracked files). Network calls and other external effects are not undoable.',
+      'The authorization step of this demo is given automatically with a throwaway approver key. In real use a person decrypts the approver key with a passphrase typed at a terminal.',
       'JustRunMe is not a sandbox: plan steps run as the operating-system user.',
     ],
   }

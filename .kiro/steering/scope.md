@@ -17,9 +17,9 @@
 | Ed25519 Receipts | Per-action signed receipt: hash, verdict, timestamp, public key, mission ID |
 | Mission Replay / Judge Mode | Re-verify receipts and fidelity; < 60 s; no production credentials |
 | Kiro PreToolUse Hook | `JUSTRUNME_GATE=on` gates every tool call against the active contract |
-| MCP Server | `rehearse`, `get_impact_report`, `request_approval`, `get_receipt`, `undo_mission`, `verify_recovery`, `replay_mission` |
+| MCP Server | `rehearse`, `get_impact_report`, `compare`, `request_approval`, `run_mission`, `get_receipt`, `undo_mission`, `verify_recovery`, `replay_mission`. No tool authorizes or approves; agent plans are `sql_migration` steps only |
 | Demo App | Node HTTP + Postgres 16 + Docker Compose; fresh code, not copied |
-| Single Operator | One Ed25519 key pair per installation |
+| Single Operator | One operator Ed25519 key pair per installation (receipts, reports), plus one approver key pair, encrypted at rest and never loaded by the MCP server or the Console (signs run authorizations only) |
 
 ## Explicitly Out of Scope (v1)
 
@@ -28,7 +28,7 @@
 | Cloud sync / remote policy store | v2+ |
 | Multi-tenant key management | Out of scope for single-operator bootstrap |
 | WebAuthn passkey / phone approval (P2) | Deferred; not claimed until implemented and tested (R6.8) |
-| Console beyond a minimal static page | A minimal local Console (mission, impact diff, undo checklist, replay timeline from receipts) starts only after Demo A and Demo B pass (T18). No framework. |
+| Console beyond the local four-screen page | The JustRunMe Console is in scope (operator decision, 2026-11-17): a local web page served by a small `node:http` server on 127.0.0.1, no framework, no build step, no new runtime dependency. Screens: **Missions**, **Impact Diff** (Original Plan against Revised Plan from signed reports), **Approval Center**, **Recovery & Replay** (undo, recovery verification, signed evidence timeline). It reads the same signed data as the CLI and MCP and has no authorization path of its own: Approve hands the operator's passphrase to a `justrunme approve` child process and never holds the approver key. Not in scope: remote access, accounts, editing contracts, running commands, cloud. The screen name "Mission Control" stays banned (see `product.md`). |
 | Universal "undo anything" | Undo covers only: tracked git files, Postgres databases named in the contract, Docker Compose services, and config files listed in the contract. Network calls, email, payment charges, and other external side effects are **not** undoable. |
 | Claiming undo for untested resource types | Never claim undo works for a resource type until the restore path has an integration test that verifies it |
 | Auto-commit or auto-push | Kiro never commits or pushes |

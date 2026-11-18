@@ -264,10 +264,10 @@ describe('hook: bypass categories (R10.2, R10.3, R10.4, R10.7)', () => {
         assert.equal(evaluate({ tool_name: `mcp_justrunme_${tool}`, tool_input: {} }, c).decision, 'allow', tool)
       }
     }
-    assert.deepEqual([...AGENT_TOOLS].sort(), ['compare', 'get_impact_report', 'get_receipt', 'rehearse', 'replay_mission'])
-    assert.ok(!AGENT_TOOLS.some((t) => /authoriz|approve$|key/.test(t)), 'no tool authorizes, approves or touches a key')
-    // Names of tools that are planned but not implemented are refused until their code exists.
-    for (const name of ['request_approval', 'run_mission', 'undo_mission', 'verify_recovery']) {
+    assert.deepEqual([...AGENT_TOOLS].sort(), ['compare', 'get_impact_report', 'get_receipt', 'rehearse', 'replay_mission', 'request_approval', 'run_mission', 'undo_mission', 'verify_recovery'])
+    assert.ok(!AGENT_TOOLS.some((t) => /authoriz|approve$|key|passphrase|sign/.test(t)), 'no tool authorizes, approves, signs or touches a key')
+    // Names that exist nowhere stay refused, whatever they suggest.
+    for (const name of ['approve', 'authorize', 'deny', 'approver_init', 'approvals', 'sign_authorization']) {
       assert.equal(evaluate({ tool_name: `mcp_justrunme_${name}`, tool_input: {} }, ctx).category, 'MCP_REENTRY', name)
     }
   })

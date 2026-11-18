@@ -145,7 +145,8 @@ export async function createBackend({ env = process.env } = {}) {
     home = mkdtempSync(path.join(os.tmpdir(), 'jrm-judge-keys-'))
     overrideFile = writeNoPortsOverride(['db', 'app'])
     real = { project: names.stack, composeFile: path.join(repoDir, 'demo/docker-compose.yml'), dbService: 'db', dbUser: 'demo_user', dbName: 'pumpkin_patch', overrideFile }
-    const runEnv = { ...cleanEnv, JUSTRUNME_HOME: home }
+    // The demo approves by itself: a throwaway passphrase for a throwaway approver key, used only inside this run.
+    const runEnv = { ...cleanEnv, JUSTRUNME_HOME: home, JUSTRUNME_APPROVER_PASSPHRASE: randomBytes(16).toString('hex') }
     real.env = runEnv
 
     mkdirSync(path.join(repoDir, 'demo/migrations'), { recursive: true })

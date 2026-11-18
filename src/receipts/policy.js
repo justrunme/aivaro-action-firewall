@@ -15,6 +15,11 @@
  *   6. authorization_issued applies the latest plan_selected for its base and
  *      authorizes the selected plan; without a selection only one plan may have
  *      been rehearsed on that base (single-rehearsal mode).
+ *   7. approval_requested refers to an earlier SAFE rehearsal of the same plan
+ *      and report; approval_denied refers to an earlier request; an
+ *      authorization that answers a request (refs.approval) answers a request of
+ *      the same plan and report, only once, never after a denial, and not after
+ *      the request expired.
  * Each break is a POLICY_VIOLATION finding naming the receipt and the rule.
  */
 
@@ -30,11 +35,34 @@ export function checkPolicy(receipts) {
   const usedAuthorizations = new Set()
   const latestRehearsal = new Map() // plan_id -> latest rehearsal receipt so far
   const latestSelection = new Map() // base_hash -> latest plan_selected so far
+  const answeredRequests = new Set() // approval_requested hashes already answered by an authorization
+  const deniedRequests = new Set()
   let lastOperatorReceipt = null
   const violation = (r, rule) => findings.push({ seq: r.seq, kind: 'POLICY_VIOLATION', rule, problem: `${r.kind}: ${rule}` })
   const earlier = (ref) => (ref ? bySeqHash.get(ref) : undefined)
 
   for (const r of receipts) {
+    if (r.kind === 'approval_requested') {
+      const reh = earlier(r.refs?.rehearsal)
+      if (!reh || reh.kind !== 'rehearsal') violation(r, 'must refer to an earlier rehearsal receipt')
+      else if (reh.verdict !== 'SAFE') violation(r, `asked for approval of a rehearsal with verdict ${reh.verdict}`)
+      else if (reh.subject?.plan_id !== r.subject?.plan_id) violation(r, 'refers to a rehearsal of another plan')
+      else if (reh.subject?.report_hash !== r.subject?.report_hash) violation(r, 'asks about a report other than the rehearsed one')
+    }
+    if (r.kind === 'approval_denied') {
+      const req = earlier(r.refs?.approval)
+      if (!req || req.kind !== 'approval_requested') violation(r, 'must refer to an earlier approval_requested receipt')
+      else deniedRequests.add(r.refs.approval)
+    }
+    if (r.kind === 'authorization_issued' && r.refs?.approval) {
+      const req = earlier(r.refs.approval)
+      if (!req || req.kind !== 'approval_requested') violation(r, 'must refer to an earlier approval_requested receipt')
+      else if (req.subject?.plan_id !== r.subject?.plan_id) violation(r, 'answered a request for another plan')
+      else if (answeredRequests.has(r.refs.approval)) violation(r, 'approval request was already answered by another authorization')
+      else if (deniedRequests.has(r.refs.approval)) violation(r, 'authorized a plan whose approval request was denied')
+      else if (Date.parse(r.timestamp) > Date.parse(req.subject?.expires_at)) violation(r, 'answered an approval request after it expired')
+      if (req) answeredRequests.add(r.refs.approval)
+    }
     if (r.kind === 'authorization_issued') {
       const reh = earlier(r.refs?.rehearsal)
       if (!reh || reh.kind !== 'rehearsal') violation(r, 'must refer to an earlier rehearsal receipt')

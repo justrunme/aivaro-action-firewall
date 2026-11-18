@@ -73,7 +73,7 @@ Do **not** use the following names for JustRunMe features, even informally:
 - "Snapshot" (ambiguous with VM snapshots and Kiro checkpoints)
 - "Goal" (Kiro's task planning concept)
 - Never use "Time Machine" (macOS backup product; implies universal undo, which we do not provide)
-- Never use "Mission Control" (macOS window manager; implies a UI we do not have)
+- Never use "Mission Control" (macOS window manager). The Console's first screen is called **Missions**.
 
 When comparing to Kiro's built-in features, be accurate:
 - Kiro's checkpoints revert files edited by Kiro's own tools in a session. They do not cover Postgres data, running containers, or config state outside the working tree. JustRunMe covers those gaps.

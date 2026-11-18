@@ -37,7 +37,7 @@ describe('Demo CLI: the whole mission through `justrunme`, with exit codes', { s
   const measureReal = () => measureDatabase((sql) => psql(realTarget, { sql }))
   const git = (...args) => execFileSync('git', ['-c', 'user.name=demo', '-c', 'user.email=demo@demo.invalid', ...args], { cwd: repoDir, stdio: 'pipe' })
   const cli = (...args) => {
-    const r = spawnSync(process.execPath, [CLI, ...args, '--repo', repoDir], { encoding: 'utf8', env: { ...process.env, JUSTRUNME_HOME: home }, timeout: 300000 })
+    const r = spawnSync(process.execPath, [CLI, ...args, '--repo', repoDir], { encoding: 'utf8', env: { ...process.env, JUSTRUNME_HOME: home, JUSTRUNME_APPROVER_PASSPHRASE: 'demo cli approver passphrase' }, timeout: 300000 })
     return { code: r.status, out: JSON.parse(r.stdout) }
   }
   const contract = (file) =>
@@ -82,6 +82,10 @@ describe('Demo CLI: the whole mission through `justrunme`, with exit codes', { s
 
   it('runs Rehearse -> Detect -> Replan -> Compare -> Authorize -> Run -> Undo -> Verify with the documented exit codes', async () => {
     assert.equal(cli('keys', 'init').code, EXIT.OK)
+    const approverInit = cli('approver', 'init')
+    assert.equal(approverInit.code, EXIT.OK, JSON.stringify(approverInit.out))
+    assert.match(approverInit.out.result.approver_public_key, /^[0-9a-f]{64}$/)
+    assert.equal(cli('approver', 'init').out.error.code, 'APPROVER_EXISTS', 'the approver key is never replaced by a command')
     const before = await measureReal()
 
     writeFileSync(path.join(repoDir, 'demo/migrations/003_consolidate_orders.sql'), DANGEROUS)

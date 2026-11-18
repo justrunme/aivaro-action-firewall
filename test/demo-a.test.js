@@ -19,7 +19,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { stringify } from 'yaml'
 import { parseContract } from '../src/contract/parser.js'
-import { loadOrCreateKeys } from '../src/receipts/keys.js'
+import { loadOrCreateTestKeys } from './support/keys.js'
 import { rehearse, reportPath } from '../src/rehearsal/engine.js'
 import { measureDatabase } from '../src/rehearsal/measure.js'
 import { down, psql, up, writeNoPortsOverride } from '../src/rehearsal/compose.js'
@@ -66,7 +66,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
   const realTarget = { ...target, composeFile: path.join(repoDir, target.composeFile), overrideFile: writeNoPortsOverride(['db', 'app']) }
   const measureReal = () => measureDatabase((sql) => psql(realTarget, { sql }))
   const git = (...args) => execFileSync('git', ['-c', 'user.name=demo', '-c', 'user.email=demo@demo.invalid', ...args], { cwd: repoDir, stdio: 'pipe' })
-  const keys = loadOrCreateKeys(home)
+  const keys = loadOrCreateTestKeys(home)
 
   function writeContract(file) {
     const text = stringify(contractFor(file))
@@ -120,8 +120,8 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
   it('R2.7, R13.2: authorization is refused for DATA LOSS and the real database is unchanged', async () => {
     const realBefore = await measureReal()
     const c = writeContract('demo/migrations/003_consolidate_orders.sql')
-    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'DATA_LOSS' && e.detail.length > 0)
-    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'NO_AUTHORIZATION')
+    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }), (e) => e.code === 'DATA_LOSS' && e.detail.length > 0)
+    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }), (e) => e.code === 'NO_AUTHORIZATION')
     assert.deepEqual(await measureReal(), realBefore)
   })
 
@@ -132,7 +132,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     forged.verdict = 'SAFE'
     forged.evidence = []
     writeFileSync(file, JSON.stringify(forged))
-    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'REPORT_INVALID')
+    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }), (e) => e.code === 'REPORT_INVALID')
     writeFileSync(file, JSON.stringify(dangerReport)) // restore the genuine report
     assert.equal(existsSync(path.join(repoDir, '.justrunme/authorization.json')), false)
   })
@@ -149,7 +149,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     assert.notEqual(safeReport.plan_id, dangerReport.plan_id)
 
     // Two plans on the same state: authorization needs a comparison first.
-    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'COMPARISON_REQUIRED')
+    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }), (e) => e.code === 'COMPARISON_REQUIRED')
 
     // T17: counterfactual replay of both measured plans; the rule, not an agent, picks.
     const cmp = comparePlans({ repoDir, keys, missionId: c.contract.id, planIds: [dangerReport.plan_id, safeReport.plan_id] })
@@ -162,13 +162,13 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     assert.equal(replay.ok, true, JSON.stringify(replay.findings))
     assert.equal(replay.reports_rechecked, 2)
 
-    const auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
+    const auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey })
     assert.match(auth.signature, /^[0-9a-f]{128}$/)
     assert.deepEqual(auth.selection, { mode: 'selected', receipt: cmp.receipt_hash })
 
     // PR #5 condition 1: the authorization does not fit another plan ...
     const otherPlan = { ...c.contract, plan: [{ ...c.contract.plan[0], args: ['demo/migrations/003_consolidate_orders.sql'] }] }
-    await assert.rejects(runMission({ repoDir, contract: otherPlan, contractHash: 'sha256:' + '0'.repeat(64), target, keys }), (e) => e.code === 'AUTHORIZATION_INVALID')
+    await assert.rejects(runMission({ repoDir, contract: otherPlan, contractHash: 'sha256:' + '0'.repeat(64), target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }), (e) => e.code === 'AUTHORIZATION_INVALID')
     // ... nor another environment with identical data and images.
     const twin = { ...target, project: `jrm-demoa-twin-${randomBytes(4).toString('hex')}` }
     const twinReal = { ...realTarget, project: twin.project }
@@ -176,20 +176,20 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
       await up(twinReal, ['db'])
       for (const f of ['001_init.sql', '002_seed_data.sql']) await psql(twinReal, { input: readFileSync(path.join(repoDir, 'demo/migrations', f)) })
       await assert.rejects(
-        runMission({ repoDir, contract: c.contract, contractHash: c.hash, target: twin, keys }),
+        runMission({ repoDir, contract: c.contract, contractHash: c.hash, target: twin, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }),
         (e) => e.code === 'FIDELITY_MISMATCH' && e.detail.some((d) => d.component === 'base.target.project')
       )
     } finally {
       await down(twinReal)
     }
 
-    const result = await runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
+    const result = await runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey })
     assert.equal(result.ok, true, JSON.stringify(result.steps))
     const real = await measureReal()
     assert.equal(real.tables.orders.rows, 3)
     assert.ok(real.columns.orders.some((col) => col.startsWith('status ')))
     // Single use: the same authorization cannot run twice.
-    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'NO_AUTHORIZATION')
+    await assert.rejects(runMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }), (e) => e.code === 'NO_AUTHORIZATION')
   })
 
   it('R14.5, R3.3: an UPDATE that keeps the row count still blocks authorization', async () => {
@@ -200,7 +200,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     const r = await psql(realTarget, { sql: 'UPDATE orders SET quantity = quantity + 1 WHERE id = 1' })
     assert.equal(r.code, 0, r.stderr)
     await assert.rejects(
-      authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }),
+      authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }),
       (e) => e.code === 'FIDELITY_MISMATCH' && e.detail.some((d) => d.component === 'base.postgres.pumpkin_patch.tables.orders.checksum')
     )
   })
@@ -237,7 +237,7 @@ describe('Demo A: DATA LOSS is measured and blocked, the safe replan runs', { sk
     assert.equal(worktrees(), 1)
     assert.equal(overrideDirs(), overridesBefore)
     assert.deepEqual(await measureReal(), realBefore)
-    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys }), (e) => e.code === 'NOT_SAFE')
+    await assert.rejects(authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver: keys.approver, approverPublicKey: keys.approverPublicKey }), (e) => e.code === 'NOT_SAFE')
   })
 
   it('PR #5 condition 2, R2.4: a rehearsal whose Compose copy cannot start cleans up and reports why', async () => {

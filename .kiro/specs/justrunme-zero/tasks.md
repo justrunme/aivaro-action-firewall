@@ -258,7 +258,7 @@ T19 notes (`justrunme judge`, modules in `src/judge/`, tests in `test/judge.test
 
 ## T21 to T26 — Kiro integration and the agent loop (operator-approved plan, 2026-11-17)
 
-Goal: a real Kiro agent repairs a dangerous plan on its own and can run a plan only with a signed approval it cannot give itself. Order of PRs: A (T21 + T22), B (T23), C (T24), D (T25), E (T26). Video and submission text only after the real-agent run (C, D).
+Goal: a real Kiro agent repairs a dangerous plan on its own and can run a plan only with a signed approval it cannot give itself. Order of PRs: A (T21 + T22), B (T23), C (T24), Console (T27), D (T25), E (T26). Video and submission text only after the real-agent run (C).
 
 Decisions fixed by the operator: official MCP SDK from plain JavaScript (no TypeScript, no build); an approver key the MCP process never loads; agent plans are `sql_migration` steps only, inside the operator's mission; one-time approvals; no connection parameters in any tool; rehearsals of agent SQL only in the disposable copy; PRs may be merged by the agent after green CI and a clean `justrunme-skeptic` review.
 
@@ -270,12 +270,15 @@ Decisions fixed by the operator: official MCP SDK from plain JavaScript (no Type
 | T21.4 | Live check with Kiro CLI 3.4.0: tool names, hook events | docs/KIRO_LOG.md Run 18 |
 | T22.1 | Structured remediation from the signed report: reason, rule, measured impact, constraints, next action; attempt limit; no promise of safety | test/remediation.test.js, test/mcp.test.js |
 | T22.2 | Agent loop against real Postgres through MCP: DENIED, revise, SAFE, compare, verify | test/demo-mcp.test.js (Linux, Docker) |
-| T23 | `request_approval`, `justrunme approve` / `approvals`, approver key, one-time signed approval bound to plan, fingerprint and report; `run_mission`, `undo_mission`, `verify_recovery` | PR B |
+| T23.1 | Approver key: separate Ed25519 key sealed at rest (scrypt + AES-256-GCM, owner-only file), opened only by the human-run CLI; signs authorizations only; the hook and `run` verify with its public half | test/approver.test.js, test/authorization.test.js, test/cli.test.js |
+| T23.2 | Approval requests: `request_approval` (SAFE, current, recommended plan only), signed and recorded, bound to report hash, base, SQL file hashes and expiry; `justrunme approvals` / `approve <id> --confirm <plan_id>` / `deny <id> --reason`; chain policy rule 7 (answered once, not after denial or expiry, same plan) | test/approval.test.js |
+| T23.3 | `run_mission` (refused without an approval; post-run comparison with the rehearsal), `undo_mission`, `verify_recovery` against real Postgres; the MCP server runs without the passphrase and with the sealed key unreadable | test/demo-approval.test.js (Linux, Docker) |
 | T24 | `justrunme-operator` agent, steering, `mcp.json`; full loop in real Kiro CLI | PR C |
+| T27 | Console (`node:http` on 127.0.0.1, startup token, no framework): Missions, Impact Diff, Approval Center, Recovery & Replay; Approve runs `justrunme approve --passphrase-stdin` as a child; no authorization path over HTTP | PR Console |
 | T25 | Real-agent evaluation, preregistered set, all runs kept | PR D |
 | T26 | `init`, `doctor`, Evidence Timeline | PR E |
 
-- [ ] T21.1 · [ ] T21.2 · [ ] T21.3 · [x] T21.4 · [ ] T22.1 · [ ] T22.2 · [ ] T23 · [ ] T24 · [ ] T25 · [ ] T26
+- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [ ] T23.1 · [ ] T23.2 · [ ] T23.3 · [ ] T24 · [ ] T27 · [ ] T25 · [ ] T26
 
 ---
 

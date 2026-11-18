@@ -3,9 +3,11 @@
  * R2.7, R3.2, R3.3, R3.6, R3.7.
  *
  * Issued only from a stored rehearsal report with verdict SAFE whose fingerprint
- * equals the current fingerprint. The result is signed with the operator's
- * Ed25519 key, which lives outside the workspace, so a file written by the agent
- * cannot pass verification. It is single-use: the runner consumes it.
+ * equals the current fingerprint. The result is signed with the approver's
+ * Ed25519 key (src/receipts/approver.js), which lives outside the workspace and
+ * is decrypted only by the human-run CLI, so a file written by the agent, or by
+ * a process that holds only the operator key, cannot pass verification. It is
+ * single-use: the runner consumes it.
  */
 
 import { analyzeArgv } from '../hook/bypass.js'
@@ -14,7 +16,7 @@ import { hashValue } from '../util/canonical.js'
 import { publicKeyHex, signValue, verifyValue } from '../receipts/keys.js'
 import { compareFingerprints } from '../fidelity/gate.js'
 
-const SELF_REFERENCE = /(^|[\\/])(justrunme|src[\\/]cli|src[\\/]hook|src[\\/]authorize|src[\\/]mcp|src[\\/]mission)([\\/.]|$)/i
+const SELF_REFERENCE = /(^|[\\/])(justrunme|src[\\/]cli|src[\\/]hook|src[\\/]authorize|src[\\/]mcp|src[\\/]mission|src[\\/]approval)([\\/.]|$)/i
 
 export class AuthorizationRefused extends Error {
   /** @param {string} code @param {string} message @param {unknown} [detail] */
@@ -57,7 +59,8 @@ export function entriesForPlan(plan, cwd) {
  * @param {number} a.now
  * @param {number} [a.ttlSeconds]
  */
-export function issueAuthorization({ cwd, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds, selection = null }) {
+export function issueAuthorization({ cwd, contract, contractHash, report, currentFingerprint, approver, now, ttlSeconds, selection = null, approval = null }) {
+  if (!approver?.privateKey || !approver?.publicKey) throw new AuthorizationRefused('NO_APPROVER_KEY', 'an authorization is signed by the approver key; none was given')
   if (!report || report.mission_id !== contract.id) throw new AuthorizationRefused('NO_REHEARSAL', 'no rehearsal report for this mission')
   if (report.contract_hash !== contractHash) throw new AuthorizationRefused('CONTRACT_CHANGED', 'contract changed after rehearsal')
   if (report.verdict !== 'SAFE') {
@@ -79,19 +82,21 @@ export function issueAuthorization({ cwd, contract, contractHash, report, curren
     entries: entriesForPlan(contract.plan, cwd),
     // How the plan was chosen (T17): 'selected' names the plan_selected receipt.
     ...(selection ? { selection } : {}),
-    operator_pubkey: publicKeyHex(keys.publicKey),
+    // The approval request this authorization answers (T23), when there was one.
+    ...(approval ? { approval } : {}),
+    approver_pubkey: publicKeyHex(approver.publicKey),
   }
-  return { ...body, signature: signValue(keys.privateKey, body) }
+  return { ...body, signature: signValue(approver.privateKey, body) }
 }
 
 /**
  * @returns {string | null} problem, or null when the signature is valid for publicKey
  */
 export function signatureProblem(auth, publicKey) {
-  if (!publicKey) return 'no operator public key is installed'
+  if (!publicKey) return 'no approver public key is installed'
   if (!auth || typeof auth !== 'object') return 'authorization is malformed'
   const { signature, ...body } = auth
-  if (body.operator_pubkey !== publicKeyHex(publicKey)) return 'authorization was signed by a different key'
+  if (body.approver_pubkey !== publicKeyHex(publicKey)) return 'authorization was not signed by the installed approver key'
   if (!verifyValue(publicKey, body, signature)) return 'authorization signature is invalid'
   return null
 }

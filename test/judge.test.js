@@ -27,6 +27,7 @@ function fakeBackend({ override = {}, verifierAcceptsAnything = false } = {}) {
   const dangerous = () => state.kind === 'dangerous'
   const answers = {
     keys: () => ({ exit: 0, out: { result: { public_key: 'ab'.repeat(16) } } }),
+    approver: () => ({ exit: 0, out: { result: { approver_public_key: 'cd'.repeat(32) } } }),
     rehearse: () =>
       dangerous()
         ? { exit: 10, out: { result: { verdict: 'DATA LOSS', rows_lost: { orders: 1, patches: 0 }, plan_id: 'plan-d', base_hash: 'base-1' } } }
@@ -82,7 +83,7 @@ describe('Judge scenario (T19)', () => {
     const s = await runScenario(backend)
     assert.deepEqual(s.stepResults.map((r) => r.id), STEPS.map(([id]) => id))
     assert.ok(s.stepResults.every((r) => r.status === 'passed'), JSON.stringify(s.stepResults.filter((r) => r.status !== 'passed')))
-    assert.deepEqual(backend.state.calls.slice(0, 7), ['keys', 'rehearse', 'authorize', 'rehearse', 'compare', 'authorize', 'run'])
+    assert.deepEqual(backend.state.calls.slice(0, 8), ['keys', 'approver', 'rehearse', 'authorize', 'rehearse', 'compare', 'authorize', 'run'])
     assert.equal(s.story.dangerous.verdict, 'DATA LOSS')
     assert.equal(s.story.denied.error, 'DATA_LOSS')
     assert.equal(s.story.selection.recommended, 'plan-s')
@@ -179,6 +180,7 @@ describe('Judge report (T19.3)', () => {
   it('has the fields R8.4 asks for', () => {
     const r = build({})
     assert.deepEqual(Object.keys(r).sort(), ['counts', 'findings', 'judge', 'limits', 'operator_public_key', 'receipts', 'steps', 'story'])
+    assert.ok(r.limits.some((l) => /approver key/.test(l)), 'the report says the demo approves by itself')
     assert.deepEqual(Object.keys(r.counts).sort(), ['failed', 'mismatches', 'passed', 'policy_violations', 'receipts_verified', 'skipped', 'steps'])
     assert.ok(['PASS', 'FAIL'].includes(r.judge.status))
   })

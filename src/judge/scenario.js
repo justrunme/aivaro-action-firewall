@@ -26,6 +26,7 @@ const sameData = (a, b) => JSON.stringify(a.tables) === JSON.stringify(b.tables)
 
 export const STEPS = [
   ['keys', 'Create a throwaway operator key'],
+  ['approver', 'Create a throwaway approver key (the demo approves with it by itself; a real approval is a person typing a passphrase)'],
   ['rehearse_dangerous', 'Rehearse the dangerous plan on a disposable copy'],
   ['deny', 'Authorization of the dangerous plan is denied'],
   ['rehearse_safe', 'Rehearse the safe alternative on the same base'],
@@ -83,6 +84,7 @@ export async function runScenario(backend) {
   }
 
   await step('keys', 0, ['keys', 'init'], (r) => [c('a public key was created', typeof r.public_key === 'string')])
+  await step('approver', 0, ['approver', 'init'], (r) => [c('an approver public key was created', /^[0-9a-f]{64}$/.test(r.approver_public_key ?? ''))])
   if (!failed) state.before = await guarded('measure before', () => backend.measure())
 
   await guarded('write dangerous migration', () => backend.useMigration('dangerous'))

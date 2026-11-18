@@ -11,6 +11,10 @@
  *   justrunme verify | replay [--receipt <hash>] | status | receipt [--seq n]
  *   justrunme reanchor --reason "<text>"
  *   justrunme lock inspect | lock recover [--sha256 <hash>] --reason "<text>"
+ *   justrunme approver init [--passphrase-stdin]
+ *   justrunme approvals [request_id]
+ *   justrunme approve <request_id> --confirm <plan_id> [--passphrase-stdin]
+ *   justrunme deny <request_id> --reason "<text>"
  * Common options: --repo <dir> (default: current directory), --mission <id>, --text.
  */
 
@@ -35,12 +39,13 @@ const OPTIONS = {
   seq: { type: 'string' },
   resource: { type: 'string', multiple: true },
   plan: { type: 'string' },
+  'passphrase-stdin': { type: 'boolean', default: false },
   'emergency-recovery': { type: 'boolean', default: false },
   confirm: { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 }
 
-const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge> [options]'
+const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny> [options]'
 
 async function dispatch(command, rest, repoDir, opts) {
   const ctx = { repoDir, opts }
@@ -72,6 +77,15 @@ async function dispatch(command, rest, repoDir, opts) {
       return cmd.lockCmd({ ...ctx, action: rest[0] })
     case 'judge':
       return cmd.judgeCmd(ctx)
+    case 'approver':
+      if (rest[0] !== 'init') break
+      return cmd.approverInit(ctx)
+    case 'approvals':
+      return cmd.approvalsCmd({ ...ctx, id: rest[0] })
+    case 'approve':
+      return cmd.approveCmd({ ...ctx, id: rest[0] })
+    case 'deny':
+      return cmd.denyCmd({ ...ctx, id: rest[0] })
   }
   throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
 }
@@ -113,7 +127,9 @@ export async function main(argv) {
     if (!command) throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
     if (opts.mission !== undefined && !MISSION_RE.test(opts.mission)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'invalid --mission')
     if (opts.plan !== undefined && !['rehearse', 'authorize', 'run'].includes(command)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--plan exists only for rehearse, authorize and run')
-    if ((opts['emergency-recovery'] || opts.confirm !== undefined) && command !== 'undo') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--emergency-recovery and --confirm exist only for undo')
+    if (opts['emergency-recovery'] && command !== 'undo') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--emergency-recovery exists only for undo')
+    if (opts.confirm !== undefined && command !== 'undo' && command !== 'approve') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--confirm exists only for undo and approve')
+    if (opts['passphrase-stdin'] && !['approver', 'approve', 'authorize'].includes(command)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--passphrase-stdin exists only for approver init, approve and authorize')
     const repoDir = path.resolve(opts.repo ?? process.cwd())
     const r = await dispatch(command, rest, repoDir, opts)
     exit = r.exit

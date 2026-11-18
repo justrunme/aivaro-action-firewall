@@ -711,3 +711,42 @@ Closed items: the allowlist names only implemented tools, claims corrected, `$TM
 - P2, a rehearsal cannot prove that agent SQL behaves the same on the real database (it can tell the copy apart, for example by its routing table). Written down in README; the approval screen of the next PR shows the SQL that will run. This is the main open design point before the real run exists in the MCP server.
 - P3 taken: the tool description no longer says "nothing real is changed" (the real database is read to make the copy); `next_action` is `ASK_OPERATOR` until `request_approval` exists, instead of pointing the agent at a tool the hook refuses; a test for the link re-check in `executeSteps`.
 - P3 recorded, not taken: no resource limits on the copy (memory, disk, CPU; a step times out after 120 s); the Compose file's own `include`, `env_file`, `build` context and bind mounts are not examined; the hook matches tool names only, so a second server called `justrunme*` would be indistinguishable (`.kiro/settings` is protected only while the gate is on); `planId` hashes the plan's paths, file content enters through the fingerprint's base hash.
+
+---
+
+## Run 19 — T23: approval, run and undo over MCP with a separate approver key (PR B)
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-17, exact time not recorded by the session |
+| Kiro model | auto (the concrete model is not reported to the session) |
+| Branch | `kiro/t23-approval`, from `main` at `2ff89d5` (PR 12 merged after green CI and two skeptic reviews) |
+
+### Decisions (operator, before code)
+
+- A separate approver key signs authorizations. The MCP server and the hook load only its public half. Rejected: the operator key signing authorizations (the MCP process holds it), and an unencrypted second key.
+- The agent can only ask (`request_approval`). The human answers with the CLI: `justrunme approvals`, `approve <id> --confirm <plan_id>`, `deny <id> --reason`.
+- One approval per request, enforced twice: chain policy rule 7 and the single-use authorization file.
+
+### Written
+
+- `src/receipts/approver.js`: `approver.key.enc` (scrypt N=2^15, AES-256-GCM, mode 0600) and `approver.pub` in `JUSTRUNME_HOME`. Wrong passphrase and damaged file fail the same way. Weak passphrase refused, an existing key never replaced.
+- `src/cli/passphrase.js`: `--passphrase-stdin`, then `JUSTRUNME_APPROVER_PASSPHRASE`, then a terminal prompt without echo.
+- `src/authorize/authorization.js`: authorizations carry `approver_pubkey` and are signed by the approver key; `runMission`, the hook and `status` verify with the approver public key.
+- `src/approval/requests.js`: requests signed by the operator key and recorded as `approval_requested` receipts, bound to the report hash, the base hash, the SQL file hashes and an expiry of one hour. States pending, approved, denied, expired from the chain.
+- `src/receipts/policy.js` rule 7: a request refers to an earlier SAFE rehearsal of the same report; an authorization with `refs.approval` answers a pending request once, never after a denial or expiry, for the same plan.
+- CLI: `approver init`, `approvals [id]`, `approve`, `deny`; exit 26 for their refusals.
+- MCP: `request_approval` (SAFE, current base, the recommended plan when several exist; idempotent for the same report and files), `run_mission` (refused without approval, names the waiting request; after the run compares schema hash, row counts and checksums with the rehearsal), `undo_mission`, `verify_recovery`. Nine agent tools, the hook allowlist updated.
+- Judge: a new `approver` step; its approval is automatic and its report says so.
+
+### Results
+
+- Unit tests of the changed areas: 162/162 (approver, approval, authorization, cli, hook, judge, mcp, plans, remediation, isolation).
+- `test/demo-approval.test.js` against real Docker and Postgres, 2/2: denied, revised, requested; `run_mission` before approval refused and the database unchanged; `approve` without `--confirm` refused; approved; second approve refused (`REQUEST_APPROVED`); run COMPLETED with `matches_rehearsal: true`; second run refused; `undo_mission` RECOVERED and the database equal to the state before; `verify_recovery` PASS; `replay_mission` PASS. Second case: a file edited after the request gives `FILES_CHANGED`, deny needs a reason and no passphrase, a denied request cannot be approved, the run stays refused. The MCP server runs without the passphrase, and the sealed key file is mode 000 whenever the server is working (skipped as a check when the tests run as root).
+- Full gate (npm test and all Docker suites) counts are in the PR description.
+
+### Limits recorded
+
+- `JUSTRUNME_APPROVER_PASSPHRASE` makes approval a script's; the judge and the tests use it and say so.
+- The approver key does not protect against processes running as the same OS user: they can read the sealed file and try passphrases.
+- A rehearsal still cannot prove identical behaviour on the real database; the approval screen shows the SQL, and the run reports a divergence instead of undoing by itself.

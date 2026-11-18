@@ -65,9 +65,16 @@ function selectionFor({ repoDir, keys, missionId, receipts, planId: id, reportHa
   })
 }
 
-export async function authorizeMission({ repoDir, contract, contractHash, target, keys, now = Date.now(), ttlSeconds }) {
+/**
+ * @param {object} a
+ * @param {{ privateKey: any, publicKey: any, home: string }} a.keys operator keys: reports, receipts
+ * @param {{ privateKey: any, publicKey: any }} a.approver the decrypted approver key: signs the authorization
+ * @param {{ request_id: string, request_hash: string, receipt: string } | null} [a.approval] the approval request being answered
+ */
+export async function authorizeMission({ repoDir, contract, contractHash, target, keys, approver, approval = null, now = Date.now(), ttlSeconds }) {
   const plan_id = planId(contract)
   return recordingRefusals({ repoDir, keys, missionId: contract.id, kind: 'authorization_refused', plan_id }, async () => {
+    if (!approver?.privateKey) throw new AuthorizationRefused('NO_APPROVER_KEY', 'an authorization is signed by the approver key; none was given')
     let report
     try {
       report = loadReport(repoDir, contract.id, plan_id)
@@ -84,9 +91,20 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
     if (!rehearsal) throw new AuthorizationRefused('REPORT_INVALID', 'no rehearsal receipt matches this report')
     const currentFingerprint = await computeFingerprint({ repoDir, target: realTargetOf(repoDir, target), contract, contractHash })
     // Verdict and fidelity first (issueAuthorization is pure); then the selection gate on the current base.
-    issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds })
+    issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, approver, now, ttlSeconds })
     const selection = selectionFor({ repoDir, keys, missionId: contract.id, receipts, planId: plan_id, reportHash, currentFingerprint })
-    const auth = issueAuthorization({ cwd: repoDir, contract, contractHash, report, currentFingerprint, keys, now, ttlSeconds, selection: { mode: selection.mode, receipt: selection.receipt } })
+    const auth = issueAuthorization({
+      cwd: repoDir,
+      contract,
+      contractHash,
+      report,
+      currentFingerprint,
+      approver,
+      now,
+      ttlSeconds,
+      selection: { mode: selection.mode, receipt: selection.receipt },
+      approval: approval ? { request_id: approval.request_id, request_hash: approval.request_hash } : null,
+    })
     // Receipt first, file second: a file without its receipt never exists, so a
     // failed append cannot leave a live authorization behind.
     appendReceipt({
@@ -104,7 +122,7 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
         selection_mode: selection.mode,
         stale_selection_ignored: selection.stale_selection_ignored,
       },
-      refs: { rehearsal: rehearsal.hash, ...(selection.receipt ? { selection: selection.receipt } : {}) },
+      refs: { rehearsal: rehearsal.hash, ...(selection.receipt ? { selection: selection.receipt } : {}), ...(approval ? { approval: approval.receipt } : {}) },
       now,
     })
     mkdirSync(path.join(repoDir, STATE_DIR), { recursive: true })
@@ -113,10 +131,15 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
   })
 }
 
-export async function runMission({ repoDir, contract, contractHash, target, keys, now = Date.now() }) {
+/**
+ * @param {object} a
+ * @param {{ privateKey: any, publicKey: any, home: string }} a.keys operator keys: receipts and the capture
+ * @param {any} a.approverPublicKey only the public half: a run verifies an authorization, it never signs one
+ */
+export async function runMission({ repoDir, contract, contractHash, target, keys, approverPublicKey, now = Date.now() }) {
   const plan_id = planId(contract)
   return recordingRefusals({ repoDir, keys, missionId: contract.id, kind: 'run_refused', plan_id }, async () => {
-    const publicKey = keys?.publicKey
+    const publicKey = approverPublicKey
     const file = authorizationPath(repoDir)
     if (!existsSync(file)) throw new AuthorizationRefused('NO_AUTHORIZATION', 'no authorization for a real run')
     const auth = JSON.parse(readFileSync(file, 'utf8'))
