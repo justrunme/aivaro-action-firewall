@@ -38,6 +38,54 @@ export function pill(text, kind = '') {
 
 export const verdictKind = (v) => (v === 'SAFE' ? 'ok' : v === 'DATA LOSS' || v === 'FAILED' || v === 'LOGIC CHANGE' ? 'bad' : 'warn')
 
+// Inline SVG icons, built with the DOM (no markup parsing, no external asset).
+const SVG = 'http://www.w3.org/2000/svg'
+const ICONS = {
+  bolt: ['M13 2 4 14h6l-1 8 9-12h-6z'],
+  check: ['M5 12.5l4.5 4.5L19 7.5'],
+  cross: ['M6 6l12 12M18 6 6 18'],
+  copy: ['M9 9h10v11H9z', 'M5 15V4h10'],
+  lock: ['M6 11h12v9H6z', 'M8.5 11V8a3.5 3.5 0 0 1 7 0v3'],
+  dash: ['M7 12h10'],
+  spark: ['M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2z'],
+}
+/** icon('bolt') -> an <svg> that takes its colour from the text colour around it. */
+export function icon(name, label = '') {
+  const svg = document.createElementNS(SVG, 'svg')
+  svg.setAttribute('viewBox', '0 0 24 24')
+  svg.setAttribute('class', `icon ${name}`)
+  if (label) {
+    svg.setAttribute('role', 'img')
+    svg.setAttribute('aria-label', label)
+  } else svg.setAttribute('aria-hidden', 'true')
+  for (const d of ICONS[name] ?? []) {
+    const path = document.createElementNS(SVG, 'path')
+    path.setAttribute('d', d)
+    svg.append(path)
+  }
+  return svg
+}
+/** A badge with an optional icon in front: tone is ok | warn | bad | fix | mute | info. */
+export const badge = (text, tone = 'info', ico = null) => h('span', { class: `pill ${tone}` }, ico ? icon(ico) : null, text)
+/** A short hash with a button that copies the full value. */
+export function hashChip(full, shown = 14) {
+  if (typeof full !== 'string') return h('span', { class: 'muted mono', text: '—' })
+  const btn = h('button', { type: 'button', class: 'copy', 'aria-label': `Copy ${full}`, title: 'Copy the full hash' }, icon('copy'))
+  btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(full)
+      btn.setAttribute('title', 'Copied')
+    } catch {
+      btn.setAttribute('title', 'Copy failed: select the text instead')
+    }
+  })
+  return h('span', { class: 'hash' }, h('code', { class: 'mono', title: full, text: short(full, shown) }), btn)
+}
+/** Loading, empty and error states share one look: kind is loading | empty | error. */
+export function stateBox(kind, title, text, ...actions) {
+  return h('div', { class: `statebox ${kind}`, role: kind === 'error' ? 'alert' : 'status' }, h('h2', { text: title }), text ? h('p', { text }) : null, actions.length ? h('div', { class: 'row' }, actions) : null)
+}
+
 /** Line diff by longest common subsequence: [{ sign: ' ' | '-' | '+', text }]. */
 export function lineDiff(a, b) {
   const x = String(a ?? '').replace(/\n$/, '').split('\n')

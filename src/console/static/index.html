@@ -8,24 +8,25 @@
   <script type="module" src="/app.js"></script>
 </head>
 <body>
+  <a class="skip" href="#view">Skip to the content</a>
   <header class="top">
     <div class="brand">
-      <span class="logo" aria-hidden="true">&#9654;</span>
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 4 14h6l-1 8 9-12h-6z"/></svg>
       <div>
-        <div class="name">JustRunMe <span class="zero">Zero</span></div>
-        <div class="tag">Rehearse. Run. Recover.</div>
+        <h1 class="name">JustRunMe <span class="dash">&mdash;</span> <span class="slogan">Rehearse. Run. Recover.</span></h1>
+        <p class="tag">AI agents can write code. JustRunMe proves what happens when they run it.</p>
       </div>
     </div>
+    <div class="chainstate" id="chainstate" aria-live="polite"></div>
     <nav class="tabs" aria-label="Screens">
       <a href="#/missions" data-screen="missions">Missions</a>
       <a href="#/impact" data-screen="impact">Impact Diff</a>
       <a href="#/approvals" data-screen="approvals">Approval Center</a>
       <a href="#/recovery" data-screen="recovery">Recovery &amp; Replay</a>
     </nav>
-    <div class="chainstate" id="chainstate" aria-live="polite"></div>
   </header>
   <main id="view" tabindex="-1">
-    <p class="muted">Loading&hellip;</p>
+    <div class="statebox loading" role="status"><h2>Loading&hellip;</h2><p>Reading the mission from the signed receipt chain.</p></div>
   </main>
   <footer class="foot">
     Local console on 127.0.0.1. Everything shown is read from the signed receipt chain and the plan history; approvals go through the <code>justrunme approve</code> command.
