@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { BYPASS_PATTERNS, createRoleSql, judgeObservations, recordsBetween } from '../src/rehearsal/observe.js'
-import { codeOnly, metaCommandAt } from '../src/rehearsal/sqltext.js'
+import { backslashInCode, codeOnly, metaCommandAt } from '../src/rehearsal/sqltext.js'
 import { buildImpact } from '../src/rehearsal/impact.js'
 import { explainReport } from '../src/explain/remediation.js'
 import { EXIT, verdictExit } from '../src/cli/codes.js'
@@ -71,11 +71,22 @@ describe('rehearsal observers (T25 v2 Step 2)', () => {
     assert.equal(unv.next_action, 'ASK_OPERATOR')
   })
 
-  it('psql backslash commands are found outside quotes and comments only (review B1)', () => {
+  it('any backslash in a plan file is refused, wherever it is (review B1, second review)', () => {
     assert.equal(metaCommandAt('SELECT 1;\n\\c pumpkin_patch demo_user\n'), 10)
     assert.equal(metaCommandAt('SELECT 1 \\g'), 9)
     assert.notEqual(metaCommandAt('\\! id'), -1)
-    for (const ok of ["SELECT 'a\\b';", "SELECT E'\\n';", 'SELECT "we\\ird";', 'SELECT $$ \\c x $$;', 'DO $d$ BEGIN RAISE NOTICE \'\\\\\'; END $d$;', '-- \\c in a comment\nSELECT 1;', '/* \\! nope */ SELECT 1;']) assert.equal(metaCommandAt(ok), -1, ok)
+    // The two ways a second lexer could be fooled: a carriage return ending a comment, and
+    // standard_conforming_strings = off turning \' into an escaped quote.
+    assert.notEqual(metaCommandAt('-- x\r\\! id\nSELECT 1;'), -1)
+    assert.notEqual(metaCommandAt("SET standard_conforming_strings = off;\nSELECT '\\'' ; \\! id ; ';"), -1)
+    // Also inside strings, identifiers, dollar bodies and comments: no lexer state matters.
+    for (const s of ["SELECT 'a\\b';", "SELECT E'\\n';", 'SELECT "we\\ird";', 'SELECT $$ \\c x $$;', '-- \\c in a comment\nSELECT 1;', '/* \\! nope */ SELECT 1;']) assert.notEqual(metaCommandAt(s), -1, s)
+    assert.equal(metaCommandAt("SELECT cancel_patch_orders(1);\nUPDATE patches SET available_count = 0 WHERE id = 1;\n"), -1)
+    assert.equal(codeOnly('-- c\rSELECT 1'), ' \rSELECT 1', 'a line comment ends at \\r, as in psql')
+    // Report only: a backslash in code reads as a psql command (a bypass); one in a string is a plain refusal.
+    assert.equal(backslashInCode('SELECT 1;\n\\c x'), true)
+    assert.equal(backslashInCode("SELECT E'\\n';"), false)
+    assert.equal(backslashInCode('-- \\c\nSELECT 1;'), false)
     assert.equal(codeOnly("-- DISABLE TRIGGER\nUPDATE t SET a = 'DROP TRIGGER' /* SET ROLE */;"), " \nUPDATE t SET a = ''  ;")
     assert.match(codeOnly("DO $d$ BEGIN EXECUTE 'x'; -- c\n END $d$"), /EXECUTE '';/)
   })
@@ -88,6 +99,9 @@ describe('rehearsal observers (T25 v2 Step 2)', () => {
     assert.deepEqual(grant.evidence, [])
     const comment = judgeObservations({ ...base, records: [rec('LOG', "statement: -- no DISABLE TRIGGER here\nUPDATE users SET role = 'admin'")] })
     assert.deepEqual(comment.evidence, [])
+    // A setting changed through set_config names it in a string: still matched.
+    const viaFunction = judgeObservations({ ...base, records: [rec('LOG', "statement: SELECT set_config('session_replication_role', 'replica', true)")] })
+    assert.deepEqual(viaFunction.evidence.map((e) => e.kind), ['bypass_statement'])
   })
 
   it('the text patterns, and the role a copy gets', () => {

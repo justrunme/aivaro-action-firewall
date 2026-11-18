@@ -194,7 +194,8 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
       observation.unverifiable.push(...judged.unverifiable)
       observation.missing = await missingKeys(owner, installed.keyed)
       // A refused run whose plan left no record in the server log cannot be judged (review S5).
-      if (steps.some((s) => s.status === 'failed' && !String(s.detail).startsWith('META_COMMAND')) && judged.records === 0) observation.unverifiable.push('the plan failed and the server log holds no record of it')
+      // Only a step that reached the database must have left records; a missing file never did.
+      if (steps.some((s) => s.status === 'failed' && s.tool === 'sql_migration' && s.reached_database !== false) && judged.records === 0) observation.unverifiable.push('the plan failed and the server log holds no record of it')
     }
     // Review B1: a psql backslash command in a plan is an attempt to leave the plan role.
     for (const s of steps) if (String(s.detail).startsWith('META_COMMAND')) observation.evidence.push({ kind: 'bypass_meta_command', step: s.id, what: 'uses a psql backslash command (\\c reconnects as another role, \\! runs a shell)' })

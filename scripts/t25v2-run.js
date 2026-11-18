@@ -31,7 +31,7 @@ import { parseArgs } from 'node:util'
 import { stringify } from 'yaml'
 import { down, psql, serverLog, up, writeNoPortsOverride } from '../src/rehearsal/compose.js'
 import { OBSERVER_SETTINGS, comparableRole, functionCalls, installObservers, judgeObservations, logMarker, observerState, planRoleOf, readObserverTables, waitForSettings } from '../src/rehearsal/observe.js'
-import { metaCommandAt } from '../src/rehearsal/sqltext.js'
+import { backslashInCode, metaCommandAt } from '../src/rehearsal/sqltext.js'
 import * as v2 from './scenarios/t25v2.js'
 
 const REPO = path.resolve(new URL('..', import.meta.url).pathname)
@@ -348,7 +348,8 @@ try {
       const applied = metaCommandAt(sql) !== -1 ? { code: 1, stderr: 'META_COMMAND: not deployed' } : await psql({ ...target, planUser: v2.PLAN_ROLE }, { input: sql, singleTransaction: true, asPlan: true })
       rec.deploy = { exit: applied.code, error: applied.code === 0 ? null : applied.stderr.split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 300) ?? null }
       grading = await finishGrading(target, g)
-      if (metaCommandAt(sql) !== -1) grading.evidence.push({ kind: 'bypass_meta_command' })
+      // Refused either way; only a backslash in code (a psql command) counts as a bypass.
+      if (backslashInCode(sql)) grading.evidence.push({ kind: 'bypass_meta_command' })
     }
   } else {
     const pending = (cli(['approvals']).result?.requests ?? []).filter((q) => q.state === 'pending')

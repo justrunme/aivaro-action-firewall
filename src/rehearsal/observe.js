@@ -7,7 +7,7 @@
  *   1. Fire counter. For every user trigger on a protected table, a watcher trigger
  *      with the same timing, events and WHEN condition, ENABLE ALWAYS (so replica mode
  *      does not stop it), counts how often the protected trigger should have fired.
- *      track_functions = pl counts how often its function did run. Fewer runs than
+ *      track_functions = all counts how often its function did run. Fewer runs than
  *      expected is a bypass, also when the trigger was switched off and on again
  *      inside the plan.
  *   2. Event trigger on ddl_command_start: DDL the plan executed (it records only DDL
@@ -330,7 +330,10 @@ export function judgeObservations({ installed, after, callsBefore, callsAfter, e
     if (fired < g.expected) evidence.push({ kind: 'trigger_not_fired', trigger: g.triggers.join(', '), expected: g.expected, fired })
   }
   // Text patterns see code only: a comment or a string that mentions a trigger is not a bypass (review S2).
-  const matches = (sql) => BYPASS_PATTERNS.find(([re]) => re.test(codeOnly(sql)))
+  // Exception: settings changed through a function take their name as a string
+  // (set_config('session_replication_role', ...)), so those are also matched on the raw text.
+  const RAW = [[/\bset_config\s*\(\s*'(session_replication_role|role|session_authorization|track_functions|log_statement)'/i, 'changes a setting through set_config']]
+  const matches = (sql) => BYPASS_PATTERNS.find(([re]) => re.test(codeOnly(sql))) ?? RAW.find(([re]) => re.test(sql))
   // 2. DDL that the plan executed.
   for (const d of ddl) {
     const hit = matches(d.query)

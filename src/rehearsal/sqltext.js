@@ -3,9 +3,8 @@
  *
  * Plan files are fed to psql on stdin, and psql interprets backslash commands there
  * (`\c db superuser` reconnects as another role, `\!` runs a shell in the database
- * container). `metaCommandAt` finds a backslash outside string literals, quoted
- * identifiers, dollar-quoted bodies and comments: such a plan is refused before it
- * runs. `codeOnly` drops comments and the content of single-quoted literals so that
+ * container). `metaCommandAt` finds any backslash in the file: such a plan is refused
+ * before it runs. `codeOnly` drops comments and the content of single-quoted literals so that
  * text patterns do not match words in a comment; dollar-quoted bodies (DO blocks,
  * function bodies) are code and stay.
  */
@@ -21,8 +20,9 @@ function walk(sql, emit) {
     const c = s[i]
     const n = s[i + 1]
     if (c === '-' && n === '-') {
-      const end = s.indexOf('\n', i)
-      const j = end === -1 ? s.length : end
+      // A line comment ends at \n or \r, as in psql.
+      const m = /[\n\r]/.exec(s.slice(i))
+      const j = m ? i + m.index : s.length
       emit('comment', s.slice(i, j))
       i = j
     } else if (c === '/' && n === '*') {
@@ -76,15 +76,29 @@ function walk(sql, emit) {
   }
 }
 
-/** Index of the first psql meta-command backslash, or -1. */
+/**
+ * Index of the first backslash in a plan file, or -1. Any backslash is refused, also
+ * inside strings and dollar-quoted bodies: whether psql reads a backslash as a command
+ * depends on its own lexer state (a carriage return ending a comment, a plan that sets
+ * standard_conforming_strings = off so that \' escapes a quote), and a second lexer
+ * here can be desynchronised from it (review of B1). Refusing every backslash needs no
+ * lexer. A plan that really needs one (a regex in a function body) is refused too.
+ */
 export function metaCommandAt(sql) {
-  let at = -1
-  let pos = 0
+  return String(sql).indexOf('\\')
+}
+
+/**
+ * For the report only, never for the refusal: is a backslash outside strings, quoted
+ * identifiers, dollar bodies and comments (reads as a psql command), or only inside
+ * them (E'\n', a regex)? Both are refused; only the first is called a bypass.
+ */
+export function backslashInCode(sql) {
+  let found = false
   walk(sql, (kind, text) => {
-    if (at === -1 && kind === 'code' && text === '\\') at = pos
-    pos += text.length
+    if (kind === 'code' && text === '\\') found = true
   })
-  return at
+  return found
 }
 
 /** The text with comments removed and single-quoted literals emptied. */
