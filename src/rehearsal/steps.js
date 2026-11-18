@@ -13,6 +13,7 @@
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { psql } from './compose.js'
+import { metaCommandAt } from './sqltext.js'
 import { run } from '../util/exec.js'
 import { errorSummary } from '../privacy/redact.js'
 
@@ -66,7 +67,14 @@ export async function executeSteps({ plan, cwd, target, mode }) {
         } catch {
           linked = true
         }
-        const r = linked ? { code: 1, stderr: 'the migration file is missing or is a symbolic link' } : await psql(target, { input: readFileSync(file), singleTransaction: true })
+        const text = linked ? null : readFileSync(file)
+        // psql reads backslash commands from stdin (\c reconnects as another role, \! runs a shell): only SQL runs.
+        const meta = text === null ? -1 : metaCommandAt(text.toString('utf8'))
+        const r = linked
+          ? { code: 1, stderr: 'the migration file is missing or is a symbolic link' }
+          : meta !== -1
+            ? { code: 1, stderr: `META_COMMAND: the migration contains a psql backslash command at offset ${meta}; only SQL may run` }
+            : await psql(target, { input: text, singleTransaction: true, asPlan: true })
         result = r.code === 0 ? { status: 'ok', detail: '' } : { status: 'failed', detail: tail(r.stderr) }
       }
     } else if (step.tool === 'shell') {

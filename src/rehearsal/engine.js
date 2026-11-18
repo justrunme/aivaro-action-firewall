@@ -22,7 +22,9 @@ import { computeFingerprint } from '../fidelity/fingerprint.js'
 import { baseHash } from '../fidelity/gate.js'
 import { STATE_DIR } from '../fidelity/source.js'
 import { createWorkspaceCopy } from './workspace.js'
-import { assertIsolated, down, dump, psql, up, writeNoPortsOverride } from './compose.js'
+import { assertIsolated, down, dump, psql, serverLog, up, writeNoPortsOverride } from './compose.js'
+import { CONFLICT_MESSAGE, checkRequirements, findConflict } from '../mission/requirements.js'
+import { comparableRole, createRoleSql, functionCalls, installObservers, judgeObservations, logMarker, missingKeys, observerState, planRoleOf, readObserverTables, recordsBetween } from './observe.js'
 import { measureDatabase } from './measure.js'
 import { buildImpact } from './impact.js'
 import { executeSteps } from './steps.js'
@@ -31,10 +33,11 @@ import { archiveRehearsal, snapshotPlanFiles } from '../history/archive.js'
 export const planId = (contract) => 'plan-' + hashValue(contract.plan).slice(7, 19)
 
 export class RehearsalRefused extends Error {
-  /** @param {string} code @param {string} message */
-  constructor(code, message) {
+  /** @param {string} code @param {string} message @param {unknown} [detail] */
+  constructor(code, message, detail) {
     super(message)
     this.code = code
+    this.detail = detail
   }
 }
 
@@ -43,6 +46,10 @@ export function rehearsalConditions(contract, target) {
   return {
     protected_tables: [...contract.protected_tables].sort(),
     impact_thresholds: contract.impact_thresholds ?? {},
+    // The requirements the verdict checked (T25 v2 Step 3), when the mission has any.
+    ...(contract.required_changes?.length || contract.invariants?.length ? { requirements_hash: hashValue({ required_changes: contract.required_changes ?? [], invariants: contract.invariants ?? [] }) } : {}),
+    // The role the plan ran as: plans rehearsed with different rights are not comparable.
+    ...(target.planUser ? { plan_role: target.planUser } : {}),
     // Only when set, so reports of contracts without it keep their conditions.
     ...(contract.allowed_logic_changes?.length ? { allowed_logic_changes: [...contract.allowed_logic_changes].sort() } : {}),
     db_name: target.dbName,
@@ -106,6 +113,10 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
   if (!chain.ok) throw new RehearsalRefused('CHAIN_INVALID', `receipt chain does not verify: ${chain.findings[0].problem}; nothing was executed`)
   const started = clock()
   const realTarget = { ...target, composeFile: path.resolve(repoDir, target.composeFile) }
+  // T25 v2 Step 3: requirements that cannot all hold are answered before any plan runs,
+  // so no agent searches for a way around them.
+  const conflict = await findConflict(contract, (sql) => psql(realTarget, { sql }))
+  if (conflict) throw new RehearsalRefused('CONFLICT', CONFLICT_MESSAGE, { conflicts: conflict.conflicts })
   const fingerprint = await computeFingerprint({ repoDir, target: realTarget, contract, contractHash })
   // The SQL as rehearsed, by content hash (T27.1 plan history): the plan id names the
   // file paths only, so two versions of a file share an id but not these hashes.
@@ -126,16 +137,67 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
   let before = null
   let after = null
   let failure = null
+  // T25 v2: observers in the copy and the plan role (src/rehearsal/observe.js).
+  const observation = { plan_role: target.planUser ?? null, unverifiable: [], evidence: [], watchers: [] }
+  let requirements = null
+  const owner = (sql) => psql(rehearsalTarget, { sql })
+  const ownerScript = (input) => psql(rehearsalTarget, { input })
   try {
     await up(rehearsalTarget, [target.dbService])
     // Before the real data is loaded and before any plan step runs.
     await assertIsolated(rehearsalTarget)
-    const data = await dump(realTarget)
+    let realRole = null
+    if (target.planUser) {
+      // Roles are not in the dump: create the plan role as it is for real; its grants come with the dump.
+      realRole = await planRoleOf((sql) => psql(realTarget, { sql }), target.planUser)
+      if (!realRole.exists) throw new Error(`the plan role ${target.planUser} does not exist in the real database`)
+      const made = await ownerScript(createRoleSql(realRole))
+      if (made.code !== 0) throw new Error('creating the plan role in the copy failed')
+    }
+    const data = await dump(realTarget, { privileges: Boolean(target.planUser) })
     const load = await psql(rehearsalTarget, { input: data })
     if (load.code !== 0) throw new Error('loading the database copy failed')
-    before = await measureDatabase((sql) => psql(rehearsalTarget, { sql }))
+    let installed = null
+    try {
+      installed = await installObservers(owner, ownerScript, { protectedTables: contract.protected_tables, planRole: target.planUser ?? null })
+      observation.watchers = installed.watchers.map((w) => w.trigger)
+    } catch (err) {
+      observation.unverifiable.push(String(err?.message ?? err).split('\n')[0].slice(0, 200))
+    }
+    let copyRole = null
+    if (target.planUser) {
+      copyRole = await planRoleOf(owner, target.planUser)
+      const a = comparableRole(realRole)
+      const b = comparableRole(copyRole)
+      const differs = Object.keys(a).filter((k) => JSON.stringify(a[k]) !== JSON.stringify(b[k]))
+      if (differs.length > 0) observation.unverifiable.push(`the plan role has other rights in the copy than for real (${differs.map((k) => `${k}: real ${JSON.stringify(a[k])}, copy ${JSON.stringify(b[k])}`).join('; ').slice(0, 400)})`)
+    }
+    before = await measureDatabase(owner)
+    const callsBefore = installed ? await functionCalls(owner, installed.watchers) : {}
+    const start = installed ? await logMarker(owner) : null
     steps = await executeSteps({ plan: contract.plan, cwd: copy.dir, target: rehearsalTarget, mode: 'rehearsal' })
-    after = await measureDatabase((sql) => psql(rehearsalTarget, { sql }))
+    const end = installed ? await logMarker(owner) : null
+    after = await measureDatabase(owner)
+    // T25 v2 Step 3: the mission's required changes and invariants, checked on the copy.
+    if ((contract.required_changes?.length ?? 0) + (contract.invariants?.length ?? 0) > 0) requirements = await checkRequirements(contract, owner)
+    if (installed) {
+      const judged = judgeObservations({
+        installed,
+        after: await observerState(owner),
+        callsBefore,
+        callsAfter: await functionCalls(owner, installed.watchers),
+        ...(await readObserverTables(owner)),
+        records: recordsBetween(await serverLog(rehearsalTarget), start, end),
+        planRole: copyRole,
+      })
+      observation.evidence = judged.evidence
+      observation.unverifiable.push(...judged.unverifiable)
+      observation.missing = await missingKeys(owner, installed.keyed)
+      // A refused run whose plan left no record in the server log cannot be judged (review S5).
+      if (steps.some((s) => s.status === 'failed' && !String(s.detail).startsWith('META_COMMAND')) && judged.records === 0) observation.unverifiable.push('the plan failed and the server log holds no record of it')
+    }
+    // Review B1: a psql backslash command in a plan is an attempt to leave the plan role.
+    for (const s of steps) if (String(s.detail).startsWith('META_COMMAND')) observation.evidence.push({ kind: 'bypass_meta_command', step: s.id, what: 'uses a psql backslash command (\\c reconnects as another role, \\! runs a shell)' })
   } catch (err) {
     failure = String(err?.message ?? err)
   } finally {
@@ -149,7 +211,7 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
 
   const impact = failure
     ? { verdict: 'FAILED', evidence: [{ kind: 'rehearsal_error', detail: failure }] }
-    : buildImpact({ before, after, protectedTables: contract.protected_tables, steps, thresholds: contract.impact_thresholds, allowedLogicChanges: contract.allowed_logic_changes ?? [] })
+    : buildImpact({ before, after, protectedTables: contract.protected_tables, steps, thresholds: contract.impact_thresholds, allowedLogicChanges: contract.allowed_logic_changes ?? [], bypass: observation, requirements })
 
   const report = redactDeep({
     version: 1,
@@ -170,6 +232,8 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
     plan_files: snapshot.files,
     database: failure ? null : { name: target.dbName, before, after },
     cleanup,
+    // T25 v2: what the observers in the copy saw (signed with the rest of the report).
+    observation: { plan_role: observation.plan_role, watched_triggers: observation.watchers, unverifiable: observation.unverifiable, missing_keys: observation.missing ?? {} },
     ...impact,
     operator_pubkey: publicKeyHex(keys.publicKey),
   })

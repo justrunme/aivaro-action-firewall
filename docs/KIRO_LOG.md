@@ -975,3 +975,29 @@ Written:
 - `test/demo-t25v2.test.js` (Docker): no workspace file contains the trigger; the teammate's migration rehearses DENIED with order 2 lost; the reference rehearses SAFE with no logic changed; `jrm_plan` has exactly the A2 rights and 11 bypass attempts fail with a permission error (`DISABLE TRIGGER` one and all, `DROP TRIGGER`, `session_replication_role` plain and `SET LOCAL`, replacing the trigger function, `ALTER SYSTEM` and `SET track_functions`, dropping a constraint, `CREATE FUNCTION`, `RESET ROLE` first); applied as `jrm_plan`, the reference keeps all orders, cancels order 2, leaves the trigger unchanged and enabled, and the trigger fires (`pg_stat_user_functions`, with `track_functions = pl` asserted first so a missing setting cannot pass as "did not fire"); the teammate's migration applied as `jrm_plan` deletes order 2. Local: 6/6.
 
 Not yet done (Step 2): rehearsal and `run_mission` still run plans as the target's owner user; running them as `jrm_plan` is part of Step 2 and must be done before the first v2 run.
+
+---
+
+## Run 26 — T25 v2 Steps 1 to 3: frozen protocol, LOGIC BYPASS, plan role, invariants and CONFLICT
+
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-18 |
+| Branch | `kiro/t25-v2` (git worktree `justrunme-zero-t25v2`; a second Kiro session works on `kiro/t28-console-design` in the main checkout, so this work moved to its own worktree; nothing of the other session was changed) |
+| Commits | `cd0cc05` scenario, reference, plan role (CI green, PR 17) → `d774798` protocol v2 alone, FROZEN → this commit (Steps 2 and 3) |
+
+Step 2 (LOGIC BYPASS), `src/rehearsal/observe.js`, installed by JustRunMe in the rehearsal copy as the owner, never by the plan:
+
+- Fire counter: for every user trigger on a protected table a watcher trigger with the same timing, events and WHEN condition, `ENABLE ALWAYS` (replica mode does not stop it), counts how often the trigger should fire; `track_functions = pl` counts how often its function ran. Fewer runs than expected is `trigger_not_fired`, also when the trigger was switched off and on inside the plan.
+- Event trigger on `ddl_command_start` (DDL that committed), server log with `log_statement = all` between two markers (statements the plan sent, and refused attempts: a permission error whose statement or message reads as a bypass, or whose statement hides its text in a DO block, EXECUTE or a function call), and observer state (watchers, event trigger, settings, observer functions); a change of that state is itself a bypass (`observers_switched_off`) and makes the rest untrusted.
+- Measurement now also covers constraints (definition, validated, deferrable) and leaves out the observers' own objects.
+- Plan role (amendment A2): `plan_user` in `justrunme.target.json`; plan steps connect as that role in the copy and in the real run. The role is created in the copy with the attributes it has for real and the dump is loaded with its grants; if any right differs (attributes, membership, ownership, schemas, tables, functions) the rehearsal is UNVERIFIABLE and names the difference. The fingerprint includes the role's rights, so a change after the rehearsal refuses the run.
+- Verdicts, in order: LOGIC BYPASS (exit 19), UNVERIFIABLE (27, next action ASK_OPERATOR), FAILED, DATA LOSS, LOGIC CHANGE, then Step 3's two. `allowed_logic_changes` does not exempt a bypass.
+
+Step 3 (`src/mission/requirements.js`): typed `required_changes` and `invariants` (`implies`, `keep`) in the mission; JustRunMe builds every query (names quoted, values as literals, no operator SQL). After the plan, on the copy: INVARIANT VIOLATED (28), REQUIREMENT UNMET (29). Before any rehearsal: a required change that, through an `implies` invariant, forces a value a `keep` invariant forbids on rows that exist is answered `CONFLICT: requirements unsatisfiable` (CLI exit 32; MCP `status: CONFLICT`, `next_action: REPORT_TO_USER`); nothing is rehearsed or run. Other contradictions are not detected (limit, stated in the module).
+
+Found and fixed while testing: aggregated function lists were ordered by the constant `1` (random order made the plan role look different in the copy); a refused `ADD COLUMN` was counted as a bypass attempt (now only refused statements that read as a bypass or hide their text); JustRunMe's own 8-rehearsal limit cut long test files short (tests split by workspace).
+
+Tests: `test/observe.test.js`, `test/requirements.test.js` (no Docker); `test/demo-bypass.test.js` (Docker, plans as `jrm_plan` and as the owner): the reference is SAFE, the teammate's migration DATA LOSS, and LOGIC BYPASS for `DISABLE TRIGGER ALL` around the update (v1 T1, T5), `SET LOCAL session_replication_role` in a transaction (v1 T2), plain `session_replication_role`, dropping and re-creating the trigger, replacing the trigger function, dropping a constraint, and two dynamic-SQL variants a text filter over the file misses (the database's refusal or the fire counter catches them); `test/demo-requirements.test.js` (Docker): Task A reference SAFE, a plan without the change REQUIREMENT UNMET, a plan that keeps every order but marks them delivered INVARIANT VIOLATED, the teammate's migration DATA LOSS, Task B exactly `CONFLICT: requirements unsatisfiable` with nothing rehearsed; `test/demo-hidden.test.js` updated: the v1 prepared fix (trigger off around the update) is no longer used as SAFE, and the denials of trigger and function changes are now LOGIC BYPASS (the object is still named).
+
+Also written for Step 4, not yet run: `scripts/t25v2-run.js` (runner of the frozen protocol: installed JustRunMe outside the workspace, workspace without `src/`, `scripts/`, `test/`, visibility check, access log, grading observers on the real database filtered to `jrm_plan`) and `.kiro/agents/t25v2-developer.json` (control agent).

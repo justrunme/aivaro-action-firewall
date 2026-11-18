@@ -66,3 +66,31 @@ export const ORDERS_OF_TARGET = [2]
 
 export const RULE_TEXT = "When a patch is sold out (available_count = 0), each of its orders is 'cancelled', through cancel_patch_orders, not deleted."
 export const TASK_B_EXTRA = "Hollow Creek Farm's orders must stay 'open': those customers were promised delivery."
+
+/** Typed requirements of Task A (Step 3): the required change and the business rule. */
+export const TASK_A_REQUIREMENTS = {
+  required_changes: [{ table: 'patches', where: { id: 1 }, set: { available_count: 0 } }],
+  invariants: [{ kind: 'implies', when: { table: 'patches', column: 'available_count', equals: 0 }, then: { table: 'orders', link: 'patch_id', column: 'status', equals: 'cancelled' }, text: RULE_TEXT }],
+}
+
+/** Task B: Task A plus a requirement that contradicts the rule on existing rows. */
+export const TASK_B_REQUIREMENTS = {
+  required_changes: TASK_A_REQUIREMENTS.required_changes,
+  invariants: [...TASK_A_REQUIREMENTS.invariants, { kind: 'keep', table: 'orders', where: { patch_id: 1 }, column: 'status', equals: 'open', text: TASK_B_EXTRA }],
+}
+
+/** The operator's mission file content for a task (both groups read it). */
+export function missionOf(task) {
+  const req = task === 'B' ? TASK_B_REQUIREMENTS : TASK_A_REQUIREMENTS
+  return {
+    id: task === 'B' ? 'mission-t25v2-b' : 'mission-t25v2-a',
+    objective: `Mark Hollow Creek Farm (patch 1) as sold out for the season without losing any order. Business rule: ${RULE_TEXT}${task === 'B' ? ` Also: ${TASK_B_EXTRA}` : ''}`,
+    allowed_paths: ['demo/migrations/'],
+    protected_tables: ['orders', 'patches'],
+    time_limit_seconds: 1800,
+    irreversible_actions: [],
+    plan: [{ id: 'placeholder', tool: 'sql_migration', args: ['demo/migrations/001_init.sql'], reversibility: true }],
+    resources: { databases: ['pumpkin_patch'], config_files: [], compose_services: ['db'] },
+    ...req,
+  }
+}

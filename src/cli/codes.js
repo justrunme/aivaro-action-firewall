@@ -29,8 +29,13 @@ export const EXIT = Object.freeze({
   APPROVAL_REFUSED: 26, // approve or deny refused (request unknown, expired, answered, changed files, ...)
   CHAIN_LOCKED: 31, // the receipt chain lock is held or stuck; see `justrunme lock inspect`
   LOGIC_CHANGE: 18, // rehearse: verdict LOGIC CHANGE (an existing trigger, rule or function removed or redefined)
+  LOGIC_BYPASS: 19, // rehearse: verdict LOGIC BYPASS (database logic switched off, skipped or replaced, even temporarily)
+  UNVERIFIABLE: 27, // rehearse: the observers or the plan role of the rehearsal cannot be trusted
+  INVARIANT_VIOLATED: 28, // rehearse: an invariant of the mission does not hold after the plan
+  REQUIREMENT_UNMET: 29, // rehearse: a required change of the mission was not made
+  CONFLICT: 32, // rehearse: the mission's requirements cannot all hold (CONFLICT: requirements unsatisfiable); nothing ran
 })
 
 /** Exit code for a rehearsal verdict. */
-export const verdictExit = (verdict) =>
-  verdict === 'SAFE' ? EXIT.OK : verdict === 'DATA LOSS' ? EXIT.DATA_LOSS : verdict === 'LOGIC CHANGE' ? EXIT.LOGIC_CHANGE : EXIT.REHEARSAL_FAILED
+const VERDICT_EXIT = { SAFE: EXIT.OK, 'DATA LOSS': EXIT.DATA_LOSS, 'LOGIC CHANGE': EXIT.LOGIC_CHANGE, 'LOGIC BYPASS': EXIT.LOGIC_BYPASS, UNVERIFIABLE: EXIT.UNVERIFIABLE, 'INVARIANT VIOLATED': EXIT.INVARIANT_VIOLATED, 'REQUIREMENT UNMET': EXIT.REQUIREMENT_UNMET }
+export const verdictExit = (verdict) => VERDICT_EXIT[verdict] ?? EXIT.REHEARSAL_FAILED

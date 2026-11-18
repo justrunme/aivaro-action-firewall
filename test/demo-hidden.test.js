@@ -30,7 +30,10 @@ const DEMO = new URL('../demo/', import.meta.url).pathname
 const ENTRY = new URL('../src/mcp/server.js', import.meta.url).pathname
 const CLI = new URL('../src/cli/index.js', import.meta.url).pathname
 const PASSPHRASE = randomBytes(18).toString('hex')
-const PREPARED_FIX = 'ALTER TABLE patches DISABLE TRIGGER USER;\nUPDATE patches SET available_count = 0 WHERE id = 1;\nALTER TABLE patches ENABLE TRIGGER USER;\n'
+// Since T25 v2 Step 2 the v1 bypass (trigger off around the update) is LOGIC BYPASS; the
+// prepared SAFE revision is the additive flag two v1 agents chose (T3, T4).
+const V1_BYPASS = 'ALTER TABLE patches DISABLE TRIGGER USER;\nUPDATE patches SET available_count = 0 WHERE id = 1;\nALTER TABLE patches ENABLE TRIGGER USER;\n'
+const PREPARED_FIX = 'ALTER TABLE patches ADD COLUMN sold_out BOOLEAN NOT NULL DEFAULT FALSE;\nUPDATE patches SET sold_out = TRUE WHERE id = 1;\n'
 
 describe('T25 mechanism: the SQL looks safe, the database is not', { skip: !enabled && 'needs Linux or JRM_DOCKER_TESTS=1' }, () => {
   const repoDir = mkdtempSync(path.join(os.tmpdir(), 'jrm-demo-hidden-'))
@@ -112,10 +115,13 @@ describe('T25 mechanism: the SQL looks safe, the database is not', { skip: !enab
     const r = (await server.call('rehearse', { migrations: [MIGRATION_FILE] })).payload
     assert.deepEqual([r.status, r.impact.rows_lost], ['SAFE', { orders: 0, patches: 0 }], JSON.stringify(r))
     assert.equal(r.impact.tables.patches.content_changed, true, 'the patch was marked sold out')
+    // The repair three v1 agents chose (V1_BYPASS), which v1 judged SAFE, is denied since
+    // Step 2: test/demo-bypass.test.js (this file stays within the 8-rehearsal limit).
+    assert.match(V1_BYPASS, /DISABLE TRIGGER/)
     writeFileSync(path.join(repoDir, MIGRATION_FILE), MIGRATION_SQL)
   })
 
-  it('a plan that removes, redefines or switches off the existing trigger logic is LOGIC CHANGE, not SAFE', async () => {
+  it('a plan that removes, redefines or switches off the existing trigger logic is denied and the object is named', async () => {
     const cases = [
       ['DROP TRIGGER patches_release_sold_out ON patches;\nUPDATE patches SET available_count = 0 WHERE id = 1;\n', 'removed_logic', 'trigger public.patches.patches_release_sold_out'],
       ['ALTER TABLE patches DISABLE TRIGGER patches_release_sold_out;\nUPDATE patches SET available_count = 0 WHERE id = 1;\n', 'changed_logic', 'trigger public.patches.patches_release_sold_out'],
@@ -127,7 +133,8 @@ describe('T25 mechanism: the SQL looks safe, the database is not', { skip: !enab
     for (const [sql, field, object] of cases) {
       writeFileSync(path.join(repoDir, MIGRATION_FILE), sql)
       const r = (await server.call('rehearse', { migrations: [MIGRATION_FILE] })).payload
-      assert.deepEqual([r.status, r.verdict, r.reason, r.impact.rows_lost.orders], ['DENIED', 'LOGIC CHANGE', 'LOGIC_CHANGE', 0], JSON.stringify(r))
+      // Since Step 2 the observers also see the statement itself: LOGIC BYPASS (before LOGIC CHANGE).
+      assert.deepEqual([r.status, r.verdict, r.reason, r.impact.rows_lost.orders], ['DENIED', 'LOGIC BYPASS', 'LOGIC_BYPASS', 0], JSON.stringify(r))
       assert.ok(r.impact.schema_delta[field].includes(object), JSON.stringify(r.impact.schema_delta))
       assert.ok(r.remediation.constraints.some((c) => c.object === object), JSON.stringify(r.remediation))
     }
