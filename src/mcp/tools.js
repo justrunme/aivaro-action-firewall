@@ -249,7 +249,8 @@ export const TOOLS = [
       const latest = chain.receipts.filter((r) => r.kind === 'rehearsal').at(-1)
       if (!rehearsal || latest.subject?.base_hash !== report.base_hash) return refusal('PLAN_NOT_CURRENT', 'another state was rehearsed after this plan; rehearse this plan again before asking', { next_action: 'REHEARSE_AGAIN' })
       // The workspace must still be what was rehearsed; otherwise the operator would get a request that approve refuses.
-      if (hashValue(sourceState(repoDir)) !== hashValue(report.fingerprint?.plan?.source)) return refusal('PLAN_NOT_CURRENT', 'the workspace changed after this plan was rehearsed; rehearse it again before asking', { next_action: 'REHEARSE_AGAIN' })
+      const rehearsedSource = report.fingerprint?.plan?.source
+      if (!rehearsedSource || hashValue(sourceState(repoDir)) !== hashValue(rehearsedSource)) return refusal('PLAN_NOT_CURRENT', 'the workspace changed after this plan was rehearsed; rehearse it again before asking', { next_action: 'REHEARSE_AGAIN' })
       // Several plans rehearsed on this state: the fixed rule picks one; only that one can be asked about.
       if (plansOnBase(chain.receipts, report.base_hash).size > 1) {
         const c = await viaCli(cmd.compareCmd, { repoDir, opts: {}, planIds: [] })

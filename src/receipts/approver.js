@@ -19,7 +19,7 @@
  */
 
 import { createCipheriv, createDecipheriv, createPrivateKey, createPublicKey, generateKeyPairSync, randomBytes, scryptSync } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 export const APPROVER_KEY_FILE = 'approver.key.enc'
@@ -61,12 +61,16 @@ export function createApproverKey(home, passphrase) {
   cipher.setAAD(aad(publicHex))
   const ciphertext = Buffer.concat([cipher.update(pair.privateKey.export({ format: 'der', type: 'pkcs8' })), cipher.final()])
   const sealed = { version: FORMAT_VERSION, kdf: 'scrypt', N: SCRYPT.N, r: SCRYPT.r, p: SCRYPT.p, salt: salt.toString('hex'), nonce: nonce.toString('hex'), ciphertext: ciphertext.toString('hex'), tag: cipher.getAuthTag().toString('hex'), public_key: publicHex }
+  // Public half first: approverKeyExists() looks at the sealed file, so a crash between the two
+  // writes leaves no key at all rather than a sealed key without its public half. A read-only
+  // approver.pub left over from a removed key is replaced (there is no sealed key it belongs to).
+  const pub = path.join(home, APPROVER_PUB_FILE)
+  rmSync(pub, { force: true })
+  writeFileSync(pub, pair.publicKey.export({ format: 'pem', type: 'spki' }), { mode: 0o444 })
+  chmodSync(pub, 0o444)
   const file = path.join(home, APPROVER_KEY_FILE)
   writeFileSync(file, JSON.stringify(sealed) + '\n', { mode: 0o600 })
   chmodSync(file, 0o600)
-  const pub = path.join(home, APPROVER_PUB_FILE)
-  writeFileSync(pub, pair.publicKey.export({ format: 'pem', type: 'spki' }), { mode: 0o444 })
-  chmodSync(pub, 0o444)
   return { publicKey: pair.publicKey }
 }
 

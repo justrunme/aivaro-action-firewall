@@ -170,11 +170,8 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
     // The selection is checked again: a plan rehearsed or compared after the
     // authorization was issued must be taken into account before anything runs.
     selectionFor({ repoDir, keys, missionId: contract.id, receipts, planId: plan_id, reportHash: hashValue(report), currentFingerprint: current })
-    // The SQL that runs is the SQL that was approved, byte for byte (the fingerprint does not see git-ignored files).
     const expectedFiles = Array.isArray(auth.plan_files) ? auth.plan_files : null
     if (contract.plan.some((s) => s.tool === 'sql_migration') && !expectedFiles) throw new AuthorizationRefused('AUTHORIZATION_INVALID', 'authorization does not bind the migration files')
-    const changed = expectedFiles ? changedPlanFiles(expectedFiles, repoDir) : []
-    if (changed.length > 0) throw new AuthorizationRefused('FILES_CHANGED', 'a migration file changed after authorization', { files: changed })
 
     // R4.1, R4.2: capture before anything executes. If capture fails, nothing ran and
     // the authorization is left unconsumed so the operator can fix the cause and retry.
@@ -184,6 +181,12 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
     } catch (err) {
       throw new AuthorizationRefused('CAPTURE_FAILED', `pre-run capture failed, nothing was executed: ${err.message}`)
     }
+
+    // The SQL that runs is the SQL that was approved, byte for byte, checked as late as possible:
+    // after the capture (which takes a while), right before the authorization is consumed.
+    // Nothing has executed yet, so a refusal here leaves the authorization unused.
+    const changed = expectedFiles ? changedPlanFiles(expectedFiles, repoDir) : []
+    if (changed.length > 0) throw new AuthorizationRefused('FILES_CHANGED', 'a migration file changed after authorization', { files: changed })
 
     // Consume before executing: a crash mid-run must not leave a reusable authorization.
     renameSync(file, path.join(repoDir, STATE_DIR, `authorization.used-${auth.signature.slice(0, 16)}.json`))

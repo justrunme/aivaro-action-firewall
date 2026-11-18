@@ -730,7 +730,7 @@ Closed items: the allowlist names only implemented tools, claims corrected, `$TM
 
 ### Written
 
-- `src/receipts/approver.js`: `approver.key.enc` (scrypt N=2^15, AES-256-GCM, mode 0600) and `approver.pub` in `JUSTRUNME_HOME`. Wrong passphrase and damaged file fail the same way. Weak passphrase refused, an existing key never replaced.
+- `src/receipts/approver.js`: `approver.key.enc` (scrypt, first N=2^15, raised to N=2^17 after review; AES-256-GCM, mode 0600) and `approver.pub` in `JUSTRUNME_HOME`. Wrong passphrase and damaged file fail the same way. Weak passphrase refused, an existing key never replaced.
 - `src/cli/passphrase.js`: `--passphrase-stdin`, then `JUSTRUNME_APPROVER_PASSPHRASE`, then a terminal prompt without echo.
 - `src/authorize/authorization.js`: authorizations carry `approver_pubkey` and are signed by the approver key; `runMission`, the hook and `status` verify with the approver public key.
 - `src/approval/requests.js`: requests signed by the operator key and recorded as `approval_requested` receipts, bound to the report hash, the base hash, the SQL file hashes and an expiry of one hour. States pending, approved, denied, expired from the chain.
@@ -757,13 +757,13 @@ Checked and held: a forged authorization file, forged request or receipt files (
 
 Fixed in this PR:
 
-- P2, a migration file edited between approve and run was caught only by the source fingerprint, which does not see files git ignores. The authorization now carries `plan_files` (SHA-256 of every SQL file); `approve` refuses when they differ from the request, and the runner hashes them again right before executing (`FILES_CHANGED`; unit test of the check). Finding while testing: the ignored-file case cannot reach approval at all. The rehearsal copy is a git worktree, so a file git ignores is missing there and the rehearsal fails (`REHEARSAL_FAILED`, then `request_approval` answers `NOT_SAFE`; Docker test). A non-ignored file edited after approval is refused by the fingerprint before the new check runs (Docker test).
+- P2, a migration file edited between approve and run was caught only by the source fingerprint, which does not see files git ignores. The authorization now carries `plan_files` (SHA-256 of every SQL file); `approve` refuses when they differ from the request, and the runner hashes them again after the capture, right before executing (`FILES_CHANGED`). The issue and approve side has a unit test; the runner's own check is reached by no test, because the fingerprint refuses an edited non-ignored file first and an ignored file never rehearses (below). Finding while testing: the ignored-file case cannot reach approval at all. The rehearsal copy is a git worktree, so a file git ignores is missing there and the rehearsal fails (`REHEARSAL_FAILED`, then `request_approval` answers `NOT_SAFE`; Docker test). A non-ignored file edited after approval is refused by the fingerprint before the new check runs (Docker test).
 - P2, single use relied on the file rename only. The runner now refuses an authorization that a `run_result` already used (`AUTHORIZATION_USED`). Docker test: the used file copied back after undo is refused.
-- P2, an exported `JUSTRUNME_APPROVER_PASSPHRASE` approved silently. The CLI prints a notice, the authorization receipt records `passphrase_source` (`tty`, `stdin`, `env`) together with `report_hash`, `approver_pubkey` and the hash of the file list, and the MCP server deletes the variable from its own environment at start.
+- P2, an exported `JUSTRUNME_APPROVER_PASSPHRASE` approved silently. The CLI prints a notice, the authorization receipt records `passphrase_source` (`tty`, `stdin`, `env`) together with `report_hash`, `approver_pubkey` and the hash of the file list, and the MCP server deletes the variable from its own environment at start (the receipt field has a Docker test; the notice and the deletion have none).
 - P2, `approver.pub` was not tied to the sealed key. Opening the key now refuses when `approver.pub` differs from the sealed public key; `approver.pub` is written read-only.
-- P2, scrypt cost. N=2^17 (OWASP minimum), passphrase at least 12 characters, format version 2; the GCM tag length is pinned to 16 and salt, nonce and tag lengths are checked. `approver init` at a terminal asks twice.
+- P2, scrypt cost. N=2^17 (OWASP minimum), passphrase at least 12 characters, format version 2; the GCM tag length is pinned to 16 and salt, nonce and tag lengths are checked. `approver init` at a terminal asks twice (not covered by a test: the tests have no terminal).
 - P2, rule 7 was weaker than its comment. An authorization must answer a request of the same rehearsal and report; a denial of an answered or already denied request is a violation; a request must expire within 3600 s.
-- P3: a failed post-run comparison no longer loses the capture id (`COMPLETED_UNCHECKED`); stale hook comment fixed.
+- P3: a failed post-run comparison no longer loses the capture id (`COMPLETED_UNCHECKED`, no test); stale hook comment fixed.
 - Found by the new Docker case, not by the review: `request_approval` accepted a plan whose rehearsal no longer matched the workspace (another file had been added since), and `approve` then refused it with `FIDELITY_MISMATCH`. The operator would have been shown a request nobody could approve. `request_approval` now compares the current source state with the rehearsed one and answers `PLAN_NOT_CURRENT` (Docker test).
 
 Recorded, not taken:
@@ -773,3 +773,11 @@ Recorded, not taken:
 - `undo_mission` needs no human; it restores the captured state and discards later writes to that database.
 - Two `approve` processes at the same moment can both pass the pending check; rule 7 reports the second afterwards.
 - The approve and authorize commands live in the same module the MCP server imports; the code path is not reachable from a tool, and a test that checks the import graph does not exist yet.
+
+### Second review of PR B (`justrunme-skeptic`, read-only): PASS WITH WARNINGS, nothing blocking
+
+Checked and held: shell-only plans get a signed empty `plan_files`; the order signature, chain, used, fingerprint, selection, files, capture, consume; capture failures leave the authorization usable for a retry; rule 7 does not touch chains without approvals (judge, demo-cli, demo-a/b).
+
+Taken: the file re-check moved after the capture, right before the authorization is consumed (a refusal there leaves it unused); `approver.pub` is written first and a stale read-only one is replaced (unit test); `request_approval` refuses a report without a recorded source state instead of failing; wording corrected where a check has no test (the runner-side file check, the double prompt, the notice and the variable deletion, `COMPLETED_UNCHECKED`).
+
+Recorded: if a run happens but its `run_result` cannot be appended (lock held), the used authorization file could be put back and accepted by a second run, since single use from the chain needs that receipt; rule 7 compares the report hash only when the authorization records one (all new ones do).

@@ -96,6 +96,13 @@ describe('approver key (T23)', () => {
     assert.equal(loadApproverPublicKey(h), null)
     createApproverKey(h, PASS)
     assert.equal(code(() => createApproverKey(h, PASS + ' again')), 'APPROVER_EXISTS')
+    // A read-only approver.pub left behind after the sealed key was removed does not block a new key.
+    const stale = home()
+    createApproverKey(stale, PASS)
+    rmSync(path.join(stale, APPROVER_KEY_FILE))
+    const fresh = createApproverKey(stale, PASS)
+    assert.equal(publicKeyHex(loadApproverPublicKey(stale)), publicKeyHex(fresh.publicKey))
+    assert.equal(publicKeyHex(loadApproverKey(stale, PASS).publicKey), publicKeyHex(fresh.publicKey))
     assert.equal(publicKeyHex(loadApproverKey(h, PASS).publicKey), publicKeyHex(loadApproverPublicKey(h)), 'the first key is still there')
   })
 
