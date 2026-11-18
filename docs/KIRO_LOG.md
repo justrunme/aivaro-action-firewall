@@ -750,3 +750,26 @@ Closed items: the allowlist names only implemented tools, claims corrected, `$TM
 - `JUSTRUNME_APPROVER_PASSPHRASE` makes approval a script's; the judge and the tests use it and say so.
 - The approver key does not protect against processes running as the same OS user: they can read the sealed file and try passphrases.
 - A rehearsal still cannot prove identical behaviour on the real database; the approval screen shows the SQL, and the run reports a divergence instead of undoing by itself.
+
+### Review by the `justrunme-skeptic` agent (read-only): PASS WITH WARNINGS, no P1, then fixes
+
+Checked and held: a forged authorization file, forged request or receipt files (`.justrunme` is protected), an old plan with new files at approve time, answering twice, reading the key directory, and the nine tool schemas. The MCP call graph reaches only `approver.pub`.
+
+Fixed in this PR:
+
+- P2, a migration file edited between approve and run was caught only by the source fingerprint, which does not see files git ignores. The authorization now carries `plan_files` (SHA-256 of every SQL file); `approve` refuses when they differ from the request, and the runner hashes them again right before executing (`FILES_CHANGED`; unit test of the check). Finding while testing: the ignored-file case cannot reach approval at all. The rehearsal copy is a git worktree, so a file git ignores is missing there and the rehearsal fails (`REHEARSAL_FAILED`, then `request_approval` answers `NOT_SAFE`; Docker test). A non-ignored file edited after approval is refused by the fingerprint before the new check runs (Docker test).
+- P2, single use relied on the file rename only. The runner now refuses an authorization that a `run_result` already used (`AUTHORIZATION_USED`). Docker test: the used file copied back after undo is refused.
+- P2, an exported `JUSTRUNME_APPROVER_PASSPHRASE` approved silently. The CLI prints a notice, the authorization receipt records `passphrase_source` (`tty`, `stdin`, `env`) together with `report_hash`, `approver_pubkey` and the hash of the file list, and the MCP server deletes the variable from its own environment at start.
+- P2, `approver.pub` was not tied to the sealed key. Opening the key now refuses when `approver.pub` differs from the sealed public key; `approver.pub` is written read-only.
+- P2, scrypt cost. N=2^17 (OWASP minimum), passphrase at least 12 characters, format version 2; the GCM tag length is pinned to 16 and salt, nonce and tag lengths are checked. `approver init` at a terminal asks twice.
+- P2, rule 7 was weaker than its comment. An authorization must answer a request of the same rehearsal and report; a denial of an answered or already denied request is a violation; a request must expire within 3600 s.
+- P3: a failed post-run comparison no longer loses the capture id (`COMPLETED_UNCHECKED`); stale hook comment fixed.
+- Found by the new Docker case, not by the review: `request_approval` accepted a plan whose rehearsal no longer matched the workspace (another file had been added since), and `approve` then refused it with `FIDELITY_MISMATCH`. The operator would have been shown a request nobody could approve. `request_approval` now compares the current source state with the rehearsed one and answers `PLAN_NOT_CURRENT` (Docker test).
+
+Recorded, not taken:
+
+- The chain records the approver public key of each authorization, but `verify` and replay do not check it against a pinned key, so a process holding the operator key could append an `authorization_issued` receipt that claims an approval it could not turn into a usable authorization file.
+- `request_approval` may create a new request after an earlier one was approved and run; each still needs the human.
+- `undo_mission` needs no human; it restores the captured state and discards later writes to that database.
+- Two `approve` processes at the same moment can both pass the pending check; rule 7 reports the second afterwards.
+- The approve and authorize commands live in the same module the MCP server imports; the code path is not reachable from a tool, and a test that checks the import graph does not exist yet.

@@ -151,6 +151,22 @@ describe('receipt policy for approvals (T23, rule 7)', () => {
     assert.ok(violations().some((p) => /other than the rehearsed one/.test(p)), violations().join(' | '))
   })
 
+  it('PR B review: answering about another rehearsal or report, denying an answered request, and a request that lives too long are violations', () => {
+    const made = ask()
+    const other = appendReceipt({ repoDir, keys, missionId: MISSION, kind: 'rehearsal', verdict: 'SAFE', subject: { plan_id: PLAN, report_hash: hashValue(report()), base_hash: report().base_hash }, now: T0 + 1500 })
+    appendReceipt({ repoDir, keys, missionId: MISSION, kind: 'authorization_issued', verdict: 'allow', subject: { plan_id: PLAN }, refs: { rehearsal: other.hash, approval: made.receipt }, now: T0 + 2000 })
+    assert.ok(violations().some((p) => /another rehearsal/.test(p)), violations().join(' | '))
+
+    const second = ask({ now: T0 + 2500 })
+    appendReceipt({ repoDir, keys, missionId: MISSION, kind: 'authorization_issued', verdict: 'allow', subject: { plan_id: PLAN, report_hash: 'sha256:' + '9'.repeat(64) }, refs: { rehearsal: rehearsal.hash, approval: second.receipt }, now: T0 + 3000 })
+    assert.ok(violations().some((p) => /another report/.test(p)), violations().join(' | '))
+    appendReceipt({ repoDir, keys, missionId: MISSION, kind: 'approval_denied', verdict: 'deny', subject: { request_id: second.request.request_id, plan_id: PLAN, reason: 'late' }, refs: { approval: second.receipt }, now: T0 + 3500 })
+    assert.ok(violations().some((p) => /denied a request that an authorization already answered/.test(p)), violations().join(' | '))
+
+    appendReceipt({ repoDir, keys, missionId: MISSION, kind: 'approval_requested', verdict: 'pending', subject: { request_id: 'apr-5555555555555555', plan_id: PLAN, report_hash: hashValue(report()), expires_at: new Date(T0 + 4000 + 7200 * 1000).toISOString() }, refs: { rehearsal: rehearsal.hash }, now: T0 + 4000 })
+    assert.ok(violations().some((p) => /expire within 3600 s/.test(p)), violations().join(' | '))
+  })
+
   it('a denial must refer to a request', () => {
     appendReceipt({ repoDir, keys, missionId: MISSION, kind: 'approval_denied', verdict: 'deny', subject: { request_id: 'apr-3333333333333333' }, refs: { approval: 'sha256:' + '4'.repeat(64) }, now: T0 + 800 })
     assert.ok(violations().some((p) => /approval_denied: must refer/.test(p)), violations().join(' | '))

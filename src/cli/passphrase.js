@@ -55,15 +55,20 @@ function promptHidden(text) {
 }
 
 /**
+ * The source is returned with the value and recorded in the authorization
+ * receipt, so a scripted approval is visible as one in the chain.
  * @param {{ fromStdin?: boolean, env?: NodeJS.ProcessEnv, prompt?: string }} [o]
- * @returns {Promise<string | null>} null when no source is available
+ * @returns {Promise<{ value: string, source: 'stdin' | 'env' | 'tty' } | null>} null when no source is available
  */
 export async function readPassphrase({ fromStdin = false, env = process.env, prompt = 'Approver passphrase: ' } = {}) {
-  if (fromStdin) return (await firstLine(process.stdin)).replace(/\r$/, '')
-  if (typeof env.JUSTRUNME_APPROVER_PASSPHRASE === 'string' && env.JUSTRUNME_APPROVER_PASSPHRASE.length > 0) return env.JUSTRUNME_APPROVER_PASSPHRASE
+  if (fromStdin) return { value: (await firstLine(process.stdin)).replace(/\r$/, ''), source: 'stdin' }
+  if (typeof env.JUSTRUNME_APPROVER_PASSPHRASE === 'string' && env.JUSTRUNME_APPROVER_PASSPHRASE.length > 0) {
+    process.stderr.write('justrunme: approver passphrase taken from JUSTRUNME_APPROVER_PASSPHRASE (automation; recorded as passphrase_source "env")\n')
+    return { value: env.JUSTRUNME_APPROVER_PASSPHRASE, source: 'env' }
+  }
   if (process.stdin.isTTY && process.stderr.isTTY) {
     try {
-      return await promptHidden(prompt)
+      return { value: await promptHidden(prompt), source: 'tty' }
     } catch {
       return null
     }

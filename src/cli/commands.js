@@ -12,7 +12,7 @@ import path from 'node:path'
 import { parseContract } from '../contract/parser.js'
 import { CONTRACT_FILE } from '../hook/run.js'
 import { keyHome, loadExistingKeys, loadOrCreateKeys, loadPublicKey, publicKeyHex } from '../receipts/keys.js'
-import { ApproverKeyError, approverKeyExists, createApproverKey, loadApproverKey, loadApproverPublicKey } from '../receipts/approver.js'
+import { ApproverKeyError, MIN_PASSPHRASE, approverKeyExists, createApproverKey, loadApproverKey, loadApproverPublicKey } from '../receipts/approver.js'
 import { ApprovalError, listRequests, loadRequest, requestState, sha256File } from '../approval/requests.js'
 import { readPassphrase } from './passphrase.js'
 import { appendReceipt, inspectChainLock, reanchorChain, receiptHash, recoverLock, verifyChain } from '../receipts/chain.js'
@@ -217,9 +217,9 @@ export function compareCmd({ repoDir, opts, planIds }) {
 async function approverKey(opts, prompt) {
   if (!approverKeyExists(keyHome())) throw new CliError(EXIT.CONFIG, 'NO_APPROVER_KEY', 'no approver key is installed; run `justrunme approver init`')
   const passphrase = await readPassphrase({ fromStdin: opts['passphrase-stdin'] === true, prompt })
-  if (passphrase === null || passphrase === '') throw new CliError(EXIT.CONFIG, 'NO_PASSPHRASE', 'the approver passphrase must be typed at a terminal, or given with --passphrase-stdin or JUSTRUNME_APPROVER_PASSPHRASE')
+  if (passphrase === null || passphrase.value === '') throw new CliError(EXIT.CONFIG, 'NO_PASSPHRASE', 'the approver passphrase must be typed at a terminal, or given with --passphrase-stdin or JUSTRUNME_APPROVER_PASSPHRASE')
   try {
-    return loadApproverKey(keyHome(), passphrase)
+    return { ...loadApproverKey(keyHome(), passphrase.value), source: passphrase.source }
   } catch (err) {
     if (err instanceof ApproverKeyError) throw new CliError(EXIT.CONFIG, err.code, err.message)
     throw err
@@ -236,10 +236,15 @@ function approverPublic() {
 export async function approverInit({ opts }) {
   const home = keyHome()
   if (approverKeyExists(home)) throw new CliError(EXIT.CONFIG, 'APPROVER_EXISTS', 'an approver key already exists; remove approver.key.enc and approver.pub from the key directory to replace it')
-  const passphrase = await readPassphrase({ fromStdin: opts['passphrase-stdin'] === true, prompt: 'New approver passphrase (8+ characters): ' })
+  const passphrase = await readPassphrase({ fromStdin: opts['passphrase-stdin'] === true, prompt: `New approver passphrase (${MIN_PASSPHRASE}+ characters): ` })
   if (passphrase === null) throw new CliError(EXIT.CONFIG, 'NO_PASSPHRASE', 'the approver passphrase must be typed at a terminal, or given with --passphrase-stdin or JUSTRUNME_APPROVER_PASSPHRASE')
+  // Typed at a terminal: once more, because a typo would lock the key for good.
+  if (passphrase.source === 'tty') {
+    const again = await readPassphrase({ env: {}, prompt: 'Repeat the passphrase: ' })
+    if (again?.value !== passphrase.value) throw new CliError(EXIT.CONFIG, 'PASSPHRASE_MISMATCH', 'the two passphrases differ; nothing was created')
+  }
   try {
-    const { publicKey } = createApproverKey(home, passphrase)
+    const { publicKey } = createApproverKey(home, passphrase.value)
     return { exit: EXIT.OK, result: { created: true, approver_public_key: publicKeyHex(publicKey) } }
   } catch (err) {
     if (err instanceof ApproverKeyError) throw new CliError(EXIT.CONFIG, err.code, err.message)
@@ -255,7 +260,7 @@ export async function authorizeCmd({ repoDir, opts = {} }) {
   const approver = await approverKey(opts, 'Approver passphrase: ')
   let auth
   try {
-    auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver })
+    auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver, passphraseSource: approver.source })
   } catch (err) {
     if (err instanceof AuthorizationRefused) refused(EXIT.AUTHORIZATION_REFUSED, err)
     throw err
@@ -552,12 +557,12 @@ export async function approveCmd({ repoDir, opts, id }) {
   const approver = await approverKey(opts, `Approver passphrase to approve ${request.request_id} (plan ${request.plan_id}): `)
   let auth
   try {
-    auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver, approval: { request_id: request.request_id, request_hash, receipt: receiptHash(receipt) } })
+    auth = await authorizeMission({ repoDir, contract: c.contract, contractHash: c.hash, target, keys, approver, passphraseSource: approver.source, approval: { request_id: request.request_id, request_hash, receipt: receiptHash(receipt), files: request.files } })
   } catch (err) {
     if (err instanceof AuthorizationRefused) refused(EXIT.AUTHORIZATION_REFUSED, err)
     throw err
   }
-  return { exit: EXIT.OK, result: { mission_id: auth.mission_id, request_id: request.request_id, plan_id: auth.plan_id, selection: auth.selection ?? null, expires_at: auth.expires_at, fingerprint_hash: auth.fingerprint_hash, files: request.files.map((f) => f.path) } }
+  return { exit: EXIT.OK, result: { mission_id: auth.mission_id, request_id: request.request_id, plan_id: auth.plan_id, selection: auth.selection ?? null, expires_at: auth.expires_at, fingerprint_hash: auth.fingerprint_hash, files: request.files.map((f) => f.path), passphrase_source: approver.source } }
 }
 
 /** Deny one request. No passphrase: refusing needs no secret, and a denial cannot be turned into an approval. */

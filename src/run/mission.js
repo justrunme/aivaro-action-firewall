@@ -17,7 +17,7 @@ import { baseHash, compareFingerprints } from '../fidelity/gate.js'
 import { STATE_DIR } from '../fidelity/source.js'
 import { selectionGate } from '../compare/gate.js'
 import { verifySelection } from '../compare/select.js'
-import { AuthorizationRefused, issueAuthorization, signatureProblem } from '../authorize/authorization.js'
+import { AuthorizationRefused, changedPlanFiles, issueAuthorization, signatureProblem } from '../authorize/authorization.js'
 import { executeSteps } from '../rehearsal/steps.js'
 import { captureState } from '../capture/capture.js'
 import { loadReport, planId, reportSignatureProblem } from '../rehearsal/engine.js'
@@ -69,9 +69,10 @@ function selectionFor({ repoDir, keys, missionId, receipts, planId: id, reportHa
  * @param {object} a
  * @param {{ privateKey: any, publicKey: any, home: string }} a.keys operator keys: reports, receipts
  * @param {{ privateKey: any, publicKey: any }} a.approver the decrypted approver key: signs the authorization
- * @param {{ request_id: string, request_hash: string, receipt: string } | null} [a.approval] the approval request being answered
+ * @param {{ request_id: string, request_hash: string, receipt: string, files: { path: string, sha256: string }[] } | null} [a.approval] the approval request being answered
+ * @param {'tty' | 'stdin' | 'env' | null} [a.passphraseSource] where the approver passphrase came from; recorded so a scripted approval is visible as one
  */
-export async function authorizeMission({ repoDir, contract, contractHash, target, keys, approver, approval = null, now = Date.now(), ttlSeconds }) {
+export async function authorizeMission({ repoDir, contract, contractHash, target, keys, approver, approval = null, passphraseSource = null, now = Date.now(), ttlSeconds }) {
   const plan_id = planId(contract)
   return recordingRefusals({ repoDir, keys, missionId: contract.id, kind: 'authorization_refused', plan_id }, async () => {
     if (!approver?.privateKey) throw new AuthorizationRefused('NO_APPROVER_KEY', 'an authorization is signed by the approver key; none was given')
@@ -103,7 +104,7 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
       now,
       ttlSeconds,
       selection: { mode: selection.mode, receipt: selection.receipt },
-      approval: approval ? { request_id: approval.request_id, request_hash: approval.request_hash } : null,
+      approval: approval ? { request_id: approval.request_id, request_hash: approval.request_hash, files: approval.files } : null,
     })
     // Receipt first, file second: a file without its receipt never exists, so a
     // failed append cannot leave a live authorization behind.
@@ -121,6 +122,10 @@ export async function authorizeMission({ repoDir, contract, contractHash, target
         expires_at: auth.expires_at,
         selection_mode: selection.mode,
         stale_selection_ignored: selection.stale_selection_ignored,
+        report_hash: reportHash,
+        approver_pubkey: auth.approver_pubkey,
+        plan_files_hash: hashValue(auth.plan_files),
+        passphrase_source: passphraseSource,
       },
       refs: { rehearsal: rehearsal.hash, ...(selection.receipt ? { selection: selection.receipt } : {}), ...(approval ? { approval: approval.receipt } : {}) },
       now,
@@ -153,6 +158,8 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
     const receipts = verifiedReceipts(repoDir, keys, contract.id)
     const issued = findLast(receipts, (r) => r.kind === 'authorization_issued' && r.subject?.authorization_hash === hashValue(auth))
     if (!issued) throw new AuthorizationRefused('AUTHORIZATION_INVALID', 'no authorization_issued receipt matches this authorization')
+    // Single use from the chain too, not only from the file rename: a used file put back is refused.
+    if (receipts.some((r) => r.kind === 'run_result' && r.refs?.authorization === issued.hash)) throw new AuthorizationRefused('AUTHORIZATION_USED', 'this authorization was already used by a run')
 
     const realTarget = realTargetOf(repoDir, target)
     const current = await computeFingerprint({ repoDir, target: realTarget, contract, contractHash })
@@ -163,6 +170,11 @@ export async function runMission({ repoDir, contract, contractHash, target, keys
     // The selection is checked again: a plan rehearsed or compared after the
     // authorization was issued must be taken into account before anything runs.
     selectionFor({ repoDir, keys, missionId: contract.id, receipts, planId: plan_id, reportHash: hashValue(report), currentFingerprint: current })
+    // The SQL that runs is the SQL that was approved, byte for byte (the fingerprint does not see git-ignored files).
+    const expectedFiles = Array.isArray(auth.plan_files) ? auth.plan_files : null
+    if (contract.plan.some((s) => s.tool === 'sql_migration') && !expectedFiles) throw new AuthorizationRefused('AUTHORIZATION_INVALID', 'authorization does not bind the migration files')
+    const changed = expectedFiles ? changedPlanFiles(expectedFiles, repoDir) : []
+    if (changed.length > 0) throw new AuthorizationRefused('FILES_CHANGED', 'a migration file changed after authorization', { files: changed })
 
     // R4.1, R4.2: capture before anything executes. If capture fails, nothing ran and
     // the authorization is left unconsumed so the operator can fix the cause and retry.

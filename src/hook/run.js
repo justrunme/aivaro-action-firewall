@@ -36,7 +36,7 @@ async function readAll(stream) {
 
 /**
  * Signature, then source binding: the authorization must be signed by the
- * operator key, and git HEAD, tree and uncommitted changes must be exactly what
+ * approver key (verified with approver.pub only), and git HEAD, tree and uncommitted changes must be exactly what
  * they were when it was issued. Database state is re-checked by the runner.
  */
 function authorizationCheck(auth, home, cwd) {

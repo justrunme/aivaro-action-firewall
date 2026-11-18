@@ -16,10 +16,11 @@
  *      authorizes the selected plan; without a selection only one plan may have
  *      been rehearsed on that base (single-rehearsal mode).
  *   7. approval_requested refers to an earlier SAFE rehearsal of the same plan
- *      and report; approval_denied refers to an earlier request; an
+ *      and report and expires within an hour; approval_denied refers to an
+ *      earlier request of the same plan that nothing answered yet; an
  *      authorization that answers a request (refs.approval) answers a request of
- *      the same plan and report, only once, never after a denial, and not after
- *      the request expired.
+ *      the same plan, rehearsal and report, only once, never after a denial, and
+ *      not after the request expired.
  * Each break is a POLICY_VIOLATION finding naming the receipt and the rule.
  */
 
@@ -28,6 +29,8 @@ import { receiptHash } from './chain.js'
 // Receipts that are not part of the mission story: parallel hook decisions and
 // operator maintenance of the chain itself. They may land between undo and verification.
 const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered'])
+// Longest life of an approval request (REQUEST_TTL_SECONDS in src/approval/requests.js; not imported, to keep receipts free of approval code).
+const MAX_REQUEST_SECONDS = 3600
 
 export function checkPolicy(receipts) {
   const findings = []
@@ -44,20 +47,27 @@ export function checkPolicy(receipts) {
   for (const r of receipts) {
     if (r.kind === 'approval_requested') {
       const reh = earlier(r.refs?.rehearsal)
+      const lifetime = (Date.parse(r.subject?.expires_at) - Date.parse(r.timestamp)) / 1000
       if (!reh || reh.kind !== 'rehearsal') violation(r, 'must refer to an earlier rehearsal receipt')
       else if (reh.verdict !== 'SAFE') violation(r, `asked for approval of a rehearsal with verdict ${reh.verdict}`)
       else if (reh.subject?.plan_id !== r.subject?.plan_id) violation(r, 'refers to a rehearsal of another plan')
       else if (reh.subject?.report_hash !== r.subject?.report_hash) violation(r, 'asks about a report other than the rehearsed one')
+      if (!(lifetime > 0 && lifetime <= MAX_REQUEST_SECONDS)) violation(r, `a request must expire within ${MAX_REQUEST_SECONDS} s of being made`)
     }
     if (r.kind === 'approval_denied') {
       const req = earlier(r.refs?.approval)
       if (!req || req.kind !== 'approval_requested') violation(r, 'must refer to an earlier approval_requested receipt')
-      else deniedRequests.add(r.refs.approval)
+      else if (r.subject?.plan_id !== undefined && r.subject.plan_id !== req.subject?.plan_id) violation(r, 'denied a request naming another plan')
+      else if (answeredRequests.has(r.refs.approval)) violation(r, 'denied a request that an authorization already answered')
+      else if (deniedRequests.has(r.refs.approval)) violation(r, 'approval request was already denied')
+      if (req) deniedRequests.add(r.refs.approval)
     }
     if (r.kind === 'authorization_issued' && r.refs?.approval) {
       const req = earlier(r.refs.approval)
       if (!req || req.kind !== 'approval_requested') violation(r, 'must refer to an earlier approval_requested receipt')
       else if (req.subject?.plan_id !== r.subject?.plan_id) violation(r, 'answered a request for another plan')
+      else if (req.refs?.rehearsal !== r.refs?.rehearsal) violation(r, 'answered a request about another rehearsal')
+      else if (r.subject?.report_hash !== undefined && r.subject.report_hash !== req.subject?.report_hash) violation(r, 'answered a request about another report')
       else if (answeredRequests.has(r.refs.approval)) violation(r, 'approval request was already answered by another authorization')
       else if (deniedRequests.has(r.refs.approval)) violation(r, 'authorized a plan whose approval request was denied')
       else if (Date.parse(r.timestamp) > Date.parse(req.subject?.expires_at)) violation(r, 'answered an approval request after it expired')

@@ -19,7 +19,7 @@ feature until it has a passing end-to-end test.
 | Mission contract parser and PreToolUse hook | Implemented and tested; checked in a live Kiro CLI 3.3.0 session (blocked shell, protected files, inline interpreter; allowed reads and allowed-path writes). Kiro IDE not yet checked |
 | Rehearsal, impact report, fidelity gate | Implemented for `sql_migration` and `shell` steps; Demo A (DATA LOSS blocked, safe replan runs, drift blocked) passes against real Docker and Postgres. No failing-test count yet |
 | Signed run authorization | Implemented: signed by a separate approver Ed25519 key that is sealed at rest (scrypt + AES-256-GCM) and opened only by the CLI the human runs; bound to the fingerprint, single use. The operator key signs receipts, the approver key signs authorizations only |
-| Approval of agent plans | Implemented and tested against real Postgres (test/demo-approval.test.js): the agent asks with `request_approval` for a SAFE plan; the operator reads the exact SQL and the measured impact (`justrunme approvals <id>`) and approves with the plan id typed again, or denies. A request is answered once, is bound to the report, the source state and the SQL file hashes, and expires after one hour; a file changed after the request cannot be approved. The MCP server runs without the passphrase, and the test makes the sealed key file unreadable while the server works |
+| Approval of agent plans | Implemented and tested against real Postgres (test/demo-approval.test.js): the agent asks with `request_approval` for a SAFE plan that is still current (the workspace unchanged since its rehearsal, and the plan the fixed rule recommends); the operator reads the exact SQL and the measured impact (`justrunme approvals <id>`) and approves with the plan id typed again, or denies. A request is answered once, is bound to the report, the rehearsed base and the SQL file hashes, and expires after one hour at most; a file changed before approval cannot be approved, and a file changed after approval stops the run (the source fingerprint catches it; the authorization also carries the file hashes, checked again right before execution). A migration file git ignores is not in the rehearsal copy, so it never rehearses SAFE. A used authorization put back is refused from the chain. The receipt records where the passphrase came from (`tty`, `stdin` or `env`). In the test the MCP server runs without the passphrase and the sealed key file is unreadable while the server works (not checked when the tests run as root) |
 | Undo and recovery verification | Implemented for files under `allowed_paths`, contract config files and the named Postgres database; Demo B (failed real run, undo, verification of schema, row counts, checksums, files, images and `/health`, negative controls) passes against real Docker and Postgres. Containers and volumes are verified, not restored |
 | Receipts (Ed25519, hash chain) | Implemented for rehearsal, authorization, run, undo, verification and every hook decision, with a head anchor outside the workspace and ordering rules; a one-byte change anywhere fails verification (property test); 24 parallel hook processes produce one gap-free chain (test) |
 | Plan comparison (counterfactual replay) | Implemented as a library: stored rehearsals are compared only with equal `base_hash` (same source state and environment), equal rehearsal conditions, operator signatures and matching rehearsal receipts; a fixed rule picks the plan, names the deciding rule, and the choice is a signed `plan_selected` receipt. A replay checks that the choice follows from the signed measurements; it does not measure the database again. When several plans were rehearsed on the current state, only the selected one can be authorized; a selection made on another state grants nothing. Demo A compares its dangerous and safe plans against real Postgres. No `compare` CLI command yet |
@@ -85,9 +85,16 @@ Limits that matter today:
   not undo by itself.
 - The approver passphrase can come from `JUSTRUNME_APPROVER_PASSPHRASE` for
   automation (the judge demo and tests use it). Then the approval is a script's,
-  not a person's, and reports that rely on it say so. Anyone who can read that
-  variable can approve. The approver key does not protect against your own OS
-  user: a process running as you can read the sealed file and try passphrases.
+  not a person's: the CLI prints a notice and the authorization receipt records
+  `passphrase_source: "env"`. Anyone who can read that variable can approve, so
+  do not export it in the shell Kiro starts from. The approver key does not
+  protect against your own OS user: a process running as you can read the sealed
+  file and try passphrases (scrypt N=2^17 slows that down; it does not stop it).
+- `approver.pub` is the key `run` and the hook trust. It is read-only and checked
+  against the sealed key whenever the key is opened, but a process that can
+  write `JUSTRUNME_HOME` could replace it between approvals; with the gate on the
+  agent cannot write there. The chain records the approver public key of each
+  authorization; `verify` does not yet check it against a pinned key.
 - The agent can record a signed plan selection with `compare`; that steers which
   plan the operator is asked about and authorizes nothing.
 - Each undo keeps the replaced database as `<db>_jrm_prev_<t>`. Nothing
@@ -115,7 +122,7 @@ justrunme undo <capture_id>
 justrunme verify | replay | status | receipt [--seq n]
 justrunme reanchor --reason "..." | lock inspect | lock recover --sha256 ... --reason "..."
 justrunme judge [--text]                # the whole demo in one command; needs Docker
-justrunme approver init                 # once; asks for a passphrase (8+ characters)
+justrunme approver init                 # once; asks twice for a passphrase (12+ characters)
 justrunme approvals [request_id]        # requests of the mission; with an id: SQL, impact, state
 justrunme approve <request_id> --confirm <plan_id>
 justrunme deny <request_id> --reason "..."

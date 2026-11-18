@@ -12,7 +12,8 @@ import { signValue } from '../src/receipts/keys.js'
 import { loadOrCreateTestKeys } from './support/keys.js'
 import { sourceState } from '../src/fidelity/source.js'
 import { compareFingerprints, baseHash } from '../src/fidelity/gate.js'
-import { AuthorizationRefused, issueAuthorization, signatureProblem, entriesForPlan } from '../src/authorize/authorization.js'
+import { AuthorizationRefused, changedPlanFiles, issueAuthorization, signatureProblem, entriesForPlan } from '../src/authorize/authorization.js'
+import { createHash } from 'node:crypto'
 
 const HOOK = new URL('../src/hook/pretooluse.js', import.meta.url).pathname
 const CONTRACT = {
@@ -88,6 +89,22 @@ describe('authorization issuance (R2.7, R3.3, R3.6)', () => {
     assert.deepEqual(auth.entries[0].action, { tool: 'shell', argv: ['node', 'demo/check.js'] })
     assert.match(auth.entries[0].script_hashes['demo/check.js'], /^sha256:/)
     assert.equal(auth.fingerprint_hash, hashValue(s.fp))
+  })
+
+  it('PR B review: binds the SQL files byte for byte, and refuses when they differ from the approval request', () => {
+    const s = setup()
+    const auth = issue(s)
+    const sql = readFileSync(path.join(s.dir, 'demo/migrations/003_add.sql'))
+    assert.deepEqual(auth.plan_files, [{ path: 'demo/migrations/003_add.sql', sha256: 'sha256:' + createHash('sha256').update(sql).digest('hex') }])
+    assert.deepEqual(changedPlanFiles(auth.plan_files, s.dir), [])
+    // Edited after authorization: the runner's re-check names the file (also when git ignores it).
+    writeFileSync(path.join(s.dir, 'demo/migrations/003_add.sql'), 'DROP TABLE orders;\n')
+    assert.deepEqual(changedPlanFiles(auth.plan_files, s.dir), ['demo/migrations/003_add.sql'])
+    // Answering a request whose files are not the current ones is refused.
+    const approval = { request_id: 'apr-0000000000000000', request_hash: 'sha256:' + '1'.repeat(64), files: auth.plan_files }
+    assert.throws(() => issue(s, { approval }), (e) => e.code === 'FILES_CHANGED' && e.detail.files[0] === 'demo/migrations/003_add.sql')
+    rmSync(path.join(s.dir, 'demo/migrations/003_add.sql'))
+    assert.throws(() => issue(s), (e) => e.code === 'UNBINDABLE_STEP')
   })
 
   it('refuses DATA LOSS and FAILED verdicts and returns the evidence', () => {

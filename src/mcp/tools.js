@@ -36,6 +36,7 @@ import { loadTarget } from '../cli/target.js'
 import { measureDatabase } from '../rehearsal/measure.js'
 import { psql } from '../rehearsal/compose.js'
 import { hashValue } from '../util/canonical.js'
+import { sourceState } from '../fidelity/source.js'
 
 const planIdSchema = z.string().regex(PLAN_ID_RE)
 const RESET_KINDS = new Set(['run_result', 'authorization_issued', 'undo'])
@@ -247,6 +248,8 @@ export const TOOLS = [
       const rehearsal = findLast(chain.receipts, (r) => r.kind === 'rehearsal' && r.subject?.report_hash === reportHash)
       const latest = chain.receipts.filter((r) => r.kind === 'rehearsal').at(-1)
       if (!rehearsal || latest.subject?.base_hash !== report.base_hash) return refusal('PLAN_NOT_CURRENT', 'another state was rehearsed after this plan; rehearse this plan again before asking', { next_action: 'REHEARSE_AGAIN' })
+      // The workspace must still be what was rehearsed; otherwise the operator would get a request that approve refuses.
+      if (hashValue(sourceState(repoDir)) !== hashValue(report.fingerprint?.plan?.source)) return refusal('PLAN_NOT_CURRENT', 'the workspace changed after this plan was rehearsed; rehearse it again before asking', { next_action: 'REHEARSE_AGAIN' })
       // Several plans rehearsed on this state: the fixed rule picks one; only that one can be asked about.
       if (plansOnBase(chain.receipts, report.base_hash).size > 1) {
         const c = await viaCli(cmd.compareCmd, { repoDir, opts: {}, planIds: [] })
@@ -284,16 +287,22 @@ export const TOOLS = [
       const res = r.result
       const steps = res.steps.map((s) => ({ id: s.id, status: s.status, detail: String(s.detail ?? '').split('\n')[0].slice(0, 160) }))
       if (!res.ok) return { status: 'FAILED', plan_id, capture_id: res.capture_id, steps, receipt_hash: res.receipt_hash, next_action: 'UNDO_MISSION', undo: { tool: 'undo_mission', capture_id: res.capture_id } }
-      const check = await compareToRehearsal(repoDir, verifiedReport(repoDir, base.contract.id, plan_id))
+      // The run has happened: a failed comparison must not lose the capture id the agent needs for undo.
+      let check
+      try {
+        check = await compareToRehearsal(repoDir, verifiedReport(repoDir, base.contract.id, plan_id))
+      } catch (err) {
+        check = { matches: null, differences: [{ what: `could not compare with the rehearsal: ${String(err?.message ?? err).split('\n')[0].slice(0, 160)}` }] }
+      }
       return {
-        status: check.matches ? 'COMPLETED' : 'COMPLETED_WITH_DIVERGENCE',
+        status: check.matches === true ? 'COMPLETED' : check.matches === false ? 'COMPLETED_WITH_DIVERGENCE' : 'COMPLETED_UNCHECKED',
         plan_id,
         capture_id: res.capture_id,
         steps,
         receipt_hash: res.receipt_hash,
         matches_rehearsal: check.matches,
         differences: check.differences,
-        next_action: check.matches ? 'REPORT_TO_USER' : 'ASK_OPERATOR',
+        next_action: check.matches === true ? 'REPORT_TO_USER' : 'ASK_OPERATOR',
         undo: { tool: 'undo_mission', capture_id: res.capture_id },
       }
     }),

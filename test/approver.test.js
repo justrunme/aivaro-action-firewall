@@ -50,9 +50,20 @@ describe('approver key (T23)', () => {
     const text = readFileSync(file, 'utf8')
     assert.doesNotMatch(text, /PRIVATE KEY|BEGIN/)
     const sealed = JSON.parse(text)
-    assert.deepEqual([sealed.version, sealed.kdf, sealed.N], [1, 'scrypt', 32768])
+    assert.deepEqual([sealed.version, sealed.kdf, sealed.N, sealed.r, sealed.p], [2, 'scrypt', 2 ** 17, 8, 1])
     assert.ok(!text.includes(PASS))
-    assert.ok(statSync(path.join(h, APPROVER_PUB_FILE)).isFile())
+    // The public half is read-only: replacing it is a deliberate act, not an overwrite.
+    assert.equal(statSync(path.join(h, APPROVER_PUB_FILE)).mode & 0o777, 0o444)
+  })
+
+  it('PR B review: a replaced approver.pub is reported when the key is opened, not trusted', () => {
+    const h = home()
+    createApproverKey(h, PASS)
+    const other = home()
+    createApproverKey(other, PASS)
+    rmSync(path.join(h, APPROVER_PUB_FILE), { force: true })
+    writeFileSync(path.join(h, APPROVER_PUB_FILE), readFileSync(path.join(other, APPROVER_PUB_FILE)))
+    assert.equal(code(() => loadApproverKey(h, PASS)), 'APPROVER_KEY_INVALID')
   })
 
   it('a wrong passphrase and a damaged file fail the same way, and never yield a key', () => {
@@ -62,18 +73,23 @@ describe('approver key (T23)', () => {
     assert.equal(code(() => loadApproverKey(h, '')), 'WRONG_PASSPHRASE')
     const file = path.join(h, APPROVER_KEY_FILE)
     const sealed = JSON.parse(readFileSync(file, 'utf8'))
-    // Flip one byte of the ciphertext, then swap the public key for another: both break the seal.
-    writeFileSync(file, JSON.stringify({ ...sealed, ciphertext: (sealed.ciphertext[0] === 'a' ? 'b' : 'a') + sealed.ciphertext.slice(1) }))
+    // Flip one byte of the ciphertext, or of the tag: the seal does not open.
+    const flip = (s) => (s[0] === 'a' ? 'b' : 'a') + s.slice(1)
+    writeFileSync(file, JSON.stringify({ ...sealed, ciphertext: flip(sealed.ciphertext) }))
     assert.equal(code(() => loadApproverKey(h, PASS)), 'WRONG_PASSPHRASE')
+    writeFileSync(file, JSON.stringify({ ...sealed, tag: flip(sealed.tag) }))
+    assert.equal(code(() => loadApproverKey(h, PASS)), 'WRONG_PASSPHRASE')
+    // Another public key in the sealed file no longer matches approver.pub: refused before decrypting.
     const other = home()
     createApproverKey(other, PASS)
     writeFileSync(file, JSON.stringify({ ...sealed, public_key: JSON.parse(readFileSync(path.join(other, APPROVER_KEY_FILE), 'utf8')).public_key }))
-    assert.equal(code(() => loadApproverKey(h, PASS)), 'WRONG_PASSPHRASE')
+    assert.equal(code(() => loadApproverKey(h, PASS)), 'APPROVER_KEY_INVALID')
   })
 
   it('refuses a weak passphrase, never replaces an existing key, and says so when none is installed', () => {
     const h = home()
     assert.equal(code(() => createApproverKey(h, 'short')), 'WEAK_PASSPHRASE')
+    assert.equal(code(() => createApproverKey(h, 'elevenchars')), 'WEAK_PASSPHRASE') // 11 < 12
     assert.equal(code(() => createApproverKey(h, undefined)), 'WEAK_PASSPHRASE')
     assert.equal(approverKeyExists(h), false)
     assert.equal(code(() => loadApproverKey(h, PASS)), 'NO_APPROVER_KEY')
@@ -88,7 +104,8 @@ describe('approver key (T23)', () => {
     createApproverKey(h, PASS)
     const file = path.join(h, APPROVER_KEY_FILE)
     const sealed = JSON.parse(readFileSync(file, 'utf8'))
-    for (const bad of [{ ...sealed, version: 2 }, { ...sealed, kdf: 'pbkdf2' }, { ...sealed, N: 1024 }, 'not json at all']) {
+    // Old format, other KDF, weaker cost, a truncated GCM tag (Node would accept a short tag unless the length is pinned), a short nonce.
+    for (const bad of [{ ...sealed, version: 1 }, { ...sealed, kdf: 'pbkdf2' }, { ...sealed, N: 1024 }, { ...sealed, tag: sealed.tag.slice(0, 8) }, { ...sealed, nonce: sealed.nonce.slice(0, 16) }, 'not json at all']) {
       writeFileSync(file, typeof bad === 'string' ? bad : JSON.stringify(bad))
       assert.ok(['APPROVER_KEY_INVALID', 'NO_APPROVER_KEY'].includes(code(() => loadApproverKey(h, PASS))))
     }

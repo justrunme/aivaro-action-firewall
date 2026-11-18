@@ -20,7 +20,7 @@
 import { describe, it, before, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
@@ -68,7 +68,8 @@ describe('Demo approval: the agent asks, the operator approves once, the run mat
     mkdirSync(path.join(repoDir, 'demo/migrations'), { recursive: true })
     copyFileSync(path.join(DEMO, 'docker-compose.yml'), path.join(repoDir, 'demo/docker-compose.yml'))
     for (const f of ['001_init.sql', '002_seed_data.sql']) copyFileSync(path.join(DEMO, 'migrations', f), path.join(repoDir, 'demo/migrations', f))
-    writeFileSync(path.join(repoDir, '.gitignore'), '.justrunme/\n')
+    // *.local.sql is ignored by git, so the source fingerprint does not see those files (case 3).
+    writeFileSync(path.join(repoDir, '.gitignore'), '.justrunme/\ndemo/migrations/*.local.sql\n')
     writeFileSync(path.join(repoDir, 'justrunme.target.json'), JSON.stringify({ project, compose_file: 'demo/docker-compose.yml', db_service: 'db', db_user: 'demo_user', db_name: 'pumpkin_patch' }))
     writeFileSync(
       path.join(repoDir, 'justrunme.mission.yaml'),
@@ -179,6 +180,14 @@ describe('Demo approval: the agent asks, the operator approves once, the run mat
     assert.deepEqual(await measureReal(), before, 'the database is back to the captured state')
     const checked = (await server.call('verify_recovery', { capture_id: ran.capture_id })).payload
     assert.deepEqual([checked.status, checked.failed], ['PASS', []], JSON.stringify(checked))
+    // The used authorization file put back (the state matches it again after undo) is refused from the chain.
+    const stateDir = path.join(repoDir, '.justrunme')
+    const used = readdirSync(stateDir).find((n) => n.startsWith('authorization.used-'))
+    copyFileSync(path.join(stateDir, used), path.join(stateDir, 'authorization.json'))
+    const replayed = (await server.call('run_mission', { plan_id: safe.plan_id })).payload
+    assert.deepEqual([replayed.status, replayed.error.code], ['REFUSED', 'AUTHORIZATION_USED'], JSON.stringify(replayed))
+    unlinkSync(path.join(stateDir, 'authorization.json'))
+    assert.deepEqual(await measureReal(), before)
     const replay = (await server.call('replay_mission', {})).payload
     assert.deepEqual([replay.status, replay.ok], ['PASS', true], JSON.stringify(replay))
     const kinds = (await server.call('get_receipt', {})).payload
@@ -226,6 +235,51 @@ describe('Demo approval: the agent asks, the operator approves once, the run mat
     assert.deepEqual(await measureReal(), before, 'nothing ran')
     const replay = (await server.call('replay_mission', {})).payload
     assert.deepEqual([replay.status, replay.ok], ['PASS', true], JSON.stringify(replay))
+    if (canLockOut) unlockKey()
+  })
+
+  it('a git-ignored migration never rehearses SAFE; a migration edited after approval stops the run', async () => {
+    if (canLockOut) lockKey()
+    const before = await measureReal()
+    // A file git ignores is invisible to the source fingerprint, and it is not in the rehearsal copy either:
+    // the rehearsal fails, so such a plan can never be asked about, let alone approved.
+    const ignored = 'demo/migrations/004_order_note.local.sql'
+    writeFileSync(path.join(repoDir, ignored), 'ALTER TABLE orders ADD COLUMN note TEXT;\n')
+    assert.equal(execFileSync('git', ['check-ignore', ignored], { cwd: repoDir, encoding: 'utf8' }).trim(), ignored)
+    const hidden = (await server.call('rehearse', { migrations: [ignored] })).payload
+    assert.deepEqual([hidden.status, hidden.reason], ['DENIED', 'REHEARSAL_FAILED'], JSON.stringify(hidden))
+    assert.equal((await server.call('request_approval', { plan_id: hidden.plan_id })).payload.error.code, 'NOT_SAFE')
+    unlinkSync(path.join(repoDir, ignored))
+
+    // The plan of the earlier cases, rehearsed again on the current workspace.
+    const rel = 'demo/migrations/003_add_order_status.sql'
+    writeFileSync(path.join(repoDir, rel), SAFE)
+    const rehearsed = (await server.call('rehearse', { migrations: [rel] })).payload
+    assert.equal(rehearsed.status, 'SAFE', JSON.stringify(rehearsed))
+    // Several plans were rehearsed on this database state (the failed one above): the fixed rule decides which can be asked about.
+    const cmp = (await server.call('compare', {})).payload
+    assert.equal(cmp.recommended, rehearsed.plan_id, JSON.stringify(cmp))
+    const safe = { plan_id: rehearsed.plan_id }
+    // A workspace change after the rehearsal makes the plan not current: no request the operator could not approve.
+    writeFileSync(path.join(repoDir, 'demo/migrations/005_draft.sql'), '-- draft\n')
+    const stale = (await server.call('request_approval', { plan_id: safe.plan_id })).payload
+    assert.deepEqual([stale.status, stale.error.code], ['REFUSED', 'PLAN_NOT_CURRENT'], JSON.stringify(stale))
+    unlinkSync(path.join(repoDir, 'demo/migrations/005_draft.sql'))
+    const asked = (await server.call('request_approval', { plan_id: safe.plan_id })).payload
+    assert.equal(asked.status, 'PENDING_APPROVAL', JSON.stringify(asked))
+    if (canLockOut) unlockKey()
+    const approved = operator('approve', asked.request_id, '--confirm', safe.plan_id)
+    assert.equal(approved.code, 0, JSON.stringify(approved.out))
+    assert.equal(approved.out.result.passphrase_source, 'env', 'a scripted approval says so')
+    if (canLockOut) lockKey()
+
+    // Edited after approval: the source fingerprint catches it first; the authorization's own file
+    // hashes are checked again right before execution (test/authorization.test.js covers that check).
+    appendFileSync(path.join(repoDir, asked.files[0]), 'DROP TABLE orders;\n')
+    const run = (await server.call('run_mission', { plan_id: safe.plan_id })).payload
+    assert.equal(run.status, 'REFUSED', JSON.stringify(run))
+    assert.ok(['FIDELITY_MISMATCH', 'FILES_CHANGED'].includes(run.error.code), JSON.stringify(run))
+    assert.deepEqual(await measureReal(), before, 'nothing ran')
     if (canLockOut) unlockKey()
   })
 })

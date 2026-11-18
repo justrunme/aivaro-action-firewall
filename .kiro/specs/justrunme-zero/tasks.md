@@ -278,7 +278,7 @@ Decisions fixed by the operator: official MCP SDK from plain JavaScript (no Type
 | T25 | Real-agent evaluation, preregistered set, all runs kept | PR D |
 | T26 | `init`, `doctor`, Evidence Timeline | PR E |
 
-- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [ ] T23.1 · [ ] T23.2 · [ ] T23.3 · [ ] T24 · [ ] T27 · [ ] T25 · [ ] T26
+- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [ ] T24 · [ ] T27 · [ ] T25 · [ ] T26
 
 ---
 
