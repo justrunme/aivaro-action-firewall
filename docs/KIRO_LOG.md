@@ -958,8 +958,21 @@ Findings: three repairs bypass the trigger for the update (`DISABLE TRIGGER ALL`
 Open: D1, a separate demonstration run where a person approves in the Console by typing the passphrase.
 
 ---
+## Run 25 — T28: Console visual redesign
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-18 |
+| Branch | `kiro/t28-console-design`, from `origin/main` (the local `main` was behind and had no Console) |
+Scope kept to `src/console/static/**`, `docs/img/**`, README, this log, and two test files. No change to the server, API, detection, contract, hook, approval or receipt code.
+Written: dark lab design with one colour language (green verified or SAFE, amber needs approval, red DENIED, violet REPAIRED, grey UNVERIFIABLE) used by badges, flight nodes, receipts and bars; dashed stitch dividers, a bolt icon on verified steps, a thin grid background; system fonts, inline SVG built with the DOM, no external asset. Missions: a card per mission (verdict, four-beat story, last step, time) and the Flight Recorder (PROPOSED, REHEARSED, DENIED, REPAIRED, APPROVED, EXECUTED, VERIFIED; each node opens its SQL or SQL diff, rows lost, receipt hash with copy button, signature state; a step the chain does not show is greyed with the reason). Impact Diff: Counterfactual Replay, then Plan A against Plan B. Approval Center: risk verdict, plan summary, Approve and Reject, and how the approval was recorded (`env` is labelled SCRIPTED, `stdin` is "Console or pipe", only `tty` is "human at terminal"). Recovery & Replay: receipt chain with a signature mark and copyable hash per entry. Loading, empty and error states on every screen.
+Choices to know: (1) The server serves a fixed list of six static files and `server.js` is out of scope, so no module was added; `screens.js` is about 400 lines as a result. (2) The Console API has no review verdict, so the column "WITHOUT JUSTRUNME" is the last denied plan as measured in rehearsal on a copy, not "a reviewer approved it"; the panel says review verdicts are not in the chain. The recorded review runs are in `docs/agent-runs/T25-results-v1.md`. (3) The per-receipt signature mark is the result of the CLI `verify` run when the page loads, not a check in the browser, and the page says so. (4) One Console serves one mission, so the Missions list has one card.
+Screenshots (1280x800, Chrome headless) are of a real mission: the hidden-trigger demo workspace against a throwaway Postgres 16 (patch 1 sold out; the migration `UPDATE patches SET available_count = 0` is denied with `orders` 3 → 2; the revision adds a `sold_out` column and is SAFE). The approval was made by script with the passphrase in the environment, so the Console shows it as SCRIPTED. The approval screenshot was taken while the request was pending.
+Tests: `test/console-ui.test.js` renders every screen from real chain data (and the empty, error and loading states) with a small fake DOM, checks greyed missing steps, scripted against human wording, the receipt rows, WCAG AA contrast (4.5:1) of the CSS colour pairs, no external URL or HTML injection in the static files, and that every static file is served. It does not test layout; the screenshots were checked by eye.
+Operator review (2026-11-18), changes made on this branch: dashed "stitch" seams on the flight connectors, story cards and mission card, and a spark on the VERIFIED node when the real result equals the rehearsal; the "WITHOUT JUSTRUNME" column now carries the published T25 v1 control result (5 of 5 reviews said REVIEW: APPROVE; applied directly, 5 of 5 runs lost 1 of 3 orders), labelled as another experiment and not as data of the mission shown, and a test checks the number against `docs/agent-runs/T25-results-v1.md`. Not done: several missions on the Missions screen (the Console API reads one mission, and the v1 runs have no receipt chains in the repository), and the demo is not rebuilt on the v2 solution (waits for v2). The screenshots show the v1 revision (a `sold_out` flag column that leaves `available_count` alone, so the trigger does not fire); that is an honest record of the v1 behaviour and the plan note is the agent's own text.
 
-## Run 25 — T25 v2, Step 1a: scenario and reference solution before the protocol is frozen
+---
+
+## Run 26 — T25 v2, Step 1a: scenario and reference solution before the protocol is frozen
 
 | Field | Value |
 |-------|-------|
@@ -978,12 +991,12 @@ Not yet done (Step 2): rehearsal and `run_mission` still run plans as the target
 
 ---
 
-## Run 26 — T25 v2 Steps 1 to 3: frozen protocol, LOGIC BYPASS, plan role, invariants and CONFLICT
+## Run 27 — T25 v2 Steps 1 to 3: frozen protocol, LOGIC BYPASS, plan role, invariants and CONFLICT
 
 | Field | Value |
 |-------|-------|
 | Date | 2026-11-18 |
-| Branch | `kiro/t25-v2` (git worktree `justrunme-zero-t25v2`; a second Kiro session works on `kiro/t28-console-design` in the main checkout, so this work moved to its own worktree; nothing of the other session was changed) |
+| Branch | `kiro/t25-v2` (git worktree `justrunme-zero-t25v2`; a second Kiro session worked on `kiro/t28-console-design` (Run 25, merged as `3bd96bf`) in the main checkout, so this work moved to its own worktree; nothing of the other session was changed) |
 | Commits | `cd0cc05` scenario, reference, plan role (CI green, PR 17) → `d774798` protocol v2 alone, FROZEN → this commit (Steps 2 and 3) |
 
 Step 2 (LOGIC BYPASS), `src/rehearsal/observe.js`, installed by JustRunMe in the rehearsal copy as the owner, never by the plan:
