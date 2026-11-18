@@ -838,3 +838,11 @@ Condensed transcript: `docs/agent-runs/2026-11-18-run1.md`. Raw stream logs were
 - Transcript note added: run 1 used the steering before the "already applied migrations" line; raw logs and receipts stayed outside the repository.
 - `scripts/agent-workspace.js --down` now removes only a directory directly inside the system temp directory; the printed setup JSON is documented as local-only (it holds absolute paths).
 - Recorded, not changed: the `18 receipts` and `nothing denied` figures come from `justrunme verify` and the audit lines of a workspace that was removed after the run; they are not reproducible from the repository.
+
+### CI failure on PR 14 and fix (judge cleanup after an interruption)
+
+One of the two `Test (Node 24)` runs on GitHub Actions failed 353/354: `demo-judge.test.js` "removes its containers, volumes, networks and rehearsal copies when interrupted" found the volume `jrm-reh-judge<id>-<id>_db_data` left behind; containers and networks were gone. Not related to the agent work in this PR; the judge test is older.
+
+Cause: on SIGINT the judge killed its child CLI with SIGKILL, but the `docker compose up` that the child had started for a rehearsal copy kept running (it is the judge's grandchild), and the daemon finished creating the volume after the judge's single sweep had already run. Intermittent: one Linux run of two.
+
+Fix (`src/util/exec.js`, `src/judge/env.js`): the judge's CLI children now lead their own process groups (`run(..., { group: true })`); cleanup kills each group whole, waits (up to 5 s) until the groups are gone, and then sweeps the rehearsal-copy prefix until two sweeps in a row find nothing, with a 30 s limit. The Docker test was not changed or relaxed. Unit tests (`test/cleanup.test.js`): a child's grandchild dies with its group; a volume that appears after a clean sweep is still removed; the sweep stops at its deadline. Local: the interrupt test passed three times in a row on macOS with no volume left; the Linux check is CI, run more than once.
