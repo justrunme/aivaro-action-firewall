@@ -17,7 +17,9 @@ import path from 'node:path'
 import { HEALTH_SERVICE_RE, HEALTH_URL_RE, assertTarget } from '../rehearsal/compose.js'
 
 export const TARGET_FILE = 'justrunme.target.json'
-const KEYS = ['project', 'compose_file', 'db_service', 'db_user', 'db_name', 'health']
+// plan_user (T25 v2): the role plan statements connect as; db_user (the owner) does setup,
+// measurement and the rehearsal observers. Without it, plans run as db_user.
+const KEYS = ['project', 'compose_file', 'db_service', 'db_user', 'db_name', 'health', 'plan_user']
 
 export class ConfigError extends Error {
   constructor(code, message) {
@@ -43,7 +45,8 @@ export function loadTarget(repoDir) {
   if (unknown.length > 0) throw new ConfigError('TARGET_INVALID', `unknown field(s) in ${TARGET_FILE}: ${unknown.join(', ')}`)
   if (!safeRelative(doc.compose_file)) throw new ConfigError('TARGET_INVALID', 'compose_file must be a relative path inside the workspace')
   if (!existsSync(path.join(repoDir, doc.compose_file))) throw new ConfigError('TARGET_INVALID', `compose_file ${doc.compose_file} does not exist`)
-  const target = { project: doc.project, composeFile: doc.compose_file, dbService: doc.db_service, dbUser: doc.db_user, dbName: doc.db_name }
+  const target = { project: doc.project, composeFile: doc.compose_file, dbService: doc.db_service, dbUser: doc.db_user, dbName: doc.db_name, ...(doc.plan_user !== undefined ? { planUser: doc.plan_user } : {}) }
+  if (target.planUser !== undefined && target.planUser === target.dbUser) throw new ConfigError('TARGET_INVALID', 'plan_user must differ from db_user')
   try {
     assertTarget(target)
   } catch (err) {

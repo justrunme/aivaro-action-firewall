@@ -2,12 +2,19 @@
  * Impact report and verdict from measured before/after database state (R2.3, R2.6, R6.2).
  *
  * Pure function of the measurements. Verdict rules, in order:
+ *   LOGIC BYPASS  the rehearsal observers (observe.js) saw a trigger, rule, constraint or
+ *                 setting switched off, skipped or replaced, even if undone inside the plan,
+ *                 or a refused attempt (permission error of the plan role); allowed_logic_changes
+ *                 does not exempt a bypass
+ *   UNVERIFIABLE  the observers or the plan role cannot be trusted for this rehearsal
  *   FAILED     a rehearsed step did not complete
  *   DATA LOSS  a table or a column disappeared, or a protected table lost rows
  *   LOGIC CHANGE  after the plan, an existing trigger, rule or function is gone, redefined,
  *                 or (a trigger) left switched off, and the contract's allowed_logic_changes
  *                 does not name it. A trigger switched off and on again inside the plan, or
  *                 skipped with session_replication_role, leaves no trace here (measure.js).
+ *   INVARIANT VIOLATED  an invariant of the mission (src/mission/requirements.js) does not hold
+ *   REQUIREMENT UNMET   a required change of the mission was not made
  *   SAFE       otherwise
  */
 
@@ -21,8 +28,9 @@ import { logicDelta } from './measure.js'
  * @param {{ id: string, status: string }[]} a.steps
  * @param {{ max_rows_deleted?: number }} [a.thresholds]
  * @param {string[]} [a.allowedLogicChanges] entries like "trigger public.patches.name" the operator allows to change
+ * @param {{ evidence: object[], unverifiable: string[] } | null} [a.bypass] observer findings (null: no observers)
  */
-export function buildImpact({ before, after, protectedTables, steps, thresholds = {}, allowedLogicChanges = [] }) {
+export function buildImpact({ before, after, protectedTables, steps, thresholds = {}, allowedLogicChanges = [], bypass = null, requirements = null }) {
   const names = [...new Set([...Object.keys(before.tables), ...Object.keys(after.tables)])].sort()
   const tables = {}
   const removedTables = []
@@ -63,6 +71,9 @@ export function buildImpact({ before, after, protectedTables, steps, thresholds 
     const row = tables[t]
     if (row && row.rows_lost > 0 && !removedTables.includes(t)) {
       evidence.push({ kind: 'protected_rows_lost', table: t, rows_before: row.rows_before, rows_after: row.rows_after })
+    } else if (row && !removedTables.includes(t) && (bypass?.missing?.[t] ?? 0) > 0) {
+      // Same count, other rows: an existing row was deleted and another inserted (review S7).
+      evidence.push({ kind: 'protected_rows_replaced', table: t, missing: bypass.missing[t] })
     }
   }
   // T25: existing database logic (triggers, rules, functions) removed or redefined. A
@@ -74,8 +85,20 @@ export function buildImpact({ before, after, protectedTables, steps, thresholds 
     for (const object of list) if (!allowedLogicChanges.includes(object)) logicEvidence.push({ kind, object })
   }
   const failed = steps.filter((s) => s.status !== 'ok')
-  const verdict = failed.length > 0 ? 'FAILED' : evidence.length > 0 ? 'DATA LOSS' : logicEvidence.length > 0 ? 'LOGIC CHANGE' : 'SAFE'
-  evidence.push(...logicEvidence)
+  // T25 v2: what the observers in the copy saw. Any bypass, even one undone inside the
+  // plan, or a refused attempt, denies; observers that cannot be trusted never give SAFE.
+  const bypassEvidence = bypass?.evidence ?? []
+  const unverifiable = bypass?.unverifiable ?? []
+  const verdict =
+    bypassEvidence.length > 0 ? 'LOGIC BYPASS'
+      : unverifiable.length > 0 ? 'UNVERIFIABLE'
+        : failed.length > 0 ? 'FAILED'
+          : evidence.length > 0 ? 'DATA LOSS'
+            : logicEvidence.length > 0 ? 'LOGIC CHANGE'
+              : (requirements?.violated.length ?? 0) > 0 ? 'INVARIANT VIOLATED'
+                : (requirements?.unmet.length ?? 0) > 0 ? 'REQUIREMENT UNMET'
+                  : 'SAFE'
+  evidence.push(...logicEvidence, ...bypassEvidence, ...unverifiable.map((why) => ({ kind: 'unverifiable', why })), ...(requirements?.violated ?? []), ...(requirements?.unmet ?? []))
 
   const threshold_breaches = []
   if (Number.isInteger(thresholds.max_rows_deleted) && rowsDeleted > thresholds.max_rows_deleted) {

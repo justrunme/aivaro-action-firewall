@@ -153,7 +153,7 @@ export async function rehearseCmd({ repoDir, opts = {} }) {
   try {
     report = await rehearse({ repoDir, contract: c.contract, contractHash: c.hash, target, keys })
   } catch (err) {
-    if (err instanceof RehearsalRefused) refused(EXIT.REHEARSAL_REFUSED, err)
+    if (err instanceof RehearsalRefused) refused(err.code === 'CONFLICT' ? EXIT.CONFLICT : EXIT.REHEARSAL_REFUSED, err)
     throw err
   }
   const rowsLost = Object.fromEntries(report.conditions.protected_tables.map((t) => [t, report.tables?.[t]?.rows_lost ?? null]))

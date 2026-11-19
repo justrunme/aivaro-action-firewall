@@ -153,6 +153,10 @@ export const TOOLS = [
       }
       const plan = proposePlan({ repoDir, migrations })
       const r = await viaCli(cmd.rehearseCmd, { repoDir, opts: { plan: plan.plan_id } })
+      // T25 v2 Step 3: the mission itself cannot be met; no plan can fix that, so stop.
+      if (!r.ok && r.refusal.error?.code === 'CONFLICT') {
+        return { status: 'CONFLICT', message: r.refusal.error.message, conflicts: r.refusal.detail?.conflicts ?? [], plan_id: plan.plan_id, next_action: 'REPORT_TO_USER', note: 'Nothing was rehearsed or run. The requirements of the mission contradict each other on existing rows; only the operator can change the mission.' }
+      }
       if (!r.ok) return { ...r.refusal, plan_id: plan.plan_id }
       const report = verifiedReport(repoDir, base.contract.id, plan.plan_id)
       return { ...nextActionFor(explainReport(report, { used: before + 1 }, { sqlText: sqlTextOf(repoDir, plan.plan_id) })), files: plan.files, rehearsal_exit: r.exit, cleanup_clean: report.cleanup?.clean ?? null }

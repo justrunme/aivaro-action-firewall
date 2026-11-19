@@ -1,0 +1,19 @@
+{
+  "name": "t25v2-developer",
+  "description": "T25 v2 control group: prepares SQL migrations for production from the files of the workspace. Read, and write inside demo/migrations only; no JustRunMe tools, no shell.",
+  "tools": ["read", "write"],
+  "excludedTools": ["shell"],
+  "mcpServers": {},
+  "includeMcpJson": false,
+  "includePowers": false,
+  "permissions": {
+    "rules": [
+      { "capability": "fs_read", "effect": "allow" },
+      { "capability": "fs_write", "match": ["demo/migrations/**"], "effect": "allow" },
+      { "capability": "shell", "effect": "deny" }
+    ]
+  },
+  "resources": ["file://justrunme.mission.yaml"],
+  "prompt": "You prepare SQL migrations that will be applied to the production database after you finish. You can read the files of this workspace and write migration files in demo/migrations. You cannot run anything. Give the final line in the form the user asks for.",
+  "welcomeMessage": "Developer ready."
+}

@@ -13,6 +13,7 @@
 import { lstatSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { psql } from './compose.js'
+import { backslashInCode, metaCommandAt } from './sqltext.js'
 import { run } from '../util/exec.js'
 import { errorSummary } from '../privacy/redact.js'
 
@@ -66,8 +67,18 @@ export async function executeSteps({ plan, cwd, target, mode }) {
         } catch {
           linked = true
         }
-        const r = linked ? { code: 1, stderr: 'the migration file is missing or is a symbolic link' } : await psql(target, { input: readFileSync(file), singleTransaction: true })
-        result = r.code === 0 ? { status: 'ok', detail: '' } : { status: 'failed', detail: tail(r.stderr) }
+        const text = linked ? null : readFileSync(file)
+        // psql reads backslash commands from stdin (\c reconnects as another role, \! runs a shell): only SQL runs.
+        const meta = text === null ? -1 : metaCommandAt(text.toString('utf8'))
+        const r = linked
+          ? { code: 1, stderr: 'the migration file is missing or is a symbolic link' }
+          : meta !== -1
+            ? backslashInCode(text.toString('utf8'))
+              ? { code: 1, stderr: `META_COMMAND: the migration contains a psql backslash command at offset ${meta}; only SQL may run` }
+              : { code: 1, stderr: `BACKSLASH_REFUSED: the migration contains a backslash at offset ${meta} (inside a string or comment); plan files may contain no backslash at all, write the value another way (for example chr(10) for a newline)` }
+            : await psql(target, { input: text, singleTransaction: true, asPlan: true })
+        // reached_database: false when the step failed before psql ran (missing file, link, backslash command).
+        result = r.code === 0 ? { status: 'ok', detail: '' } : { status: 'failed', detail: tail(r.stderr), ...(linked || meta !== -1 ? { reached_database: false } : {}) }
       }
     } else if (step.tool === 'shell') {
       const r = await run(step.args[0], step.args.slice(1), { cwd, env: stepEnv(target), timeoutMs: 120000 })

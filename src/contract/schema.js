@@ -8,6 +8,8 @@
  * @typedef {{ field: string, message: string }} ContractError
  */
 
+import { validateRequirements } from '../mission/requirements.js'
+
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/
 const STEP_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/
 
@@ -21,9 +23,9 @@ const TOP_REQUIRED = [
   'plan',
   'resources',
 ]
-const TOP_OPTIONAL = ['impact_thresholds', 'allowed_logic_changes']
+const TOP_OPTIONAL = ['impact_thresholds', 'allowed_logic_changes', 'required_changes', 'invariants']
 // "trigger <schema>.<table>.<name>", "rule <schema>.<table>.<name>", "function <schema>.<name>(<args>)"
-const LOGIC_OBJECT_RE = /^(trigger|rule) [^\s.]+\.[^\s.]+\.[^\s.]+$|^function [^\s.]+\.[^\s(]+\([^)]*\)$/
+const LOGIC_OBJECT_RE = /^(trigger|rule|constraint) [^\s.]+\.[^\s.]+\.[^\s.]+$|^function [^\s.]+\.[^\s(]+\([^)]*\)$/
 const STEP_KEYS = ['id', 'tool', 'args', 'reversibility']
 const RESOURCE_KEYS = ['databases', 'config_files', 'compose_services']
 const THRESHOLD_KEYS = ['max_rows_deleted', 'max_external_calls']
@@ -85,6 +87,8 @@ export function validateContract(doc) {
     stringArray(doc.allowed_paths, 'allowed_paths', errors, { min: 1, item: isSafeRelativePath })
   }
   if ('protected_tables' in doc) stringArray(doc.protected_tables, 'protected_tables', errors)
+  // T25 v2 Step 3: typed business requirements (src/mission/requirements.js).
+  errors.push(...validateRequirements(doc))
   // T25: database logic the operator allows a plan to remove or redefine (default: none).
   if ('allowed_logic_changes' in doc) stringArray(doc.allowed_logic_changes, 'allowed_logic_changes', errors, { item: (v) => v.length <= 300 && LOGIC_OBJECT_RE.test(v) })
   if ('time_limit_seconds' in doc) {

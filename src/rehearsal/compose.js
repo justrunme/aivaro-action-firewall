@@ -25,6 +25,7 @@ export function assertTarget(t) {
   for (const k of ['dbService', 'dbUser', 'dbName']) {
     if (!/^[A-Za-z0-9_-]{1,63}$/.test(t[k])) throw new Error(`invalid target field ${k}`)
   }
+  if (t.planUser !== undefined && t.planUser !== null && !/^[a-z_][a-z0-9_]{0,62}$/.test(t.planUser)) throw new Error('invalid target field planUser')
 }
 
 /**
@@ -89,7 +90,7 @@ export async function down(t) {
  * Run SQL in the target database. `input` is fed on stdin (used for files and dumps).
  * @returns {Promise<{ code: number, stdout: string, stderr: string }>}
  */
-export async function psql(t, { sql, input, singleTransaction = false }) {
+export async function psql(t, { sql, input, singleTransaction = false, asPlan = false }) {
   assertTarget(t)
   let container
   try {
@@ -98,17 +99,33 @@ export async function psql(t, { sql, input, singleTransaction = false }) {
     // Same contract as before: psql resolves with a non-zero code instead of throwing.
     return { code: 1, stdout: '', stderr: String(err.message), timedOut: false }
   }
-  const args = ['exec', '-i', container, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', t.dbUser, '-d', t.dbName, '-At', '-F', '\t']
+  // T25 v2: plan steps connect as the target's plan role (never through SET ROLE).
+  const user = asPlan ? t.planUser ?? t.dbUser : t.dbUser
+  const args = ['exec', '-i', container, 'psql', '-X', '-q', '-v', 'ON_ERROR_STOP=1', '-U', user, '-d', t.dbName, '-At', '-F', '\t']
   if (singleTransaction) args.push('-1')
   if (sql !== undefined) args.push('-c', sql)
   return run('docker', args, { input, timeoutMs: 120000, env: t.env })
 }
 
-/** Plain-SQL dump of the target database. */
-export async function dump(t) {
+/**
+ * Plain-SQL dump of the target database. With `privileges`, grants and revokes are kept
+ * (T25 v2: the plan role must have in the copy exactly the rights it has for real; the
+ * role itself is created in the copy before the dump is loaded).
+ */
+export async function dump(t, { privileges = false } = {}) {
   assertTarget(t)
-  return runOk('docker', ['exec', '-i', await containerOf(t, t.dbService), 'pg_dump', '-U', t.dbUser, '-d', t.dbName, '--no-owner', '--no-privileges'], { timeoutMs: 120000, env: t.env })
+  return runOk('docker', ['exec', '-i', await containerOf(t, t.dbService), 'pg_dump', '-U', t.dbUser, '-d', t.dbName, '--no-owner', ...(privileges ? [] : ['--no-privileges'])], { timeoutMs: 120000, env: t.env })
 }
+
+/** Everything the database container wrote to stdout and stderr so far (the server log). */
+export async function serverLog(t) {
+  assertTarget(t)
+  const r = await run('docker', ['logs', await containerOf(t, t.dbService)], { timeoutMs: 60000, env: t.env })
+  if (r.code !== 0) throw new Error(`docker logs failed: ${errorSummaryLine(r.stderr)}`)
+  return r.stdout + '\n' + r.stderr
+}
+
+const errorSummaryLine = (s) => String(s).trim().split('\n').slice(-1)[0]?.slice(0, 200) ?? ''
 
 /**
  * Proves, from Docker itself, that the database container of a rehearsal copy has

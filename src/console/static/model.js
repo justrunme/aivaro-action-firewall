@@ -74,8 +74,10 @@ export const sameBase = (a, b) => Boolean(a && b && a.base_hash && a.base_hash =
 /** Tones are the one colour language of the Console: ok green, warn amber, bad red, fix violet, mute grey, info neutral. */
 const TONE = {
   ok: ['SAFE', 'allow', 'completed', 'PASS', 'undo', 'selected', 'RECOVERED', 'approved'],
-  bad: ['DATA LOSS', 'FAILED', 'LOGIC CHANGE', 'deny', 'blocked', 'FAIL', 'failed', 'denied', 'approval_denied'],
+  bad: ['DATA LOSS', 'FAILED', 'LOGIC CHANGE', 'LOGIC BYPASS', 'INVARIANT VIOLATED', 'REQUIREMENT UNMET', 'deny', 'blocked', 'FAIL', 'failed', 'denied', 'approval_denied'],
   warn: ['pending', 'DRIFT'],
+  // T25 v2: a rehearsal whose observers or plan role cannot be trusted is neither SAFE nor a measured denial.
+  mute: ['UNVERIFIABLE'],
 }
 export function toneOf(verdict) {
   for (const [tone, list] of Object.entries(TONE)) if (list.includes(verdict)) return tone

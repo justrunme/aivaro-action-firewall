@@ -45,8 +45,10 @@ export async function measureDatabase(exec) {
   return { schema_hash, columns, tables, logic: await measureLogic(exec) }
 }
 
-// Schemas that belong to Postgres itself.
-const USER_SCHEMA = (col) => `${col} NOT IN ('pg_catalog', 'information_schema') AND ${col} NOT LIKE 'pg\\_toast%' AND ${col} NOT LIKE 'pg\\_temp%'`
+// Schemas that belong to Postgres itself, and the schema of JustRunMe's rehearsal
+// observers (src/rehearsal/observe.js), which exists only in a rehearsal copy.
+export const OBSERVER_SCHEMA = 'jrm_observe'
+const USER_SCHEMA = (col) => `${col} NOT IN ('pg_catalog', 'information_schema', '${OBSERVER_SCHEMA}') AND ${col} NOT LIKE 'pg\\_toast%' AND ${col} NOT LIKE 'pg\\_temp%'`
 
 /**
  * T25: database logic that runs when data changes, by definition. A trigger (with its
@@ -74,7 +76,8 @@ async function measureLogic(exec) {
     "SELECT coalesce(jsonb_agg(jsonb_build_array(quote_ident(n.nspname) || '.' || quote_ident(c.relname) || '.' || quote_ident(t.tgname), " +
       "md5(pg_get_triggerdef(t.oid) || ' enabled=' || t.tgenabled::text)) ORDER BY n.nspname, c.relname, t.tgname), '[]')::text FROM pg_trigger t " +
       'JOIN pg_class c ON c.oid = t.tgrelid JOIN pg_namespace n ON n.oid = c.relnamespace ' +
-      `WHERE NOT t.tgisinternal AND ${USER_SCHEMA('n.nspname')}`
+      `WHERE NOT t.tgisinternal AND ${USER_SCHEMA('n.nspname')} ` +
+      `AND t.tgfoid NOT IN (SELECT p.oid FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE pn.nspname = '${OBSERVER_SCHEMA}')`
   )
   const functions = await one(
     "SELECT coalesce(jsonb_agg(jsonb_build_array(quote_ident(n.nspname) || '.' || quote_ident(p.proname) || '(' || pg_get_function_identity_arguments(p.oid) || ')', " +
@@ -87,7 +90,14 @@ async function measureLogic(exec) {
     "SELECT coalesce(jsonb_agg(jsonb_build_array(quote_ident(schemaname) || '.' || quote_ident(tablename) || '.' || quote_ident(rulename), md5(definition)) " +
       `ORDER BY schemaname, tablename, rulename), '[]')::text FROM pg_rules WHERE ${USER_SCHEMA('schemaname')}`
   )
-  const out = { triggers: {}, functions: {}, rules: {} }
+  // T25 v2: constraints by definition, validation and deferrability (NOT VALID, DEFERRABLE).
+  const constraints = await one(
+    "SELECT coalesce(jsonb_agg(jsonb_build_array(quote_ident(n.nspname) || '.' || quote_ident(c.relname) || '.' || quote_ident(k.conname), " +
+      "md5(pg_get_constraintdef(k.oid) || ' validated=' || k.convalidated::text || ' deferrable=' || k.condeferrable::text || ' deferred=' || k.condeferred::text)) " +
+      "ORDER BY n.nspname, c.relname, k.conname), '[]')::text FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace " +
+      `WHERE ${USER_SCHEMA('n.nspname')}`
+  )
+  const out = { triggers: {}, functions: {}, rules: {}, constraints: {} }
   const put = (map, list) => {
     for (const [name, h] of list) {
       // Two objects with one key (only possible through odd argument text): never let the second hide the first.
@@ -97,6 +107,7 @@ async function measureLogic(exec) {
   put(out.triggers, triggers)
   put(out.functions, functions)
   put(out.rules, rules)
+  put(out.constraints, constraints)
   return out
 }
 
@@ -107,7 +118,7 @@ async function measureLogic(exec) {
  */
 export function logicDelta(before, after) {
   const out = { removed: [], changed: [], added: [] }
-  for (const kind of ['triggers', 'functions', 'rules']) {
+  for (const kind of ['triggers', 'functions', 'rules', 'constraints']) {
     const b = before?.[kind] ?? {}
     const a = after?.[kind] ?? {}
     const label = kind.slice(0, -1)

@@ -278,9 +278,12 @@ Decisions fixed by the operator: official MCP SDK from plain JavaScript (no Type
 | T27 | Console (`node:http` on 127.0.0.1, startup token, no framework): Missions, Impact Diff, Approval Center, Recovery & Replay; Approve runs `justrunme approve --passphrase-stdin` as a child; no authorization code of its own in the Console | test/console.test.js (token, Host, Origin, JSON, passphrase on stdin only, no approver code in src/console); test/demo-approval.test.js case 3 approves through the Console against real Postgres (`passphrase_source: stdin`) |
 | T25.1 | Database logic (triggers with enabled state, functions, rules) by definition hash in the measurement and the fidelity fingerprint; verdict `LOGIC CHANGE` for removed or redefined existing logic unless `allowed_logic_changes` names it | test/logic.test.js; test/demo-hidden.test.js (Linux, Docker) |
 | T25 | Real-agent evaluation "invisible data loss", preregistered (version 1), 5 control + 5 treatment runs, all kept | docs/agent-runs/T25-preregistration.md, T25-results-v1.md, t25-v1/; the human Console approval run (D1) is still open |
+| T25.2 | v2 Step 2: LOGIC BYPASS observers in the rehearsal copy (fire counter, event trigger, statement log, observer state), plan role `plan_user` (A2) in copy and real run, psql backslash commands refused, UNVERIFIABLE | test/observe.test.js; test/demo-bypass.test.js, test/demo-t25v2.test.js (Docker) |
+| T25.3 | v2 Step 3: typed `required_changes` and `invariants`, INVARIANT VIOLATED, REQUIREMENT UNMET, `CONFLICT: requirements unsatisfiable` before any rehearsal | test/requirements.test.js; test/demo-requirements.test.js (Docker) |
+| T25 v2 | Frozen protocol `docs/experiments/T25-v2-protocol.md` (`d774798`), runner `scripts/t25v2-run.js`; 5 control + 5 treatment Task A runs, 3 Task B demonstration runs | 13 runs on `897e107` after a dry check of the runner; docs/agent-runs/T25-results-v2.md, t25-v2/. Task A: control 4 of 5, treatment 3 of 5 TASK_DONE; T3 passed a delete-and-reinsert (gap, planned for v3); T5 did not call the business function (2 of 5 read strictly); Kiro CLI 3.4.0 then 3.5.0 within the series; ACCESS_VIOLATION runner flag 5 of 5 control is a runner bug (audited 0 of 13); the human Console approval (D1) is still open |
 | T26 | `init`, `doctor`, Evidence Timeline | PR E |
 
-- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [x] T24 · [x] T27.1 · [x] T27 · [x] T25.1 · [~] T25 (D1 open) · [ ] T26
+- [x] T21.1 · [x] T21.2 · [x] T21.3 · [x] T21.4 · [x] T22.1 · [x] T22.2 · [x] T23.1 · [x] T23.2 · [x] T23.3 · [x] T24 · [x] T27.1 · [x] T27 · [x] T25.1 · [~] T25 (D1 open) · [x] T25.2 · [x] T25.3 · [x] T25 v2 runs · [ ] T26
 
 ---
 

@@ -251,6 +251,8 @@ describe('Console empty and error states (T28)', () => {
 describe('Console model (T28)', () => {
   it('colour language: one tone per verdict, the same everywhere', () => {
     assert.deepEqual(['SAFE', 'DATA LOSS', 'LOGIC CHANGE', 'pending', 'something-else'].map(toneOf), ['ok', 'bad', 'bad', 'warn', 'warn'])
+    // T25 v2 verdicts: denials are red, an untrusted rehearsal is grey.
+    assert.deepEqual(['LOGIC BYPASS', 'INVARIANT VIOLATED', 'REQUIREMENT UNMET', 'UNVERIFIABLE'].map(toneOf), ['bad', 'bad', 'bad', 'mute'])
     assert.deepEqual(headline(state.story.result).map((b) => [b.step, b.tone]), [['Plan proposed', 'info'], ['JustRunMe rehearsed', 'bad'], ['Blocked, then repaired', 'fix'], ['Proven', 'ok']])
     assert.deepEqual(missionVerdict(state.story.result), { label: 'PROVEN', tone: 'ok' })
     const pending = clone(state.story.result)

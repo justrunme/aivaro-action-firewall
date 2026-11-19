@@ -7,6 +7,7 @@ import { hashValue, sha256Hex } from '../util/canonical.js'
 import { sourceState } from './source.js'
 import { measureDatabase } from '../rehearsal/measure.js'
 import { imageDigests, psql } from '../rehearsal/compose.js'
+import { comparableRole, planRoleOf } from '../rehearsal/observe.js'
 
 /**
  * @param {object} a
@@ -37,7 +38,15 @@ export async function computeFingerprint({ repoDir, target, contract, contractHa
       images: await imageDigests(target),
       // T25: triggers, rules and functions by definition hash. A trigger added or edited
       // after the rehearsal changes the base, so the run is refused (FIDELITY_MISMATCH).
-      postgres: { [target.dbName]: { schema_hash: db.schema_hash, tables: db.tables, logic: db.logic } },
+      postgres: {
+        [target.dbName]: {
+          schema_hash: db.schema_hash,
+          tables: db.tables,
+          logic: db.logic,
+          // T25 v2: what the plan role may do. Rights changed after the rehearsal refuse the run.
+          ...(target.planUser ? { plan_role: comparableRole(await planRoleOf((sql) => psql(target, { sql }), target.planUser)) } : {}),
+        },
+      },
     },
     plan: { source, contract_hash: contractHash, plan_hash: hashValue(contract.plan) },
   }
