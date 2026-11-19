@@ -110,3 +110,31 @@ describe('rehearsal observers (T25 v2 Step 2)', () => {
     assert.equal(createRoleSql({ name: 'jrm_plan', attributes: { login: true, superuser: false, createrole: false, createdb: false, replication: false, bypassrls: false, inherit: false } }), 'CREATE ROLE "jrm_plan" LOGIN NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS NOINHERIT;\n')
   })
 })
+
+describe('T25 v3: delete-audit triggers in the observer state', () => {
+  const AUDIT = { ...STATE, audit: { jrm_watch_del_0: '16500:A', jrm_watch_trunc_0: '16500:A', jrm_watch_upd_0: '16500:A' }, tables: ['16500', '16600'] }
+  const audited = { ...base, installed: { ...INSTALLED, state: AUDIT }, after: AUDIT }
+
+  it('unchanged audit: nothing', () => {
+    assert.deepEqual(judgeObservations(audited).evidence, [])
+  })
+
+  it('an audit trigger switched off while its table exists is observers_switched_off on audit', () => {
+    const r = judgeObservations({ ...audited, after: { ...AUDIT, audit: { ...AUDIT.audit, jrm_watch_del_0: '16500:D' } } })
+    assert.deepEqual(r.evidence, [{ kind: 'observers_switched_off', what: 'audit' }])
+    assert.equal(r.unverifiable.length, 1)
+  })
+
+  it('an audit trigger dropped while its table exists is observers_switched_off on audit', () => {
+    const { jrm_watch_upd_0: _gone, ...rest } = AUDIT.audit
+    assert.deepEqual(judgeObservations({ ...audited, after: { ...AUDIT, audit: rest } }).evidence, [{ kind: 'observers_switched_off', what: 'audit' }])
+  })
+
+  it('the audit of a table whose oid is gone (dropped, or replaced by one of the same name) is not a switch-off', () => {
+    assert.deepEqual(judgeObservations({ ...audited, after: { ...AUDIT, audit: {}, tables: ['16600', '16700'] } }).evidence, [])
+  })
+
+  it('an audit that moved to a table that did not exist before is still a change', () => {
+    assert.deepEqual(judgeObservations({ ...audited, after: { ...AUDIT, audit: { jrm_watch_del_0: '16700:A' }, tables: ['16600', '16700'] } }).evidence, [{ kind: 'observers_switched_off', what: 'audit' }])
+  })
+})

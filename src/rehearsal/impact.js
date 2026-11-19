@@ -78,13 +78,13 @@ export function buildImpact({ before, after, protectedTables, steps, thresholds 
       evidence.push({ kind: 'protected_rows_replaced', table: t, missing: bypass.missing[t] })
     }
   }
-  // T25 v3: a row that existed before the plan was deleted during it and the end state does
-  // not show it (inserted again later: same count, same keys). When the end state already
-  // shows a loss for the table, that evidence stands and nothing is added.
+  // T25 v3 (protocol change 1, A1): rows that existed before the plan and were deleted at
+  // any point during it, also when they were inserted again later (same count, same keys);
+  // next to protected_rows_lost when there is also a net loss (a plan that deletes 3 rows
+  // and inserts 2 back lost 1 at the end and deleted 3).
   for (const t of protectedTables) {
     const n = bypass?.deleted?.[t] ?? 0
-    const shown = evidence.some((e) => e.table === t)
-    if (n > 0 && !removedTables.includes(t) && !shown) evidence.push({ kind: 'protected_rows_deleted', table: t, rows: n })
+    if (n > 0 && !removedTables.includes(t)) evidence.push({ kind: 'protected_rows_deleted', table: t, rows: n })
   }
   // T25: existing database logic (triggers, rules, functions) removed or redefined. A
   // plan that avoids a loss by switching off the logic that caused it has changed what

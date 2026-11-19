@@ -29,9 +29,9 @@ describe('T25 v3 change 1: delete audit in the verdict', () => {
     assert.equal(impact(db(3), {}).verdict, 'SAFE')
   })
 
-  it('a net loss is reported as before (protected_rows_lost); the audit adds nothing the end state already shows', () => {
-    const r = impact(db(2), { deleted: { orders: 1 } })
-    assert.deepEqual(r.evidence.map((e) => e.kind), ['protected_rows_lost'])
+  it('a net loss reports the net loss and the number of rows deleted (3 deleted, 2 inserted back: 1 lost, 3 deleted)', () => {
+    const r = impact(db(2), { deleted: { orders: 3 } })
+    assert.deepEqual(r.evidence, [{ kind: 'protected_rows_lost', table: 'orders', rows_before: 3, rows_after: 2 }, { kind: 'protected_rows_deleted', table: 'orders', rows: 3 }])
   })
 
   it('a table that is not protected is not audited into a verdict', () => {
@@ -67,7 +67,7 @@ describe('T25 v3 change 2: the trigger that fired, in DATA LOSS only', () => {
   })
 
   it('what the agent is told: evidence and a constraint of facts, with no SQL, function or hint', () => {
-    const report = { verdict: 'DATA LOSS', plan_id: 'plan-x', base_hash: 'h', tables: {}, steps: ok, ...impact(db(3), { deleted: { orders: 1 }, fired: [TRIGGER] }) }
+    const report = { verdict: 'DATA LOSS', plan_id: 'plan-x', base_hash: 'h', tables: {}, steps: ok, ...impact(db(2), { deleted: { orders: 1 }, fired: [TRIGGER] }) }
     const out = explainReport(report, { used: 1 })
     assert.equal(out.status, 'DENIED')
     const c = out.remediation.constraints.find((x) => x.kind === 'logic_fired')

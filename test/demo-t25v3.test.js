@@ -160,7 +160,8 @@ describe('T25 v3: delete audit and trigger diagnostic in the rehearsal', { skip:
     const run = async (sql) => assert.equal((await owner(sql)).code, 0, sql)
     await run("CREATE TABLE scratch_nopk (a INT, b TEXT, r TEXT); INSERT INTO scratch_nopk VALUES (1, 'x', 'r1'), (2, 'y', 'r2')")
     await run("CREATE TABLE scratch_pk (id INT PRIMARY KEY, v TEXT); INSERT INTO scratch_pk VALUES (1, 'a'), (2, 'b')")
-    const inst = await installObservers(owner, script, { protectedTables: ['orders', 'scratch_nopk', 'scratch_pk'] })
+    await run("CREATE TABLE scratch_drop (id INT PRIMARY KEY, v TEXT); INSERT INTO scratch_drop VALUES (1, 'a'), (2, 'b')")
+    const inst = await installObservers(owner, script, { protectedTables: ['orders', 'scratch_nopk', 'scratch_pk', 'scratch_drop'] })
     const count = () => deletedRows(owner, inst.audited)
     assert.deepEqual(await count(), {})
     // Rows the plan itself inserts and deletes: not a loss, with or without a primary key.
@@ -180,7 +181,11 @@ describe('T25 v3: delete audit and trigger diagnostic in the rehearsal', { skip:
     // TRUNCATE records the rows about to go: the two rows of the scratch table with a key.
     await run('TRUNCATE scratch_pk')
     assert.deepEqual(await count(), { orders: 1, scratch_nopk: 2, scratch_pk: 2 })
-    await run('DROP TABLE scratch_nopk; DROP TABLE scratch_pk')
+    // Drop the table and create one of the same name with the same rows: DROP fires no row trigger,
+    // so every row the original table had counts as deleted (the oid changed).
+    await run("DROP TABLE scratch_drop; CREATE TABLE scratch_drop (id INT PRIMARY KEY, v TEXT); INSERT INTO scratch_drop VALUES (1, 'a'), (2, 'b')")
+    assert.deepEqual(await count(), { orders: 1, scratch_nopk: 2, scratch_pk: 2, scratch_drop: 2 })
+    await run('DROP TABLE scratch_nopk; DROP TABLE scratch_pk; DROP TABLE scratch_drop')
     async function rowsOf(t) {
       return Number((await owner(`SELECT count(*) FROM ${t}`)).stdout.trim())
     }
