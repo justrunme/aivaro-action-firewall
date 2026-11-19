@@ -11,6 +11,7 @@ import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { spawnSync } from 'node:child_process'
 import { startConsole } from '../src/console/server.js'
 import { checkExport, openRecorded } from '../src/console/recorded.js'
 import { readTestReport } from '../src/console/metrics.js'
@@ -61,6 +62,15 @@ describe('Recorded Demo: a genuine signed run opened read only', () => {
     }
     assert.deepEqual(states[A].story.result.versions.map((v) => v.verdict), ['DATA LOSS', 'LOGIC BYPASS', 'SAFE'])
     assert.equal(states[A].approvals.result.requests.filter((q) => q.state === 'approved').length, 1)
+  })
+
+  it('every file the manifest lists is tracked by git, so a fresh clone can open the recorded run', (t) => {
+    const r = spawnSync('git', ['ls-files', '--', 'demo/recorded-run'], { cwd: fileURLToPath(new URL('..', import.meta.url)), encoding: 'utf8' })
+    if (r.status !== 0) return t.skip('not a git checkout')
+    const tracked = new Set(r.stdout.split('\n').filter(Boolean).map((p) => p.replace(/^demo\/recorded-run\//, '')))
+    const manifest = JSON.parse(readFileSync(path.join(SHIPPED, 'manifest.json'), 'utf8'))
+    const untracked = ['manifest.json', ...Object.keys(manifest.files)].filter((f) => !tracked.has(f))
+    assert.deepEqual(untracked, [], 'a .gitignore rule must not drop part of the signed export')
   })
 
   it('the export holds no secret, no private key and no local path', () => {
