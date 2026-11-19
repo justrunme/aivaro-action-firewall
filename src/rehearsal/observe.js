@@ -17,6 +17,19 @@
  *      when the statement text hides it (dynamic SQL in a DO block).
  *   4. Observer state: watcher triggers, event trigger and settings must be the same
  *      after the plan as before; otherwise the result is UNVERIFIABLE.
+ *   5. Delete audit (T25 v3): ENABLE ALWAYS triggers on every protected table record each
+ *      row the plan deletes, so a row deleted and inserted again inside the plan (same row
+ *      count at the end) is still seen: AFTER DELETE per row; BEFORE TRUNCATE, which
+ *      records the rows about to go; and AFTER UPDATE, which records the old key when it
+ *      changes (a row renamed away, deleted under its new key and inserted again under the
+ *      old one would otherwise leave no trace): of the primary-key columns, or for a table
+ *      without a primary key of the whole row text. Only rows that existed before the plan
+ *      count: their keys (the primary key, or the whole row text for a table without one)
+ *      are recorded before it runs.
+ *      Limit: keys are compared as text; the audit function runs in the plan's session, so a
+ *      plan that changes DateStyle, TimeZone, extra_float_digits or bytea_output could make
+ *      the text of a date, timestamp, float or bytea key differ from the recorded one. The
+ *      v3 scenario's keys are integers.
  *
  * The catalog diff (triggers with enabled state, functions, rules, constraints) is in
  * measure.js. A plan that runs as a superuser can switch observers off; then the
@@ -133,6 +146,7 @@ CREATE SCHEMA ${S};
 REVOKE ALL ON SCHEMA ${S} FROM PUBLIC;
 CREATE TABLE ${S}.expected (trigger_name TEXT NOT NULL);
 CREATE TABLE ${S}.ddl (tag TEXT, role TEXT, query TEXT);
+CREATE TABLE ${S}.deleted (tbl TEXT NOT NULL, k TEXT, op TEXT NOT NULL);
 CREATE FUNCTION ${S}.count_expected() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $f$
 BEGIN
   INSERT INTO ${S}.expected VALUES (TG_ARGV[0]);
@@ -166,10 +180,10 @@ SELECT pg_reload_conf();
     const exists = (await rows(exec, `SELECT to_regclass(${lit('public.' + quoteIdentSql(t))}) IS NOT NULL`))[0]?.[0] === 't'
     if (!exists) continue
     const pk = await pkColumns(exec, t)
-    if (!pk) continue // no primary key: identity not tracked (row counts and checksums still are)
-    const k = await exec(`CREATE TABLE ${keysTable(t)} AS SELECT (${pk})::text AS k FROM public.${quoteIdentSql(t)}`)
-    if (k.code !== 0) throw new Error(`snapshotting the keys of ${t} failed: ${String(k.stderr).trim().split('\n').slice(-1)[0]}`)
-    keyed[t] = pk
+    // No primary key: the delete audit identifies a row by its whole text; keyed (missingKeys) stays primary keys only.
+    const k = await exec(`CREATE TABLE ${keysTable(t)} AS SELECT ${pk ? `(${pk})::text` : 'jrm_row::text'} AS k FROM public.${quoteIdentSql(t)} jrm_row`)
+    if (k.code !== 0) throw new Error(`recording the keys of ${t} failed: ${String(k.stderr).trim().split('\n').slice(-1)[0]}`)
+    if (pk) keyed[t] = pk
   }
 
   // Watchers for user triggers on protected tables.
@@ -196,13 +210,82 @@ SELECT pg_reload_conf();
     const sql = `CREATE TRIGGER ${watch} ${m[1]} EXECUTE FUNCTION ${S}.count_expected(${lit(w.trigger)});\nALTER TABLE ${table} ENABLE ALWAYS TRIGGER ${watch};\n`
     const c = await script(sql)
     if (c.code !== 0) throw new Error(`watching trigger ${w.trigger} failed: ${String(c.stderr).trim().split('\n').slice(-1)[0]}`)
-    watchers.push({ trigger: w.trigger, function: w.function, foid: w.foid, watch })
+    // Timing, event and level as pg_get_triggerdef writes them (BEFORE|AFTER|INSTEAD OF <events> ON <table> FOR EACH ROW|STATEMENT ...).
+    const parts = /^(BEFORE|AFTER|INSTEAD OF) (.+?) ON (\S+?)(?: (?:FROM|REFERENCING|FOR EACH|WHEN|NOT DEFERRABLE|DEFERRABLE|INITIALLY)\b.*)?$/s.exec(m[1])
+    const level = /\bFOR EACH (ROW|STATEMENT)\b/.exec(m[1])?.[1] ?? 'STATEMENT'
+    watchers.push({ trigger: w.trigger, function: w.function, foid: w.foid, watch, name: w.name, table: table.replace(/"/g, ''), timing: parts?.[1] ?? null, event: parts?.[2] ?? null, level })
+  }
+  // T25 v3: the delete audit on every protected table that exists. Created after the dump is
+  // loaded, as the owner; the function runs with the owner's rights, so the plan role needs
+  // no access to the observer schema.
+  const audited = {}
+  let n = 0
+  for (const t of protectedTables) {
+    const exists = (await rows(exec, `SELECT to_regclass(${lit('public.' + quoteIdentSql(t))}) IS NOT NULL`))[0]?.[0] === 't'
+    if (!exists) continue
+    const pk = keyed[t] ?? ''
+    const cols = pk ? pk.split(',') : []
+    const oldKey = pk ? `(${cols.map((c) => `OLD.${c}`).join(',')})::text` : 'OLD::text'
+    const newKey = pk ? `(${cols.map((c) => `NEW.${c}`).join(',')})::text` : null
+    const rowKey = pk ? `(${pk})::text` : 'jrm_row::text'
+    const tbl = `public.${quoteIdentSql(t)}`
+    const sql = `CREATE FUNCTION ${S}.audit_del_${n}() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $f$
+BEGIN
+  IF TG_OP = 'TRUNCATE' THEN
+    INSERT INTO ${S}.deleted SELECT ${lit(t)}, ${rowKey}, 'DELETE' FROM ${tbl} jrm_row;
+    RETURN NULL;
+  END IF;
+${pk ? `  IF TG_OP = 'UPDATE' THEN
+    IF ${oldKey} IS DISTINCT FROM ${newKey} THEN INSERT INTO ${S}.deleted VALUES (${lit(t)}, ${oldKey}, 'DELETE'); END IF;
+    RETURN NEW;
+  END IF;
+` : `  IF TG_OP = 'UPDATE' THEN
+    IF OLD::text IS DISTINCT FROM NEW::text THEN INSERT INTO ${S}.deleted VALUES (${lit(t)}, OLD::text, 'DELETE'); END IF;
+    RETURN NEW;
+  END IF;
+`}  INSERT INTO ${S}.deleted VALUES (${lit(t)}, ${oldKey}, 'DELETE');
+  RETURN OLD;
+END
+$f$;
+CREATE TRIGGER jrm_watch_del_${n} AFTER DELETE ON ${tbl} FOR EACH ROW EXECUTE FUNCTION ${S}.audit_del_${n}();
+CREATE TRIGGER jrm_watch_trunc_${n} BEFORE TRUNCATE ON ${tbl} FOR EACH STATEMENT EXECUTE FUNCTION ${S}.audit_del_${n}();
+ALTER TABLE ${tbl} ENABLE ALWAYS TRIGGER jrm_watch_del_${n};
+ALTER TABLE ${tbl} ENABLE ALWAYS TRIGGER jrm_watch_trunc_${n};
+CREATE TRIGGER jrm_watch_upd_${n} AFTER UPDATE ${pk ? `OF ${pk} ` : ''}ON ${tbl} FOR EACH ROW EXECUTE FUNCTION ${S}.audit_del_${n}();
+ALTER TABLE ${tbl} ENABLE ALWAYS TRIGGER jrm_watch_upd_${n};
+REVOKE ALL ON FUNCTION ${S}.audit_del_${n}() FROM PUBLIC;
+`
+    const c = await script(sql)
+    if (c.code !== 0) throw new Error(`auditing deletes on ${t} failed: ${String(c.stderr).trim().split('\n').slice(-1)[0]}`)
+    audited[t] = { pk, oid: (await rows(exec, `SELECT ${lit('public.' + quoteIdentSql(t))}::regclass::oid`))[0]?.[0] }
+    n++
   }
   // The event trigger saw the observers' own DDL; only the plan's counts.
   const clear = await exec(`DELETE FROM ${S}.ddl`)
   if (clear.code !== 0) throw new Error('clearing the observer log failed')
   const state = await observerState(exec)
-  return { watchers, state, plan_role: planRole, keyed }
+  return { watchers, state, plan_role: planRole, keyed, audited }
+}
+
+/**
+ * Rows of protected tables that the plan deleted, whether or not they were inserted again:
+ * { table: n }. A row counts once, when its key (primary key, or the whole row text for a
+ * table without one) was recorded before the plan: a row the plan inserted and then
+ * deleted does not count. Rows removed by TRUNCATE and rows whose primary key the plan
+ * changed count as deleted.
+ */
+export async function deletedRows(exec, audited) {
+  const out = {}
+  for (const [t, a] of Object.entries(audited ?? {})) {
+    // The table the plan started with is gone (dropped, possibly replaced by another of the
+    // same name): DROP fires no row trigger, so every row it had counts as deleted.
+    const oid = (await rows(exec, `SELECT coalesce(to_regclass(${lit('public.' + quoteIdentSql(t))})::oid::text, '')`))[0]?.[0] ?? ''
+    const n = oid !== a.oid
+      ? Number((await rows(exec, `SELECT count(DISTINCT k) FROM ${keysTable(t)}`))[0]?.[0] ?? 0)
+      : Number((await rows(exec, `SELECT count(DISTINCT d.k) FROM ${S}.deleted d WHERE d.tbl = ${lit(t)} AND d.k IN (SELECT k FROM ${keysTable(t)})`))[0]?.[0] ?? 0)
+    if (n > 0) out[t] = n
+  }
+  return out
 }
 
 /** Protected rows whose primary key was there before the plan and is gone after it: { table: n }. */
@@ -224,7 +307,10 @@ export async function observerState(exec) {
     exec,
     `SELECT jsonb_build_object(
       'event_trigger', (SELECT evtenabled::text FROM pg_event_trigger WHERE evtname = 'jrm_observe_ddl'),
-      'watchers', (SELECT coalesce(jsonb_object_agg(tgname, tgenabled::text), '{}') FROM pg_trigger WHERE tgname LIKE 'jrm\\_watch\\_%'),
+      'watchers', (SELECT coalesce(jsonb_object_agg(tgname, tgenabled::text), '{}') FROM pg_trigger WHERE tgname LIKE 'jrm\\_watch\\_%' AND tgname NOT SIMILAR TO 'jrm\\_watch\\_(del|trunc|upd)\\_[0-9]+'),
+      -- T25 v3: the delete audit, with its table (a plan that drops a protected table drops these too; that is DATA LOSS, not a switch-off).
+      'audit', (SELECT coalesce(jsonb_object_agg(t.tgname, t.tgrelid::text || ':' || t.tgenabled::text), '{}') FROM pg_trigger t WHERE t.tgname SIMILAR TO 'jrm\\_watch\\_(del|trunc|upd)\\_[0-9]+'),
+      'tables', (SELECT coalesce(jsonb_agg(c.oid::text ORDER BY c.oid), '[]') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')),
       'settings', (SELECT jsonb_object_agg(name, setting) FROM pg_settings WHERE name IN ('log_statement', 'track_functions', 'log_min_error_statement')),
       'functions', (SELECT coalesce(jsonb_object_agg(p.proname, md5(pg_get_functiondef(p.oid))), '{}') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = '${S}')
     )::text`
@@ -237,6 +323,22 @@ export async function functionCalls(exec, watchers) {
   const ids = [...new Set(watchers.map((w) => w.foid))]
   const got = await one(exec, `SELECT coalesce(jsonb_object_agg(funcid::text, calls), '{}')::text FROM pg_stat_user_functions WHERE funcid IN (${ids.join(', ')})`)
   return Object.fromEntries(ids.map((id) => [id, Number(got[id] ?? 0)]))
+}
+
+/**
+ * User triggers on protected tables that fired during the plan, for the DATA LOSS report:
+ * name, table, timing, event, level and how many times. Facts from the observers and the
+ * catalog only; no definition, no function name, no condition.
+ * @returns {{ trigger: string, table: string, timing: string | null, event: string | null, level: string, fired: number }[]}
+ */
+export function firedTriggers({ installed, expected, callsBefore, callsAfter }) {
+  const out = []
+  for (const w of installed.watchers) {
+    const times = expected[w.trigger] ?? 0
+    const ran = (callsAfter[w.foid] ?? 0) - (callsBefore[w.foid] ?? 0)
+    if (times > 0 && ran > 0) out.push({ trigger: w.name, table: w.table, timing: w.timing, event: w.event, level: w.level, fired: times })
+  }
+  return out
 }
 
 /** A unique statement written to the server log; the plan's records lie between two. */
@@ -311,8 +413,14 @@ export function judgeObservations({ installed, after, callsBefore, callsAfter, e
   const unverifiable = []
   // 4. Observers must be as they were. Only a plan that switches triggers, event triggers or
   // settings off can change them, so a change is itself a bypass, and the rest is not trusted.
-  if (JSON.stringify(after) !== JSON.stringify(installed.state)) {
-    const changed = ['event_trigger', 'watchers', 'settings', 'functions'].filter((k) => JSON.stringify(after?.[k]) !== JSON.stringify(installed.state?.[k]))
+  // The delete audit of a table the plan dropped is gone with the table; the drop is DATA LOSS
+  // (table_removed, or every row deleted when a table of the same name replaced it), not a
+  // switch-off. Every other change of the audit is. Tables are compared by oid.
+  const gone = new Set((installed.state?.tables ?? []).filter((t) => !(after?.tables ?? []).includes(t)))
+  const auditBefore = Object.fromEntries(Object.entries(installed.state?.audit ?? {}).filter(([, v]) => !gone.has(String(v).split(':')[0])))
+  const changedKeys = ['event_trigger', 'watchers', 'settings', 'functions', 'audit'].filter((k) => JSON.stringify(k === 'audit' ? after?.audit ?? {} : after?.[k]) !== JSON.stringify(k === 'audit' ? auditBefore : installed.state?.[k]))
+  if (changedKeys.length > 0) {
+    const changed = changedKeys
     evidence.push({ kind: 'observers_switched_off', what: changed.join(', ') })
     unverifiable.push(`the rehearsal observers changed while the plan ran (${changed.join(', ')})`)
   }

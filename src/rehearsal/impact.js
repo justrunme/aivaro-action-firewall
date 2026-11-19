@@ -8,7 +8,9 @@
  *                 does not exempt a bypass
  *   UNVERIFIABLE  the observers or the plan role cannot be trusted for this rehearsal
  *   FAILED     a rehearsed step did not complete
- *   DATA LOSS  a table or a column disappeared, or a protected table lost rows
+ *   DATA LOSS  a table or a column disappeared, or a protected table lost rows, or a row that
+ *              existed before the plan was deleted during it (also if inserted again); the
+ *              evidence then names the existing triggers that fired (trigger_fired)
  *   LOGIC CHANGE  after the plan, an existing trigger, rule or function is gone, redefined,
  *                 or (a trigger) left switched off, and the contract's allowed_logic_changes
  *                 does not name it. A trigger switched off and on again inside the plan, or
@@ -76,6 +78,14 @@ export function buildImpact({ before, after, protectedTables, steps, thresholds 
       evidence.push({ kind: 'protected_rows_replaced', table: t, missing: bypass.missing[t] })
     }
   }
+  // T25 v3: a row that existed before the plan was deleted during it and the end state does
+  // not show it (inserted again later: same count, same keys). When the end state already
+  // shows a loss for the table, that evidence stands and nothing is added.
+  for (const t of protectedTables) {
+    const n = bypass?.deleted?.[t] ?? 0
+    const shown = evidence.some((e) => e.table === t)
+    if (n > 0 && !removedTables.includes(t) && !shown) evidence.push({ kind: 'protected_rows_deleted', table: t, rows: n })
+  }
   // T25: existing database logic (triggers, rules, functions) removed or redefined. A
   // plan that avoids a loss by switching off the logic that caused it has changed what
   // the database does; it is denied unless the operator's contract names the object.
@@ -98,7 +108,9 @@ export function buildImpact({ before, after, protectedTables, steps, thresholds 
               : (requirements?.violated.length ?? 0) > 0 ? 'INVARIANT VIOLATED'
                 : (requirements?.unmet.length ?? 0) > 0 ? 'REQUIREMENT UNMET'
                   : 'SAFE'
-  evidence.push(...logicEvidence, ...bypassEvidence, ...unverifiable.map((why) => ({ kind: 'unverifiable', why })), ...(requirements?.violated ?? []), ...(requirements?.unmet ?? []))
+  // T25 v3: which existing trigger acted during a plan that lost data (facts only).
+  const fired = verdict === 'DATA LOSS' ? (bypass?.fired ?? []).map((f) => ({ kind: 'trigger_fired', ...f })) : []
+  evidence.push(...fired, ...logicEvidence, ...bypassEvidence, ...unverifiable.map((why) => ({ kind: 'unverifiable', why })), ...(requirements?.violated ?? []), ...(requirements?.unmet ?? []))
 
   const threshold_breaches = []
   if (Number.isInteger(thresholds.max_rows_deleted) && rowsDeleted > thresholds.max_rows_deleted) {

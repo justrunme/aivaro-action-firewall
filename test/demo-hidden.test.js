@@ -105,7 +105,8 @@ describe('T25 mechanism: the SQL looks safe, the database is not', { skip: !enab
     assert.deepEqual([r.status, r.reason, r.next_action], ['DENIED', 'DATA_LOSS', 'REVISE_AND_REHEARSE'], JSON.stringify(r))
     assert.deepEqual(r.impact.rows_lost, { orders: 1, patches: 0 })
     assert.deepEqual([r.impact.tables.orders.rows_before, r.impact.tables.orders.rows_after], [3, 2])
-    assert.deepEqual(r.remediation.constraints.map((c) => [c.kind, c.table]), [['rows_preserved', 'orders']])
+    // T25 v3 change 2: the denial also names the existing trigger that fired (facts only).
+    assert.deepEqual(r.remediation.constraints.map((c) => [c.kind, c.table ?? c.object]), [['rows_preserved', 'orders'], ['logic_fired', 'patches_release_sold_out']])
     assert.deepEqual(r.impact.schema_delta.removed_columns, [])
     assert.deepEqual(await measureReal(), before, 'the real database is only read to make the copy')
   })
