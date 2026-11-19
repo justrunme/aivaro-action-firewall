@@ -35,6 +35,20 @@ export class UndoRefused extends Error {
  * @param {{ service: string, url: string } | null} [a.health]
  * @param {string[]} [a.resources] subset to restore; anything unsupported is refused
  */
+/**
+ * RECOVERED only when every resource was restored and the verification PASSed.
+ * RESTORED_UNVERIFIED when everything was restored and nothing failed, but a required
+ * check could not be made (UNVERIFIABLE): the operator gets the state back, not a claim.
+ * @param {'PASS' | 'FAIL' | 'UNVERIFIABLE'} verification
+ * @param {{ status: string }[]} results
+ */
+export function recoveryStatus(verification, results) {
+  const restored = results.every((r) => r.status === 'succeeded')
+  if (restored && verification === 'PASS') return 'RECOVERED'
+  if (restored && verification === 'UNVERIFIABLE') return 'RESTORED_UNVERIFIED'
+  return 'NOT_RECOVERED'
+}
+
 export async function undoMission({ repoDir, missionId, captureId, target, keys, health = null, resources, emergency = null }) {
   const publicKey = keys?.publicKey
   const unsupported = (resources ?? []).filter((r) => !SUPPORTED_RESOURCES.includes(r))
@@ -91,7 +105,7 @@ export async function undoMission({ repoDir, missionId, captureId, target, keys,
     const failed = [{ check: 'verification_error', resource: '(verification)', expected: 'completed', actual: errorSummary(err.message), ok: false }]
     verification = { status: 'FAIL', checks: failed, failed, integration_tests: null }
   }
-  const status = verification.status === 'PASS' && results.every((r) => r.status === 'succeeded') ? 'RECOVERED' : 'NOT_RECOVERED'
+  const status = recoveryStatus(verification.status, results)
   const outcome = {
     mission_id: missionId,
     capture_id: captureId,
@@ -149,6 +163,7 @@ export async function undoMission({ repoDir, missionId, captureId, target, keys,
         capture_id: captureId,
         checks: verification.checks.length,
         failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource, expected: c.expected, actual: c.actual })),
+        ...(verification.not_checked?.length ? { not_checked: verification.not_checked.map((c) => ({ check: c.check, resource: c.resource })) } : {}),
         integration_tests: verification.integration_tests,
       },
       refs: { undo: outcome.receipts.undo },

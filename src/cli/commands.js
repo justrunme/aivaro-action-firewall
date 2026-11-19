@@ -314,12 +314,13 @@ export async function undoCmd({ repoDir, opts, captureId }) {
     status: r.status,
     evidence_status: r.evidence_status,
     resources: r.resources,
-    verification: { status: r.verification.status, checks: r.verification.checks.length, failed: r.verification.failed },
+    verification: { status: r.verification.status, checks: r.verification.checks.length, failed: r.verification.failed, not_checked: r.verification.not_checked ?? [] },
     receipts: r.receipts,
     ...(emergency ? { emergency_record: r.emergency_record ?? null } : {}),
     receipt_error: r.receipt_error,
   }
   unrecorded(result)
+  if (r.status === 'RESTORED_UNVERIFIED') return { exit: EXIT.RECOVERY_UNVERIFIED, result }
   if (r.status !== 'RECOVERED') return { exit: EXIT.RECOVERY_FAILED, result }
   // Never exit 0 for a break-glass recovery: CI must not read it as a normal undo.
   return { exit: emergency ? EXIT.EMERGENCY_RECOVERED : EXIT.OK, result }

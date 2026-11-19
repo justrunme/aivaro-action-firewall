@@ -52,6 +52,8 @@ export function runOutcome(story) {
   if (r.undo) {
     if (r.undo.verification === 'PASS') return { label: 'RECOVERED · VERIFIED', tone: 'ok', text: `run ${r.verdict}, then undone; recovery verification PASS` }
     if (r.undo.verification == null) return { label: 'UNDONE · NOT VERIFIED', tone: 'mute', text: `run ${r.verdict}, then undone; no recovery verification is recorded` }
+    // A required check could not be made (a capture older than the check): restored, not verified.
+    if (r.undo.verification === 'UNVERIFIABLE') return { label: 'RESTORED · NOT VERIFIED', tone: 'mute', text: `run ${r.verdict}, then undone; a required recovery check could not be made (UNVERIFIABLE)` }
     return { label: 'RECOVERY FAILED', tone: 'bad', text: `run ${r.verdict}, then undone; recovery verification ${r.undo.verification}` }
   }
   if (runVerified(f)) return { label: 'COMPLETED · VERIFIED', tone: 'ok', text: f.links ? 'approved, executed, and the real result equals the rehearsal' : 'executed, and the real result equals the rehearsal' }
@@ -185,7 +187,7 @@ export function flight(story) {
           : missing('no approval requested'),
     EXECUTED: f.run ? { state: f.run.verdict === 'completed' && (f.links ? linkOk('EXECUTED_AS_AUTHORIZED') : true) ? 'ok' : 'bad', note: `run ${f.run.verdict}`, receipt: rec(f.run), run: f.run } : missing('not run'),
     VERIFIED: f.run
-      ? { state: (f.links ? linkOk('RESULT_AS_REHEARSED') : f.run.matches_rehearsal === true) && (!f.run.undo || f.run.undo.verification === 'PASS') ? 'ok' : 'bad', note: `${f.run.matches_rehearsal ? 'result equals the rehearsal' : `${f.run.differences ?? '?'} difference(s) from the rehearsal`}${f.run.undo ? `; undone, recovery check ${f.run.undo.verification ?? '—'}` : ''}`, receipt: rec(f.run), run: f.run }
+      ? { state: !((f.links ? linkOk('RESULT_AS_REHEARSED') : f.run.matches_rehearsal === true)) ? 'bad' : !f.run.undo || f.run.undo.verification === 'PASS' ? 'ok' : f.run.undo.verification === 'FAIL' ? 'bad' : 'mute', note: `${f.run.matches_rehearsal ? 'result equals the rehearsal' : `${f.run.differences ?? '?'} difference(s) from the rehearsal`}${f.run.undo ? `; undone, recovery check ${f.run.undo.verification ?? '—'}` : ''}`, receipt: rec(f.run), run: f.run }
       : missing('nothing to verify yet'),
   }
   return FLIGHT.map((name) => ({ name, ...node[name] }))
