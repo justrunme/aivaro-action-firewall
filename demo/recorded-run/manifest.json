@@ -1,0 +1,50 @@
+{
+  "schema": 1,
+  "label": "RECORDED RUN · READ ONLY",
+  "exported_at": "2026-11-19T22:17:53.880Z",
+  "missions": [
+    "mission-t25v2-a",
+    "mission-demo-b"
+  ],
+  "provenance": {
+    "title": "Hidden trigger, blocked bypass, verified run, undo",
+    "scenario": "Hollow Creek Farm: marking a patch sold out fires a database trigger that deletes open orders.",
+    "missions": {
+      "mission-t25v2-a": {
+        "story": "Plan 0 loses one protected order (trigger patches_release_sold_out), plan 1 tries to drop the trigger, plan 2 is SAFE, a human approves it, it runs and the result equals the rehearsal.",
+        "agent": "The three plans are the SQL of T25 v3 run T3, replayed through the MCP tools by a script. They were not written by a live agent during this recording.",
+        "approval": "The approval of apr-bcf96b7530615545 was given by a human in the Console. Two earlier requests of this mission expired unanswered.",
+        "title": "Hidden Trigger: Prevented Data Loss"
+      },
+      "mission-demo-b": {
+        "story": "A SAFE plan is authorized, runs, is undone, and the recovery verification passes.",
+        "agent": "The plan is a fixed demo migration, not an agent run.",
+        "approval": "The authorization was given by a script that piped the approver passphrase to the CLI; no human decision is recorded for it.",
+        "limit": "The recovery verification of this run compared row counts, checksums, schema and files. It did not compare database grants: the capture was made before privileges were recorded (fixed since, PR 21).",
+        "title": "Backfill Quantities: Run, Undo, Recovery Check"
+      }
+    },
+    "not_included": "Docker, PostgreSQL, captures (pg dumps) and private keys are not part of this export."
+  },
+  "files": {
+    ".justrunme/missions/mission-demo-b/history/reports/36f73c43cf94979f4b465287654a97348f2ae54c6e79ba48e62fd7229e7e799b.json": "a3b3db5b91a6b18e2ad551de2b23c35a7298a23be90cc2984abb639dcc969e66",
+    ".justrunme/missions/mission-demo-b/history/sql/79369fe58b1b7db48c595843aef16a39e345fc4012de2c1ecbb81dcf55b79e2f.sql": "79369fe58b1b7db48c595843aef16a39e345fc4012de2c1ecbb81dcf55b79e2f",
+    ".justrunme/missions/mission-demo-b/receipts.jsonl": "2460061949c2b8f6d452c1b04693ba6f65e91b0b063cd805e9ab387be453799b",
+    ".justrunme/missions/mission-demo-b/rehearsals/plan-3eaf342a2f3b.json": "a3b3db5b91a6b18e2ad551de2b23c35a7298a23be90cc2984abb639dcc969e66",
+    ".justrunme/missions/mission-t25v2-a/approvals/apr-408e8d9a326afc67.json": "f2c67ff51a9f7b05facbcd500c47e018d35fe05ea596a997b6d3e1b40a4589c5",
+    ".justrunme/missions/mission-t25v2-a/approvals/apr-b713c0b95cfb6870.json": "13c03d4b8b96e7354d9dff7e9571b53e855cec1a5dba25b4b3e2d1dadc65d021",
+    ".justrunme/missions/mission-t25v2-a/approvals/apr-bcf96b7530615545.json": "e61a282388e9507491f7e2e1a418556721e1676968d0841d1dd7f09f199c298a",
+    ".justrunme/missions/mission-t25v2-a/history/reports/d18f3860e65e0377e025e4f2ef8d6572fa4a714f3a49c796ea96b60ca23e8686.json": "ddbf43f1e67f113552a00b6ef0e006481766ec831ac699c3cba527e075df1b07",
+    ".justrunme/missions/mission-t25v2-a/history/reports/f61958d9a01d0785bfec63fc7b238a4e71d8f68235814824bb53a33770703fbc.json": "3f58e00d0fd29c7cd99d89b52ab5de2bcc24d161fb3d92853b7a35154c76fb7e",
+    ".justrunme/missions/mission-t25v2-a/history/reports/f774567f98488b7066fae40a599ebe57c874139dd0b3af974e6d10347faaf98b.json": "7adc3f868ebd5cc307ac1b698e7322d06c34acafe1d0a3d2a11af093761f2fbb",
+    ".justrunme/missions/mission-t25v2-a/history/sql/064d9e545956d5602780588d496d217c0e3df8e6387e0a15b0b8afb5c463a134.sql": "064d9e545956d5602780588d496d217c0e3df8e6387e0a15b0b8afb5c463a134",
+    ".justrunme/missions/mission-t25v2-a/history/sql/2ac42333228c8bad9329d14faf02f1afdac7997ab26c6e3b5441decd3f740d22.sql": "2ac42333228c8bad9329d14faf02f1afdac7997ab26c6e3b5441decd3f740d22",
+    ".justrunme/missions/mission-t25v2-a/history/sql/3386dcc166310b3fd40f3da945fc16458d023b838806819e45adb58606155bba.sql": "3386dcc166310b3fd40f3da945fc16458d023b838806819e45adb58606155bba",
+    ".justrunme/missions/mission-t25v2-a/receipts.jsonl": "54c292beaa1ff0255d010422ddbb93406b9444574d797f094672bcd24759ab71",
+    ".justrunme/missions/mission-t25v2-a/rehearsals/plan-9c03e8dffc86.json": "7adc3f868ebd5cc307ac1b698e7322d06c34acafe1d0a3d2a11af093761f2fbb",
+    "anchors/mission-demo-b.json": "6f92beb8d659bf34888483116b124cd6b1057e04c295691ba40f5e03f2c9b036",
+    "anchors/mission-t25v2-a.json": "64d8e58ed6fdd73412cae27de8f0368b48ccda4b4c18e8f0c98998d390edc981",
+    "demo/migrations/004_mark_hollow_creek_sold_out.sql": "2ac42333228c8bad9329d14faf02f1afdac7997ab26c6e3b5441decd3f740d22",
+    "operator.pub": "6f95290afe5ef06ecef6b725fd3f59e8452ecd32a35f8034a5fc12eeae82ba89"
+  }
+}

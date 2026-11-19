@@ -1,0 +1,35 @@
+{
+  "version": 1,
+  "request_id": "apr-b713c0b95cfb6870",
+  "mission_id": "mission-t25v2-a",
+  "plan_id": "plan-9c03e8dffc86",
+  "contract_hash": "sha256:75372400d545363973274967542ea7bfb0d2cf1977759b280ddca6b0bc32fd65",
+  "report_hash": "sha256:f774567f98488b7066fae40a599ebe57c874139dd0b3af974e6d10347faaf98b",
+  "base_hash": "sha256:c27386959b1d66f5388807c3fda7335d63330b6fc5430f3cc8b0e8a1dbb76659",
+  "files": [
+    {
+      "path": "demo/migrations/004_mark_hollow_creek_sold_out.sql",
+      "sha256": "sha256:2ac42333228c8bad9329d14faf02f1afdac7997ab26c6e3b5441decd3f740d22"
+    }
+  ],
+  "impact": {
+    "verdict": "SAFE",
+    "rows_deleted": 0,
+    "schema_delta": {
+      "changed": false,
+      "added_tables": [],
+      "removed_tables": [],
+      "added_columns": [],
+      "removed_columns": [],
+      "removed_logic": [],
+      "changed_logic": [],
+      "added_logic": []
+    },
+    "duration_ms": 10377
+  },
+  "agent_note": "Cancels the open orders of patch 1 through cancel_patch_orders, then marks the patch sold out. Plan text replayed from T25 v3 run T3.",
+  "requested_at": "2026-11-19T16:03:35.271Z",
+  "expires_at": "2026-11-19T16:33:35.271Z",
+  "operator_pubkey": "19b17821063ed062bc942df6e5b3c321880aa0fcb8c3f0442e112ea3f936c6d8",
+  "signature": "d4262a77ce5ae9804d7ef2bcb826773eaeab82c27764042ed7b9bb1f024cf1cf02c40704b9016c46397ce4ab6ed981ae489c36440568e62f838262734b397009"
+}

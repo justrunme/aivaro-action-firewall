@@ -16,7 +16,12 @@
 import http from 'node:http'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { createApi, InputError } from './api.js'
+import { fileURLToPath } from 'node:url'
+import { createApi, InputError, listMissions } from './api.js'
+import { main } from '../cli/index.js'
+import { openRecorded, serialized, RECORDED_LABEL } from './recorded.js'
+import { readTestReport } from './metrics.js'
+import { setupStatus } from './setup.js'
 
 const STATIC = {
   '/': ['index.html', 'text/html; charset=utf-8'],
@@ -25,6 +30,8 @@ const STATIC = {
   '/ui.js': ['ui.js', 'text/javascript; charset=utf-8'],
   '/model.js': ['model.js', 'text/javascript; charset=utf-8'],
   '/screens.js': ['screens.js', 'text/javascript; charset=utf-8'],
+  '/home.js': ['home.js', 'text/javascript; charset=utf-8'],
+  '/onboarding.js': ['onboarding.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
 }
 const STATIC_DIR = new URL('./static/', import.meta.url)
@@ -75,19 +82,51 @@ function tokenMatches(header, token) {
  * @param {{ repoDir: string, mission?: string, port?: number, token?: string, cliPath?: string, env?: NodeJS.ProcessEnv }} cfg
  * @returns {Promise<{ url: string, port: number, token: string, close: () => Promise<void> }>}
  */
-export async function startConsole({ repoDir, mission, port = 0, token = randomBytes(32).toString('hex'), cliPath, env }) {
+export async function startConsole({ repoDir, mission, port = 0, token = randomBytes(32).toString('hex'), cliPath, env, recordedDir, testReportFile }) {
   if (!/^[0-9a-f]{64}$/.test(token)) throw new Error('the console token must be 64 hex characters')
-  const api = createApi({ repoDir, mission, cliPath, env })
+  // Live reads and recorded reads share one process, and the key directory comes from the
+  // environment, so every in-process read goes through the same lock.
+  const api = createApi({ repoDir, mission, cliPath, env, runMain: (argv) => serialized(() => main(argv)) })
+  const recorded = openRecorded(recordedDir)
+  /** The API a call asks for: the live workspace, or the read-only recorded run. */
+  const apiFor = (source) => {
+    if (source === undefined || source === null || source === '' || source === 'live') return api
+    if (source !== 'recorded') throw new InputError('SOURCE_INVALID', 'source must be live or recorded')
+    if (!recorded.available) throw new InputError('RECORDED_UNAVAILABLE', 'no recorded run is installed')
+    if (!recorded.integrity.ok) throw new InputError('RECORDED_ALTERED', `the recorded run does not match its manifest: ${recorded.integrity.problems.slice(0, 3).join('; ')}`)
+    return recorded.api
+  }
   let actual = port
   let busy = false
   const hosts = () => new Set([`127.0.0.1:${actual}`, `localhost:${actual}`])
   const origins = () => new Set([`http://127.0.0.1:${actual}`, `http://localhost:${actual}`])
 
+  const DEFAULT_REPORT = fileURLToPath(new URL('../../docs/test-report.json', import.meta.url))
+  /** What each source offers, so the Home screen can choose between the live workspace and the recorded run. */
+  function sources() {
+    const live = listMissions(repoDir)
+    return {
+      ok: true,
+      live: { available: live.length > 0 || Boolean(mission), missions: live.length },
+      recorded: {
+        available: recorded.available,
+        label: RECORDED_LABEL,
+        integrity: recorded.integrity,
+        missions: recorded.manifest?.missions ?? [],
+        provenance: recorded.integrity.ok ? recorded.manifest?.provenance ?? null : null,
+        exported_at: recorded.manifest?.exported_at ?? null,
+      },
+    }
+  }
+
   // GET routes take the mission from `?mission=<id>`; POST routes from the body. The API checks it.
   const routes = {
-    'GET /api/missions': () => api.missions(),
-    'GET /api/state': (q) => api.state(q.get('mission')),
-    'GET /api/replay': (q) => api.replay(q.get('mission')),
+    'GET /api/sources': () => sources(),
+    'GET /api/metrics': () => readTestReport(testReportFile ?? DEFAULT_REPORT),
+    'GET /api/setup': () => setupStatus({ repoDir, runMain: (argv) => serialized(() => main(argv)) }),
+    'GET /api/missions': (q) => apiFor(q.get('source')).missions(),
+    'GET /api/state': (q) => apiFor(q.get('source')).state(q.get('mission')),
+    'GET /api/replay': (q) => apiFor(q.get('source')).replay(q.get('mission')),
     'POST /api/approve': (body) => api.approve(body),
     'POST /api/deny': (body) => api.deny(body),
     'POST /api/undo': (body) => api.undo(body),
@@ -114,7 +153,10 @@ export async function startConsole({ repoDir, mission, port = 0, token = randomB
 
     const one = /^\/api\/(approvals|receipt)\/([^/]+)$/.exec(url.pathname)
     const q = url.searchParams
-    if (req.method === 'GET' && one) return send(res, 200, one[1] === 'approvals' ? await api.approval(one[2], q.get('mission')) : await api.receipt(one[2], q.get('mission')))
+    if (req.method === 'GET' && one) {
+      const a = apiFor(q.get('source'))
+      return send(res, 200, one[1] === 'approvals' ? await a.approval(one[2], q.get('mission')) : await a.receipt(one[2], q.get('mission')))
+    }
     const route = routes[`${req.method} ${url.pathname}`]
     if (!route) return fail(res, 404, 'NOT_FOUND', 'not found')
     if (req.method === 'GET') return send(res, 200, await route(q))
@@ -127,6 +169,7 @@ export async function startConsole({ repoDir, mission, port = 0, token = randomB
       throw new InputError('BAD_JSON', 'the body is not valid JSON')
     }
     if (!body || typeof body !== 'object' || Array.isArray(body)) throw new InputError('BAD_JSON', 'the body must be a JSON object')
+    if (body.source !== undefined && body.source !== 'live') return fail(res, 403, 'RECORDED_READ_ONLY', 'a recorded run is read only: it cannot be approved, rejected or undone')
     if (busy) return fail(res, 409, 'BUSY', 'another approve, deny or undo is running')
     busy = true
     try {
@@ -155,6 +198,7 @@ export async function startConsole({ repoDir, mission, port = 0, token = randomB
     port: actual,
     token,
     close: () => new Promise((resolve) => {
+      recorded.close()
       server.closeAllConnections?.()
       server.close(() => resolve())
     }),

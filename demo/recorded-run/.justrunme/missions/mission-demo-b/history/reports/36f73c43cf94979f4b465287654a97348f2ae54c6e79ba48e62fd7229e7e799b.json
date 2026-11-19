@@ -1,0 +1,356 @@
+{
+  "version": 1,
+  "mission_id": "mission-demo-b",
+  "plan_id": "plan-3eaf342a2f3b",
+  "contract_hash": "sha256:f8ec700603fa26124991f384c931b26d5710f14b892b3b1f4e3272e9cecfeadc",
+  "base_hash": "sha256:c27386959b1d66f5388807c3fda7335d63330b6fc5430f3cc8b0e8a1dbb76659",
+  "fingerprint": {
+    "base": {
+      "target": {
+        "project": "jrm-console-13488c",
+        "db_service": "db",
+        "db_name": "pumpkin_patch",
+        "db_user": "demo_user",
+        "health": null,
+        "compose_file_hash": "sha256:ae5a9889218ec045c4f67354daa29b6115fc3a90e84a7e40a1592206d6e4227c"
+      },
+      "git_head": "bae4362d2466bde3742b6430174a3c2bdc197a3c",
+      "tree_hash": "1a2b633643be77186239234e1bfe10a4845ea3c2",
+      "images": {
+        "db": "sha256:36ed71227ae36305d26382657c0b96cbaf298427b3f1eaeb10d77a6dea3eec41"
+      },
+      "postgres": {
+        "pumpkin_patch": {
+          "schema_hash": "sha256:1a46d1822a7b2a70db880eb0b175cdc05c7dbe0ef766893b5a3a80aa0493def5",
+          "tables": {
+            "orders": {
+              "rows": 3,
+              "checksum": "f4b858db93ebd6b6c849ba520bfb153c"
+            },
+            "patches": {
+              "rows": 5,
+              "checksum": "35d6603c0f1cc1293eb8d3da7dbf10c8"
+            }
+          },
+          "logic": {
+            "triggers": {
+              "public.patches.patches_release_sold_out": "md5:6c55c2c763a97614d3078e907565129c"
+            },
+            "functions": {
+              "public.cancel_patch_orders(p_patch integer)": "md5:9ea39814536ff5ad1fc370b1e2a32221",
+              "public.release_sold_out_patch()": "md5:dc78cfb13c25b4408383c20f97c0d01b"
+            },
+            "rules": {},
+            "constraints": {
+              "public.orders.orders_patch_id_fkey": "md5:d8f18c259ef16b2b0fdf71244f70a021",
+              "public.orders.orders_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf",
+              "public.orders.orders_quantity_check": "md5:c3ad34b2d6a9b8b8f4cdc4d1208a0604",
+              "public.orders.orders_status_check": "md5:19ad04a88621166c8492daf2f05a2e6c",
+              "public.patches.patches_available_count_check": "md5:f78b1575638c4f5290828bdb025e4967",
+              "public.patches.patches_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf"
+            }
+          },
+          "plan_role": {
+            "attributes": {
+              "login": true,
+              "inherit": false,
+              "createdb": false,
+              "bypassrls": false,
+              "superuser": false,
+              "createrole": false,
+              "replication": false
+            },
+            "member_of": [],
+            "owns": 0,
+            "schemas": {
+              "public": {
+                "usage": true,
+                "create": false
+              }
+            },
+            "tables": {
+              "public.orders": [
+                "DELETE",
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches": [
+                "DELETE",
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ]
+            },
+            "functions": [
+              "public.cancel_patch_orders(p_patch integer)",
+              "public.release_sold_out_patch()"
+            ],
+            "role_settings": [],
+            "database": {
+              "temp": true,
+              "create": false,
+              "connect": true
+            },
+            "columns": {
+              "public.orders.id": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.id": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.name": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.status": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.patch_id": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.quantity": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.location": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.created_at": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.available_count": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ]
+            },
+            "sequences": {
+              "public.orders_id_seq": [
+                "USAGE"
+              ],
+              "public.patches_id_seq": [
+                "USAGE"
+              ]
+            },
+            "row_security": {
+              "public.orders": {
+                "forced": false,
+                "enabled": false,
+                "policies": "d41d8cd98f00b204e9800998ecf8427e"
+              },
+              "public.patches": {
+                "forced": false,
+                "enabled": false,
+                "policies": "d41d8cd98f00b204e9800998ecf8427e"
+              }
+            },
+            "default_acl": 0
+          }
+        }
+      }
+    },
+    "plan": {
+      "source": {
+        "git_head": "bae4362d2466bde3742b6430174a3c2bdc197a3c",
+        "tree_hash": "1a2b633643be77186239234e1bfe10a4845ea3c2",
+        "uncommitted_hash": "sha256:f1fafb9d85bfb6e48e191f0e6d80fa6d1b8e9fcd5dcdf24eeaf2ace42ac03a5e"
+      },
+      "contract_hash": "sha256:f8ec700603fa26124991f384c931b26d5710f14b892b3b1f4e3272e9cecfeadc",
+      "plan_hash": "sha256:3eaf342a2f3b3181d64600d016712d3428277b7a95e83f920b49bb23101d4544"
+    }
+  },
+  "rehearsed_at": "2026-11-19T16:02:48.049Z",
+  "duration_ms": 10625,
+  "compose_project": "jrm-reh-missiondemob-ffe61437",
+  "steps": [
+    {
+      "id": "backfill",
+      "tool": "sql_migration",
+      "status": "ok",
+      "detail": ""
+    },
+    {
+      "id": "notify",
+      "tool": "shell",
+      "status": "ok",
+      "detail": ""
+    }
+  ],
+  "irreversible_actions": [],
+  "all_reversible": true,
+  "conditions": {
+    "protected_tables": [
+      "orders",
+      "patches"
+    ],
+    "impact_thresholds": {},
+    "plan_role": "jrm_plan",
+    "db_name": "pumpkin_patch",
+    "tests_measured": false
+  },
+  "plan_files": [
+    {
+      "path": "demo/migrations/005_backfill_quantities.sql",
+      "sha256": "sha256:79369fe58b1b7db48c595843aef16a39e345fc4012de2c1ecbb81dcf55b79e2f"
+    }
+  ],
+  "database": {
+    "name": "pumpkin_patch",
+    "before": {
+      "schema_hash": "sha256:1a46d1822a7b2a70db880eb0b175cdc05c7dbe0ef766893b5a3a80aa0493def5",
+      "columns": {
+        "orders": [
+          "id integer not null",
+          "patch_id integer not null",
+          "quantity integer not null",
+          "created_at timestamp with time zone not null",
+          "status text not null"
+        ],
+        "patches": [
+          "id integer not null",
+          "name text not null",
+          "location text not null",
+          "available_count integer not null"
+        ]
+      },
+      "tables": {
+        "orders": {
+          "rows": 3,
+          "checksum": "f4b858db93ebd6b6c849ba520bfb153c"
+        },
+        "patches": {
+          "rows": 5,
+          "checksum": "35d6603c0f1cc1293eb8d3da7dbf10c8"
+        }
+      },
+      "logic": {
+        "triggers": {
+          "public.patches.patches_release_sold_out": "md5:6c55c2c763a97614d3078e907565129c"
+        },
+        "functions": {
+          "public.cancel_patch_orders(p_patch integer)": "md5:9ea39814536ff5ad1fc370b1e2a32221",
+          "public.release_sold_out_patch()": "md5:dc78cfb13c25b4408383c20f97c0d01b"
+        },
+        "rules": {},
+        "constraints": {
+          "public.orders.orders_patch_id_fkey": "md5:d8f18c259ef16b2b0fdf71244f70a021",
+          "public.orders.orders_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf",
+          "public.orders.orders_quantity_check": "md5:c3ad34b2d6a9b8b8f4cdc4d1208a0604",
+          "public.orders.orders_status_check": "md5:19ad04a88621166c8492daf2f05a2e6c",
+          "public.patches.patches_available_count_check": "md5:f78b1575638c4f5290828bdb025e4967",
+          "public.patches.patches_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf"
+        }
+      }
+    },
+    "after": {
+      "schema_hash": "sha256:1a46d1822a7b2a70db880eb0b175cdc05c7dbe0ef766893b5a3a80aa0493def5",
+      "columns": {
+        "orders": [
+          "id integer not null",
+          "patch_id integer not null",
+          "quantity integer not null",
+          "created_at timestamp with time zone not null",
+          "status text not null"
+        ],
+        "patches": [
+          "id integer not null",
+          "name text not null",
+          "location text not null",
+          "available_count integer not null"
+        ]
+      },
+      "tables": {
+        "orders": {
+          "rows": 3,
+          "checksum": "eca2b935a5d441bf2acacc22da1586af"
+        },
+        "patches": {
+          "rows": 5,
+          "checksum": "35d6603c0f1cc1293eb8d3da7dbf10c8"
+        }
+      },
+      "logic": {
+        "triggers": {
+          "public.patches.patches_release_sold_out": "md5:6c55c2c763a97614d3078e907565129c"
+        },
+        "functions": {
+          "public.cancel_patch_orders(p_patch integer)": "md5:9ea39814536ff5ad1fc370b1e2a32221",
+          "public.release_sold_out_patch()": "md5:dc78cfb13c25b4408383c20f97c0d01b"
+        },
+        "rules": {},
+        "constraints": {
+          "public.orders.orders_patch_id_fkey": "md5:d8f18c259ef16b2b0fdf71244f70a021",
+          "public.orders.orders_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf",
+          "public.orders.orders_quantity_check": "md5:c3ad34b2d6a9b8b8f4cdc4d1208a0604",
+          "public.orders.orders_status_check": "md5:19ad04a88621166c8492daf2f05a2e6c",
+          "public.patches.patches_available_count_check": "md5:f78b1575638c4f5290828bdb025e4967",
+          "public.patches.patches_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf"
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "containers": 0,
+    "volumes": 0,
+    "networks": 0,
+    "worktree_removed": true,
+    "clean": true
+  },
+  "observation": {
+    "plan_role": "jrm_plan",
+    "watched_triggers": [
+      "public.patches.patches_release_sold_out"
+    ],
+    "unverifiable": [],
+    "missing_keys": {},
+    "deleted_rows": {}
+  },
+  "verdict": "SAFE",
+  "evidence": [],
+  "rows_deleted": 0,
+  "tables": {
+    "orders": {
+      "rows_before": 3,
+      "rows_after": 3,
+      "rows_lost": 0,
+      "content_changed": true,
+      "protected": true
+    },
+    "patches": {
+      "rows_before": 5,
+      "rows_after": 5,
+      "rows_lost": 0,
+      "content_changed": false,
+      "protected": true
+    }
+  },
+  "schema_delta": {
+    "changed": false,
+    "added_tables": [],
+    "removed_tables": [],
+    "added_columns": [],
+    "removed_columns": [],
+    "removed_logic": [],
+    "changed_logic": [],
+    "added_logic": []
+  },
+  "failed_steps": [],
+  "threshold_breaches": [],
+  "operator_pubkey": "19b17821063ed062bc942df6e5b3c321880aa0fcb8c3f0442e112ea3f936c6d8",
+  "signature": "7a7ac818ea1d70dc9606c35f9ca5961da75732c7f8cecef12f2f60d90777e8c3016cda94e33943040a8d81bde2a67dfad5df0c59457762ecd110ad894f45f10d"
+}

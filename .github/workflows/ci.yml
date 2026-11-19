@@ -37,7 +37,15 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Run all tests
-        run: npm test
+        # Same suite as `npm test`; it also writes the measured counts, the commit and the run URL.
+        run: npm run test:report -- --out "$RUNNER_TEMP/test-report.json"
+      - name: Keep the test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-report
+          path: ${{ runner.temp }}/test-report.json
+          if-no-files-found: warn
 
       - name: Check whitespace of the change under test
         shell: bash

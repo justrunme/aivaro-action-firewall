@@ -52,5 +52,7 @@ yarn.lock
 
 # JustRunMe runtime state (audit log, authorization, rehearsal reports)
 .justrunme/
+# The recorded demo is a signed export that ships with the repository (demo/recorded-run/manifest.json lists every file).
+!demo/recorded-run/.justrunme/
 
 # .kiro is intentionally NOT ignored

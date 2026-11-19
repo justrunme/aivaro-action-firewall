@@ -1,0 +1,377 @@
+{
+  "version": 1,
+  "mission_id": "mission-t25v2-a",
+  "plan_id": "plan-9c03e8dffc86",
+  "contract_hash": "sha256:75372400d545363973274967542ea7bfb0d2cf1977759b280ddca6b0bc32fd65",
+  "base_hash": "sha256:c27386959b1d66f5388807c3fda7335d63330b6fc5430f3cc8b0e8a1dbb76659",
+  "fingerprint": {
+    "base": {
+      "target": {
+        "project": "jrm-console-13488c",
+        "db_service": "db",
+        "db_name": "pumpkin_patch",
+        "db_user": "demo_user",
+        "health": null,
+        "compose_file_hash": "sha256:ae5a9889218ec045c4f67354daa29b6115fc3a90e84a7e40a1592206d6e4227c"
+      },
+      "git_head": "bae4362d2466bde3742b6430174a3c2bdc197a3c",
+      "tree_hash": "1a2b633643be77186239234e1bfe10a4845ea3c2",
+      "images": {
+        "db": "sha256:36ed71227ae36305d26382657c0b96cbaf298427b3f1eaeb10d77a6dea3eec41"
+      },
+      "postgres": {
+        "pumpkin_patch": {
+          "schema_hash": "sha256:1a46d1822a7b2a70db880eb0b175cdc05c7dbe0ef766893b5a3a80aa0493def5",
+          "tables": {
+            "orders": {
+              "rows": 3,
+              "checksum": "f4b858db93ebd6b6c849ba520bfb153c"
+            },
+            "patches": {
+              "rows": 5,
+              "checksum": "35d6603c0f1cc1293eb8d3da7dbf10c8"
+            }
+          },
+          "logic": {
+            "triggers": {
+              "public.patches.patches_release_sold_out": "md5:6c55c2c763a97614d3078e907565129c"
+            },
+            "functions": {
+              "public.cancel_patch_orders(p_patch integer)": "md5:9ea39814536ff5ad1fc370b1e2a32221",
+              "public.release_sold_out_patch()": "md5:dc78cfb13c25b4408383c20f97c0d01b"
+            },
+            "rules": {},
+            "constraints": {
+              "public.orders.orders_patch_id_fkey": "md5:d8f18c259ef16b2b0fdf71244f70a021",
+              "public.orders.orders_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf",
+              "public.orders.orders_quantity_check": "md5:c3ad34b2d6a9b8b8f4cdc4d1208a0604",
+              "public.orders.orders_status_check": "md5:19ad04a88621166c8492daf2f05a2e6c",
+              "public.patches.patches_available_count_check": "md5:f78b1575638c4f5290828bdb025e4967",
+              "public.patches.patches_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf"
+            }
+          },
+          "plan_role": {
+            "attributes": {
+              "login": true,
+              "inherit": false,
+              "createdb": false,
+              "bypassrls": false,
+              "superuser": false,
+              "createrole": false,
+              "replication": false
+            },
+            "member_of": [],
+            "owns": 0,
+            "schemas": {
+              "public": {
+                "usage": true,
+                "create": false
+              }
+            },
+            "tables": {
+              "public.orders": [
+                "DELETE",
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches": [
+                "DELETE",
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ]
+            },
+            "functions": [
+              "public.cancel_patch_orders(p_patch integer)",
+              "public.release_sold_out_patch()"
+            ],
+            "role_settings": [],
+            "database": {
+              "temp": true,
+              "create": false,
+              "connect": true
+            },
+            "columns": {
+              "public.orders.id": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.id": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.name": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.status": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.patch_id": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.quantity": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.location": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.orders.created_at": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ],
+              "public.patches.available_count": [
+                "INSERT",
+                "SELECT",
+                "UPDATE"
+              ]
+            },
+            "sequences": {
+              "public.orders_id_seq": [
+                "USAGE"
+              ],
+              "public.patches_id_seq": [
+                "USAGE"
+              ]
+            },
+            "row_security": {
+              "public.orders": {
+                "forced": false,
+                "enabled": false,
+                "policies": "d41d8cd98f00b204e9800998ecf8427e"
+              },
+              "public.patches": {
+                "forced": false,
+                "enabled": false,
+                "policies": "d41d8cd98f00b204e9800998ecf8427e"
+              }
+            },
+            "default_acl": 0
+          }
+        }
+      }
+    },
+    "plan": {
+      "source": {
+        "git_head": "bae4362d2466bde3742b6430174a3c2bdc197a3c",
+        "tree_hash": "1a2b633643be77186239234e1bfe10a4845ea3c2",
+        "uncommitted_hash": "sha256:6b92d18bb2ac62cd1b3e53113642b036bb6821aeef881153a5d8d862f47f1a73"
+      },
+      "contract_hash": "sha256:75372400d545363973274967542ea7bfb0d2cf1977759b280ddca6b0bc32fd65",
+      "plan_hash": "sha256:9c03e8dffc86c762ef575ca928755d93be5fbcf5d5c1b8184b33de3233621a85"
+    }
+  },
+  "rehearsed_at": "2026-11-19T16:03:14.420Z",
+  "duration_ms": 10408,
+  "compose_project": "jrm-reh-missiont25v2a-d0c89d3d",
+  "steps": [
+    {
+      "id": "m1",
+      "tool": "sql_migration",
+      "status": "failed",
+      "detail": "WARNING:  there is already a transaction in progress | ERROR:  must be owner of relation patches"
+    }
+  ],
+  "irreversible_actions": [],
+  "all_reversible": true,
+  "conditions": {
+    "protected_tables": [
+      "orders",
+      "patches"
+    ],
+    "impact_thresholds": {},
+    "requirements_hash": "sha256:6832c6455c1bbf682065c20026160b355d7266a12f1561afeb22010b40c73b3a",
+    "plan_role": "jrm_plan",
+    "db_name": "pumpkin_patch",
+    "tests_measured": false
+  },
+  "plan_files": [
+    {
+      "path": "demo/migrations/004_mark_hollow_creek_sold_out.sql",
+      "sha256": "sha256:3386dcc166310b3fd40f3da945fc16458d023b838806819e45adb58606155bba"
+    }
+  ],
+  "database": {
+    "name": "pumpkin_patch",
+    "before": {
+      "schema_hash": "sha256:1a46d1822a7b2a70db880eb0b175cdc05c7dbe0ef766893b5a3a80aa0493def5",
+      "columns": {
+        "orders": [
+          "id integer not null",
+          "patch_id integer not null",
+          "quantity integer not null",
+          "created_at timestamp with time zone not null",
+          "status text not null"
+        ],
+        "patches": [
+          "id integer not null",
+          "name text not null",
+          "location text not null",
+          "available_count integer not null"
+        ]
+      },
+      "tables": {
+        "orders": {
+          "rows": 3,
+          "checksum": "f4b858db93ebd6b6c849ba520bfb153c"
+        },
+        "patches": {
+          "rows": 5,
+          "checksum": "35d6603c0f1cc1293eb8d3da7dbf10c8"
+        }
+      },
+      "logic": {
+        "triggers": {
+          "public.patches.patches_release_sold_out": "md5:6c55c2c763a97614d3078e907565129c"
+        },
+        "functions": {
+          "public.cancel_patch_orders(p_patch integer)": "md5:9ea39814536ff5ad1fc370b1e2a32221",
+          "public.release_sold_out_patch()": "md5:dc78cfb13c25b4408383c20f97c0d01b"
+        },
+        "rules": {},
+        "constraints": {
+          "public.orders.orders_patch_id_fkey": "md5:d8f18c259ef16b2b0fdf71244f70a021",
+          "public.orders.orders_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf",
+          "public.orders.orders_quantity_check": "md5:c3ad34b2d6a9b8b8f4cdc4d1208a0604",
+          "public.orders.orders_status_check": "md5:19ad04a88621166c8492daf2f05a2e6c",
+          "public.patches.patches_available_count_check": "md5:f78b1575638c4f5290828bdb025e4967",
+          "public.patches.patches_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf"
+        }
+      }
+    },
+    "after": {
+      "schema_hash": "sha256:1a46d1822a7b2a70db880eb0b175cdc05c7dbe0ef766893b5a3a80aa0493def5",
+      "columns": {
+        "orders": [
+          "id integer not null",
+          "patch_id integer not null",
+          "quantity integer not null",
+          "created_at timestamp with time zone not null",
+          "status text not null"
+        ],
+        "patches": [
+          "id integer not null",
+          "name text not null",
+          "location text not null",
+          "available_count integer not null"
+        ]
+      },
+      "tables": {
+        "orders": {
+          "rows": 3,
+          "checksum": "f4b858db93ebd6b6c849ba520bfb153c"
+        },
+        "patches": {
+          "rows": 5,
+          "checksum": "35d6603c0f1cc1293eb8d3da7dbf10c8"
+        }
+      },
+      "logic": {
+        "triggers": {
+          "public.patches.patches_release_sold_out": "md5:6c55c2c763a97614d3078e907565129c"
+        },
+        "functions": {
+          "public.cancel_patch_orders(p_patch integer)": "md5:9ea39814536ff5ad1fc370b1e2a32221",
+          "public.release_sold_out_patch()": "md5:dc78cfb13c25b4408383c20f97c0d01b"
+        },
+        "rules": {},
+        "constraints": {
+          "public.orders.orders_patch_id_fkey": "md5:d8f18c259ef16b2b0fdf71244f70a021",
+          "public.orders.orders_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf",
+          "public.orders.orders_quantity_check": "md5:c3ad34b2d6a9b8b8f4cdc4d1208a0604",
+          "public.orders.orders_status_check": "md5:19ad04a88621166c8492daf2f05a2e6c",
+          "public.patches.patches_available_count_check": "md5:f78b1575638c4f5290828bdb025e4967",
+          "public.patches.patches_pkey": "md5:221d60ccca1f6c42eefddda7fc9d30bf"
+        }
+      }
+    }
+  },
+  "cleanup": {
+    "containers": 0,
+    "volumes": 0,
+    "networks": 0,
+    "worktree_removed": true,
+    "clean": true
+  },
+  "observation": {
+    "plan_role": "jrm_plan",
+    "watched_triggers": [
+      "public.patches.patches_release_sold_out"
+    ],
+    "unverifiable": [],
+    "missing_keys": {},
+    "deleted_rows": {}
+  },
+  "verdict": "LOGIC BYPASS",
+  "evidence": [
+    {
+      "kind": "bypass_statement",
+      "what": "drops a trigger",
+      "statement": "DROP TRIGGER IF EXISTS patches_release_sold_out ON patches;"
+    },
+    {
+      "kind": "bypass_attempt_refused",
+      "error": "must be owner of relation patches",
+      "statement": "DROP TRIGGER IF EXISTS patches_release_sold_out ON patches;"
+    },
+    {
+      "kind": "requirement_unmet",
+      "index": 0,
+      "table": "patches",
+      "where": {
+        "id": 1
+      },
+      "set": {
+        "available_count": 0
+      },
+      "rows": 1,
+      "done": 0
+    }
+  ],
+  "rows_deleted": 0,
+  "tables": {
+    "orders": {
+      "rows_before": 3,
+      "rows_after": 3,
+      "rows_lost": 0,
+      "content_changed": false,
+      "protected": true
+    },
+    "patches": {
+      "rows_before": 5,
+      "rows_after": 5,
+      "rows_lost": 0,
+      "content_changed": false,
+      "protected": true
+    }
+  },
+  "schema_delta": {
+    "changed": false,
+    "added_tables": [],
+    "removed_tables": [],
+    "added_columns": [],
+    "removed_columns": [],
+    "removed_logic": [],
+    "changed_logic": [],
+    "added_logic": []
+  },
+  "failed_steps": [
+    "m1"
+  ],
+  "threshold_breaches": [],
+  "operator_pubkey": "19b17821063ed062bc942df6e5b3c321880aa0fcb8c3f0442e112ea3f936c6d8",
+  "signature": "f07a8629bc22c2abaa2781bba482de2bceb947dc1cea3c2a2ffa69a63a84c93c9ed53c838ce17d0b8dd802b314f3be52c698181bb90f795dbecf26efa3aaee0e"
+}

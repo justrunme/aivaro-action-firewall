@@ -196,14 +196,14 @@ const isEntry = (() => {
 })()
 
 /**
- * `justrunme console [--port n] [--repo dir] [--mission id]`: starts the local Console and
+ * `justrunme console [--port n] [--repo dir] [--mission id] [--recorded dir]`: starts the local Console and
  * keeps running until interrupted. It prints one JSON line with the URL; the token is in
  * the fragment (#token=...), which the browser never sends to a server.
  */
 async function runConsole(argv) {
   let parsed
   try {
-    parsed = parseArgs({ args: argv, options: { repo: { type: 'string' }, mission: { type: 'string' }, port: { type: 'string' } }, allowPositionals: false, strict: true })
+    parsed = parseArgs({ args: argv, options: { repo: { type: 'string' }, mission: { type: 'string' }, port: { type: 'string' }, recorded: { type: 'string' } }, allowPositionals: false, strict: true })
   } catch (err) {
     process.stdout.write(JSON.stringify({ command: 'console', ok: false, exit_code: EXIT.USAGE, error: { code: 'USAGE', message: err.message } }) + '\n')
     process.exitCode = EXIT.USAGE
@@ -217,7 +217,10 @@ async function runConsole(argv) {
     return
   }
   const { startConsole } = await import('../console/server.js')
-  const c = await startConsole({ repoDir: path.resolve(o.repo ?? process.cwd()), mission: o.mission, port })
+  // The recorded run (a signed export, opened read only) is offered next to the live workspace.
+  // `--recorded <dir>` names another export; the one shipped in the repository is the default.
+  const shipped = fileURLToPath(new URL('../../demo/recorded-run', import.meta.url))
+  const c = await startConsole({ repoDir: path.resolve(o.repo ?? process.cwd()), mission: o.mission, port, recordedDir: o.recorded === undefined ? shipped : path.resolve(o.recorded) })
   process.stdout.write(JSON.stringify({ command: 'console', ok: true, exit_code: EXIT.OK, result: { url: c.url, port: c.port, stop: 'Ctrl+C' } }) + '\n')
   const stop = async () => {
     await c.close()

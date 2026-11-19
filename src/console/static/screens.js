@@ -8,7 +8,7 @@
 // chain does not show is drawn greyed with the reason, never filled in.
 
 import { badge, fmtTime, h, hashChip, icon, short, sqlCompare, sqlOf, sqlView, stateBox } from './ui.js'
-import { approvalSource, counterfactual, eligibility, flight, headline, heroOf, latestSafe, lossText, losses, missionVerdict, passphraseWords, receiptRows, sameBase, severest, tableLines, toneOf, urgency } from './model.js'
+import { approvalSource, counterfactual, eligibility, flight, heroOf, latestSafe, lossText, losses, missionSummary, missionVerdict, recoverySummary, passphraseWords, receiptRows, sameBase, severest, tableLines, toneOf, urgency } from './model.js'
 
 const TONE_LABEL = { ok: 'verified', bad: 'denied', warn: 'needs approval', fix: 'repaired', mute: 'unverifiable', info: 'recorded', missing: 'not in the chain' }
 const NODE_ICON = { ok: 'bolt', bad: 'cross', warn: 'lock', fix: 'check', mute: 'dash', info: 'check', missing: 'dash' }
@@ -77,7 +77,7 @@ export function missionsScreen(state, ctx) {
   return h('div', { class: 'reveal' },
     h('div', { class: 'row' }, h('h1', { text: 'Missions' }), h('span', { class: 'count', text: `${all.length} in this workspace` }), h('span', { class: 'spacer' }), h('span', { class: 'muted', text: 'most urgent first · open a mission to see its Flight Recorder' })),
     triage(sorted),
-    h('div', { class: 'cards' }, sorted.map((m, i) => missionCard(m, i))),
+    h('div', { class: 'cards' }, sorted.map((m, i) => missionCard(m, i, ctx))),
     h('hr', { class: 'stitch' }),
     h('h2', { text: 'What the colours mean' }),
     h('div', { class: 'legend' }, [['SAFE · VERIFIED · RECOVERED', 'ok', 'measured and checked against signed receipts'], ['NEEDS APPROVAL · CONFLICT', 'warn', 'waiting for the operator, or requirements that cannot all hold'], ['DATA LOSS · LOGIC BYPASS', 'bad', 'blocked, with the measured evidence'], ['REPAIRED', 'fix', 'revised plan rehearsed SAFE'], ['UNVERIFIABLE', 'mute', 'the chain cannot show it']].map(([t, tone, d]) => h('div', {}, badge(t, tone), h('span', { class: 'muted', text: d })))))
@@ -96,7 +96,7 @@ function triage(list) {
 }
 
 /** One mission card. A mission whose chain cannot be read says so; nothing is filled in. */
-function missionCard(m, i) {
+function missionCard(m, i, ctx = {}) {
   const st = m.state
   const problem = cliProblem(st?.story)
   if (problem) {
@@ -110,15 +110,22 @@ function missionCard(m, i) {
   const last = s.timeline.at(-1)
   const nodes = nodesOf(s, st)
   const pending = (s.requests ?? []).some((q) => q.state === 'pending')
+  // A human title only from a genuine source: the manifest of the recorded run. Live missions keep their id.
+  const title = ctx.titles?.[s.mission_id] ?? null
   return h('a', { class: `card tone-${v.tone}${pending ? ' pending' : ''}`, href: `#/missions/${s.mission_id}`, 'aria-label': `Open the Flight Recorder of ${s.mission_id}`, 'data-i': i },
-    h('div', { class: 'row' }, h('h2', { class: 'mono', text: s.mission_id }), h('span', { class: 'spacer' }), badge(v.label, v.tone, v.tone === 'ok' ? 'bolt' : v.tone === 'warn' ? 'lock' : null)),
+    h('div', { class: 'row' },
+      h('div', { class: 'card-title' }, title ? h('h2', { text: title }) : null, h(title ? 'div' : 'h2', { class: `mono${title ? ' muted' : ''}`, text: s.mission_id })),
+      h('span', { class: 'spacer' }), badge(v.label, v.tone, v.tone === 'ok' ? 'bolt' : v.tone === 'warn' ? 'lock' : null)),
     h('ol', { class: 'mini', 'aria-label': 'Flight steps' }, nodes.map((n) => h('li', { class: n.state, title: `${n.name}: ${n.note}` }, h('span', { class: 'sr', text: `${n.name}: ${TONE_LABEL[n.state]}` })))),
-    story(headline(s, verifiedOk(st))),
-    h('div', { class: 'row meta' }, h('span', { text: last ? `last step: #${last.seq} ${last.kind}${last.verdict ? ` · ${last.verdict}` : ''}` : 'no receipts' }), h('span', { class: 'spacer' }), h('span', { class: 'mono', text: last ? fmtTime(last.at) : '' })))
+    summaryLine(missionSummary(s, verifiedOk(st))),
+    h('div', { class: 'row meta' }, h('span', { text: last ? `last step: #${last.seq} ${last.kind}${last.verdict ? ` · ${last.verdict}` : ''} · ${fmtTime(last.at)}` : 'no receipts' }), h('span', { class: 'spacer' }), h('span', { class: 'open-fr', text: 'Open Flight Recorder →' })))
 }
 
-function story(beats) {
-  return h('ol', { class: 'story' }, beats.map((b, i) => h('li', { class: b.tone }, h('span', { class: 'step', text: `${i + 1}. ${b.step}` }), h('span', { text: b.text }))))
+/** Revisions as chips (#0 DATA LOSS, #1 LOGIC BYPASS, #2 SAFE), then the outcome in words. */
+function summaryLine(sum) {
+  return h('div', { class: 'sumline' },
+    h('span', { class: 'revs' }, sum.revisions.flatMap((r, i) => [i ? h('span', { class: 'arrow', 'aria-hidden': 'true', text: '→' }) : null, h('span', { class: `pill ${r.tone}`, text: `#${r.seq} ${r.verdict}` })])),
+    h('span', { class: 'outcome', text: sum.outcome }))
 }
 
 function flightRecorder(state, ctx) {
@@ -129,7 +136,8 @@ function flightRecorder(state, ctx) {
   const v = missionVerdict(s, verifiedOk(state))
   return h('div', {},
     h('div', { class: 'row' }, h('a', { href: '#/missions', class: 'back', text: '← Missions' }), h('h1', { text: 'Flight Recorder' }), mission(s), h('span', { class: 'spacer' }), badge(v.label, v.tone, v.tone === 'ok' ? 'bolt' : null)),
-    story(headline(s, verifiedOk(state))),
+    ctx.titles?.[s.mission_id] ? h('p', { class: 'fr-title', text: ctx.titles[s.mission_id] }) : null,
+    summaryLine(missionSummary(s, verifiedOk(state))),
     h('ol', { class: 'flight', 'aria-label': 'Flight Recorder: the steps of this mission' }, nodes.map((n, i) => h('li', { class: `node ${n.state}${n === chosen ? ' on' : ''}` },
       h('a', { href: `#/missions/${s.mission_id}/${n.name.toLowerCase()}`, 'aria-current': n === chosen ? 'step' : null, 'aria-label': `${i + 1}. ${n.name}: ${TONE_LABEL[n.state]}. ${n.note}` },
         h('span', { class: 'disc' }, icon(NODE_ICON[n.state]), n.name === 'VERIFIED' && n.state === 'ok' ? h('span', { class: 'spark', title: 'verified: the real result equals the rehearsal' }, icon('spark')) : null), h('span', { class: 'name', text: n.name }), h('span', { class: 'nnote', text: n.state === 'missing' ? 'not in the chain' : n.note }))))),
@@ -225,18 +233,18 @@ export function impactScreen(state, ctx) {
   const a = versions.find((v) => v.seq === pickA) ?? versions[0]
   const b = versions.find((v) => v.seq === pickB) ?? versions.at(-1)
   const chooser = (label, current, key) => h('label', {}, label, h('select', { onChange: (e) => { ctx.ui[key] = Number(e.target.value); ctx.rerender() } },
-    versions.map((v) => h('option', { value: v.seq, selected: v.seq === current.seq, text: `#${v.seq} ${v.plan_id} ${v.verdict}` }))))
+    versions.map((v) => h('option', { value: v.seq, selected: v.seq === current.seq, text: `Revision #${v.seq} · ${v.verdict} (${v.plan_id})` }))))
   return h('div', { class: 'reveal' },
     h('div', { class: 'row' }, h('h1', { text: 'Impact Diff' }), mission(s)),
     impactHeadline(a, b),
     hero(a, ctx),
     counterfactualPanel(s),
     h('hr', { class: 'stitch' }),
-    h('div', { class: 'row' }, h('h2', { text: 'Plan against plan' }), h('span', { class: 'spacer' }), chooser('Left', a, 'impactA'), chooser('Right', b, 'impactB')),
+    h('div', { class: 'row' }, h('h2', { text: 'Revision against revision' }), h('span', { class: 'spacer' }), chooser('Left', a, 'impactA'), chooser('Right', b, 'impactB')),
     sameBase(a, b) ? null : h('div', { class: 'banner', text: 'Measured on different database states (the base hash differs): compare each card with its own "before", not row for row with the other.' }),
     h('div', { class: 'grid2' }, planCard('Plan A', a), planCard('Plan B', b)),
     h('h2', { text: 'SQL difference' }),
-    sqlCompare(sqlOf(a), sqlOf(b), { left: `Plan A #${a.seq} ${a.verdict}`, right: `Plan B #${b.seq} ${b.verdict}`, ui: ctx.ui, key: 'impactSql' }))
+    sqlCompare(sqlOf(a), sqlOf(b), { left: `Revision #${a.seq} ${a.verdict}`, right: `Revision #${b.seq} ${b.verdict}`, ui: ctx.ui, key: 'impactSql' }))
 }
 
 /** "1 protected row lost" against "0 lost", in one line, from the two signed reports. */
@@ -244,14 +252,14 @@ function impactHeadline(a, b) {
   const la = losses(a).rows_lost
   const lb = losses(b).rows_lost
   return h('section', { class: 'panel versus' },
-    h('div', { class: `vs-side ${la > 0 ? 'bad' : 'ok'}` }, h('div', { class: 'biglabel', text: `#${a.seq} · ${a.verdict}` }), h('div', { class: `big ${la > 0 ? 'bad' : 'ok'}`, text: `${la}` }), h('div', { class: 'biglabel', text: `protected row${la === 1 ? '' : 's'} lost` })),
+    h('div', { class: `vs-side ${la > 0 ? 'bad' : 'ok'}` }, h('div', { class: 'biglabel', text: `Revision #${a.seq} · ${a.verdict}` }), h('div', { class: `big ${la > 0 ? 'bad' : 'ok'}`, text: `${la}` }), h('div', { class: 'biglabel', text: `protected row${la === 1 ? '' : 's'} lost` })),
     h('div', { class: 'vs', text: 'vs' }),
-    h('div', { class: `vs-side ${lb > 0 ? 'bad' : 'ok'}` }, h('div', { class: 'biglabel', text: `#${b.seq} · ${b.verdict}` }), h('div', { class: `big ${lb > 0 ? 'bad' : 'ok'}`, text: `${lb}` }), h('div', { class: 'biglabel', text: `protected row${lb === 1 ? '' : 's'} lost` })))
+    h('div', { class: `vs-side ${lb > 0 ? 'bad' : 'ok'}` }, h('div', { class: 'biglabel', text: `Revision #${b.seq} · ${b.verdict}` }), h('div', { class: `big ${lb > 0 ? 'bad' : 'ok'}`, text: `${lb}` }), h('div', { class: 'biglabel', text: `protected row${lb === 1 ? '' : 's'} lost` })))
 }
 
 function counterfactualPanel(s) {
   const c = counterfactual(s)
-  const head = h('div', {}, h('h2', { text: 'Counterfactual Replay' }), h('p', { class: 'muted', text: 'The same denied plan in two worlds. The measurements in both columns come from signed rehearsals on a disposable copy of this mission; the denied plan never ran on the real database. The experiment line below is not part of this mission. Review verdicts are not recorded in the chain, so none is shown.' }))
+  const head = h('div', {}, h('h2', { text: 'Counterfactual Replay' }), h('p', { class: 'muted', text: 'Both columns are signed rehearsals on a disposable copy. The denied revision never ran on the real database.' }))
   if (!c) return h('section', { class: 'panel counter' }, head, stateBox('empty', 'Nothing to replay', 'No plan in this mission was denied, so there is no loss to compare. The replay appears when a rehearsal is not SAFE.'))
   const a = c.without.version
   const w = c.with
@@ -259,7 +267,7 @@ function counterfactualPanel(s) {
     h('div', { class: 'grid2 stitched' },
       h('div', { class: 'col without' },
         h('div', { class: 'row' }, h('h3', { text: 'WITHOUT JUSTRUNME' }), badge('PREDICTED BY REHEARSAL', 'mute')),
-        h('p', { class: 'muted', text: `${a.plan_id} as written. The rehearsal measured this on a copy; it never ran on the real database:` }),
+        h('p', { class: 'muted', text: `Revision #${a.seq} as written, measured on a copy:` }),
         h('div', { class: `big ${losses(a).rows_lost > 0 ? 'bad' : 'ok'}`, text: losses(a).rows_lost }), h('div', { class: 'biglabel', text: 'protected rows lost' }),
         rowsTable(c.without.tables), h('p', { text: c.without.text }),
         h('div', { class: 'experiment' }, h('div', { class: 'biglabel', text: 'Recorded experiment T25 v1 (other runs, not this mission)' }),
@@ -268,7 +276,7 @@ function counterfactualPanel(s) {
         h('div', { class: 'row' }, h('h3', { text: 'WITH JUSTRUNME' }), badge(a.verdict === 'SAFE' ? 'SAFE' : `DENIED · ${a.verdict}`, a.verdict === 'SAFE' ? 'ok' : 'bad', a.verdict === 'SAFE' ? 'bolt' : 'cross')),
         h('div', { class: 'kv' }, h('span', { text: 'evidence' }), hashChip(a.receipt, 18)),
         w.version
-          ? h('div', {}, h('p', { class: 'muted', text: `Revised plan ${w.version.plan_id}: ${w.version.verdict}.` }),
+          ? h('div', {}, h('p', { class: 'muted', text: `Revision #${w.version.seq}: ${w.version.verdict}.` }),
             h('div', { class: `big ${losses(w.version).rows_lost > 0 ? 'bad' : 'ok'}`, text: losses(w.version).rows_lost }), h('div', { class: 'biglabel', text: 'protected rows lost' }),
             rowsTable(w.tables), h('p', { text: w.ran ? (w.matched ? 'Approved and executed; the real result equals the rehearsal.' : 'Executed, but the real result differs from the rehearsal.') : 'Rehearsed SAFE; not executed yet.' }))
           : h('p', { class: 'muted', text: 'No SAFE revision has been rehearsed yet.' }))))
@@ -280,7 +288,7 @@ function planCard(title, v) {
   const tables = Object.entries(v.impact.tables)
   const max = Math.max(1, ...tables.map(([, t]) => Math.max(t.rows_before ?? 0, t.rows_after ?? 0)))
   return h('section', { class: `panel plan-card ${tone}`, 'aria-label': `${title}: ${v.verdict}` },
-    h('div', { class: 'row' }, h('h3', { text: `${title} · #${v.seq}` }), h('span', { class: 'spacer' }), badge(v.verdict, tone)),
+    h('div', { class: 'row' }, h('h3', { text: `${title} · Revision #${v.seq}` }), h('span', { class: 'spacer' }), badge(v.verdict, tone)),
     h('div', { class: 'mono muted', text: `${v.plan_id} · report ${short(v.report_hash)} · base ${short(v.base_hash)}` }),
     h('div', { class: 'row' },
       h('div', {}, h('div', { class: `big ${l.rows_lost > 0 ? 'bad' : 'ok'}`, text: l.rows_lost }), h('div', { class: 'biglabel', text: 'protected rows lost' })),
@@ -345,11 +353,12 @@ function requestDetail(out, ctx, state) {
     h('section', { class: `hero ${tone}` },
       h('div', { class: 'hero-top' }, h('span', { class: `hero-label ${tone}` }, icon(tone === 'ok' ? 'shield' : 'alert'), r.state === 'pending' && verdict === 'SAFE' ? 'SAFE · READY FOR YOUR DECISION' : `${verdict} · ${r.state.toUpperCase()}`), h('span', { class: 'muted mono', text: `${r.request_id} · ${r.plan_id}` })),
       h('div', { class: 'hero-head', text: rep?.valid ? `${rep.rows_deleted} row${rep.rows_deleted === 1 ? '' : 's'} deleted in rehearsal${(rep.schema_delta?.removed_columns ?? []).length + (rep.schema_delta?.removed_tables ?? []).length === 0 ? ', no table or column removed' : ''}` : rep?.problem ?? 'The rehearsal report cannot be shown' }),
+      r.state === 'approved' ? h('p', { class: 'decided' }, icon('lock'), ` Exact version authorized: revision #${requested?.seq ?? '?'} of ${r.plan_id}, bound to its SQL file hashes and the rehearsed source state.`) : null,
       rehearsalSummary(rep)),
-    h('div', { class: 'note' }, h('div', { class: 'muted', text: `Agent note: ${r.agent_note_is}` }), h('div', { text: r.agent_note || '(none)' })),
     against ? h('div', {}, h('h2', { text: 'What changed since the plan that lost data' }), sqlCompare(sqlOf(against), sqlOf(requested), { left: `denied #${against.seq} ${against.verdict}`, right: `requested #${requested.seq} ${requested.verdict}`, ui: ctx.ui, key: 'approveSql' })) : null,
-    h('h2', { text: 'The SQL that will run' }), sql)
-  const right = h('div', { class: 'decision-col' }, r.state === 'pending' ? decide(r, ctx, state, q) : h('section', { class: 'panel decide' }, h('h3', { text: 'How this request was answered' }), howRecorded(r, q)))
+    h('h2', { text: r.state === 'pending' ? 'The SQL that will run' : 'The SQL of this request' }), sql,
+    h('div', { class: 'note' }, h('div', { class: 'muted', text: `Agent note: ${r.agent_note_is}` }), h('div', { text: r.agent_note || '(none)' })))
+  const right = h('div', { class: 'decision-col' }, r.state === 'pending' && !ctx.readOnly ? decide(r, ctx, state, q) : h('section', { class: 'panel decide' }, h('h3', { text: 'How this request was answered' }), howRecorded(r, q)))
   return h('div', { class: 'approve-layout reveal' }, left, right)
 }
 
@@ -578,10 +587,15 @@ export function recoveryScreen(state, ctx) {
     }
   })
   const vr = v?.result
+  const sum = recoverySummary(s, verifiedOk(state))
   return h('div', {},
     h('div', { class: 'row' }, h('h1', { text: 'Recovery & Replay' }), mission(s)),
-    h('h2', { text: 'Receipts' }),
-    h('section', { class: 'panel' }, receiptChain(s, ctx)),
+    h('section', { class: `hero ${sum.tone} rsummary`, 'aria-label': sum.label },
+      h('div', { class: 'hero-top' }, h('span', { class: `hero-label ${sum.tone}` }, icon(sum.tone === 'ok' ? 'shield' : sum.tone === 'bad' ? 'alert' : 'dash'), sum.label)),
+      h('div', { class: 'links' }, sum.lines.map((l) => h('div', { class: 'link' }, h('span', { class: l.ok === true ? 'y' : l.ok === false ? 'n' : 'u' }, icon(l.ok === true ? 'check' : l.ok === false ? 'cross' : 'dash')), h('span', { text: l.text })))),
+      sum.limit ? h('div', { class: 'callout warn limit' }, icon('alert'), h('span', { text: sum.limit })) : null),
+    h('h2', { text: 'Runs and undo' }),
+    h('section', { class: 'panel' }, runsTable(s.runs, ctx)),
     h('div', { class: 'grid2' },
       h('section', { class: 'panel' }, h('h3', { text: 'Verification' }),
         vr ? h('div', { class: 'links' },
@@ -592,10 +606,10 @@ export function recoveryScreen(state, ctx) {
           : stateBox('error', 'Verification did not run', cliProblem(v) ?? 'no verification'),
         h('div', { class: 'row result' }, replayBtn), replayOut),
       h('section', { class: 'panel' }, h('h3', { text: 'Links from approval to result' }),
-        s.links.length === 0 ? h('p', { class: 'muted', text: 'No approved request yet.' }) : s.links.map((set) => h('div', {}, h('div', { class: 'mono muted', text: `${set.request_id} · ${set.plan_id}` }),
+        s.links.length === 0 ? h('p', { class: 'muted', text: (s.runs ?? []).some((r) => r.authorization && !r.request_id) ? 'Authorized at the command line: there is no approval request to link to the run.' : 'No approved request yet.' }) : s.links.map((set) => h('div', {}, h('div', { class: 'mono muted', text: `${set.request_id} · ${set.plan_id}` }),
           h('div', { class: 'links' }, set.links.map((l) => checkLine(l.code, l.ok, l.why ?? ''))))))),
-    h('h2', { text: 'Runs and undo' }),
-    h('section', { class: 'panel' }, runsTable(s.runs, ctx)))
+    h('details', { class: 'panel chain-box' }, h('summary', {}, h('span', { text: `Receipt chain · ${s.timeline.length} signed receipts` }), ' ', s.chain_ok ? badge('verified', 'ok', 'bolt') : badge('does not verify', 'bad', 'cross')),
+      receiptChain(s, ctx)))
 }
 
 function receiptChain(s, ctx) {
@@ -631,7 +645,7 @@ function runsTable(runs, ctx) {
       h('td', {}, badge(r.verdict, toneOf(r.verdict))),
       h('td', {}, r.matches_rehearsal === true ? badge('matched', 'ok', 'check') : r.matches_rehearsal === false ? badge(`${r.differences} diff`, 'bad', 'cross') : badge('not recorded', 'mute')),
       h('td', { class: 'mono', text: r.capture_id ?? '—' }),
-      h('td', {}, r.undo ? badge(`${r.undo.verdict} · ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : r.undo.verification === 'FAIL' ? 'bad' : 'mute') : undoForm(r, ctx))))))
+      h('td', {}, r.undo ? badge(`${r.undo.verdict} · ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : r.undo.verification === 'FAIL' ? 'bad' : 'mute') : ctx.readOnly ? h('span', { class: 'muted', text: 'read only' }) : undoForm(r, ctx))))))
 }
 
 function undoForm(r, ctx) {
