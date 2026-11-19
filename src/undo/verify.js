@@ -9,6 +9,7 @@
 import { measureDatabase } from '../rehearsal/measure.js'
 import { httpStatusInService, imageDigests, psql } from '../rehearsal/compose.js'
 import { verifyFiles } from '../capture/files.js'
+import { diffPrivileges, measurePrivileges } from '../capture/privileges.js'
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -34,6 +35,8 @@ export async function pollHealth(target, health, maxMs = 30000) {
  */
 export async function verifyRecovery({ repoDir, manifest, target, health = null }) {
   const checks = [...verifyFiles(repoDir, manifest.files)]
+  // What this capture cannot be checked against (it was made before the value was recorded).
+  const notChecked = []
 
   for (const db of manifest.postgres) {
     let live = null
@@ -52,6 +55,20 @@ export async function verifyRecovery({ repoDir, manifest, target, health = null 
       checks.push({ check: 'row_count', resource: `${db.name}.${t}`, expected: w?.rows ?? null, actual: l?.rows ?? null, ok: (w?.rows ?? null) === (l?.rows ?? null) })
       checks.push({ check: 'table_checksum', resource: `${db.name}.${t}`, expected: w?.checksum ?? null, actual: l?.checksum ?? null, ok: (w?.checksum ?? null) === (l?.checksum ?? null) })
     }
+    // Owners and grants: a restored database whose roles lost their rights is not recovered.
+    if (db.privileges) {
+      let livePriv = null
+      try {
+        livePriv = await measurePrivileges((sql) => psql({ ...target, dbName: db.name }, { sql }))
+      } catch (err) {
+        checks.push({ check: 'privileges', resource: db.name, expected: db.privileges.hash, actual: String(err.message), ok: false })
+        continue
+      }
+      const d = diffPrivileges(db.privileges, livePriv)
+      checks.push({ check: 'privileges', resource: db.name, expected: db.privileges.hash, actual: livePriv.hash, ok: db.privileges.hash === livePriv.hash, missing: d.missing.slice(0, 20), extra: d.extra.slice(0, 20) })
+    } else {
+      notChecked.push({ check: 'privileges', resource: db.name, why: 'the capture was made before privileges were recorded' })
+    }
   }
 
   const images = await imageDigests(target)
@@ -65,5 +82,5 @@ export async function verifyRecovery({ repoDir, manifest, target, health = null 
   }
 
   const failed = checks.filter((c) => !c.ok)
-  return { status: failed.length === 0 ? 'PASS' : 'FAIL', checks, failed, integration_tests: 'not configured' }
+  return { status: failed.length === 0 ? 'PASS' : 'FAIL', checks, failed, not_checked: notChecked, integration_tests: 'not configured' }
 }
