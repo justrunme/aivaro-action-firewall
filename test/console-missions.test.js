@@ -171,9 +171,9 @@ describe('Console with several missions in one workspace', () => {
     const asked = []
     const root = impactScreen(st, { ui: {}, rerender: () => {}, route: { screen: 'impact' }, api: async (p) => (asked.push(p), api.receipt(p.split('/').pop(), A)) })
     const versus = text(findAll(root, (e) => hasClass(e, 'versus'))[0])
-    assert.ok(versus.includes('#0 · DATA LOSS') && versus.includes('#2 · SAFE'), versus)
+    assert.ok(versus.includes('Revision #0 · DATA LOSS') && versus.includes('Revision #2 · SAFE'), versus)
     assert.deepEqual(findAll(findAll(root, (e) => hasClass(e, 'versus'))[0], (e) => hasClass(e, 'big')).map(text), ['1', '0'])
-    assert.deepEqual(findAll(root, (e) => e.tag === 'h3' && /^Plan [AB] · #/.test(text(e))).map(text), ['Plan A · #0', 'Plan B · #2'])
+    assert.deepEqual(findAll(root, (e) => e.tag === 'h3' && /^Plan [AB] · Revision #/.test(text(e))).map(text), ['Plan A · Revision #0', 'Plan B · Revision #2'])
     // The counterfactual is the plan that lost a row, not the bypass attempt (which lost none).
     const without = text(findAll(root, (e) => hasClass(e, 'without'))[0])
     assert.ok(without.includes('3 → 2'), without)

@@ -315,3 +315,116 @@ export function urgency(story, verifyOk = true) {
   const v = missionVerdict(story, verifyOk)
   return { 'NEEDS APPROVAL': 0, 'NOT AS REHEARSED': 1, 'RECOVERY FAILED': 1, 'RUN FAILED': 1, 'NOT VERIFIED': 1, UNVERIFIABLE: 2, DENIED: 2, 'NOT SAFE': 2, REPAIRED: 3, APPROVED: 3, SAFE: 4 }[v.label] ?? 5
 }
+
+// ---- Home: the recorded run as an evidence trail and four experiment cards ---------------------
+// Everything here is read from the verified state of a mission. A step or card the chain
+// does not support is left out or marked missing, never filled in.
+
+const rcpt = (x) => (x?.receipt ? { seq: x.seq, hash: x.receipt } : null)
+
+/**
+ * The path of one mission as clickable steps: the plan, every rehearsed version in order
+ * (DATA LOSS, LOGIC BYPASS, SAFE, ...), then approval, execution and verification when the
+ * Flight Recorder has them. `href` is where its evidence opens (a route, without the #).
+ * @returns {{ id: string, label: string, tone: string, text: string, receipt: {seq:number,hash:string}|null, href: string, version?: object }[]}
+ */
+export function evidenceSteps(story, missionId) {
+  if (!story?.versions?.length) return []
+  const f = focus(story)
+  const worst = severest(story)
+  const base = `missions/${missionId}`
+  const steps = []
+  const first = story.versions[0]
+  steps.push({ id: 'proposed', label: 'PROPOSED', tone: 'info', text: (first.files ?? []).map((x) => x.path.split('/').pop()).join(', ') || first.plan_id, receipt: rcpt(first), href: `${base}/proposed` })
+  for (const v of story.versions) {
+    const hero = heroOf(v)
+    const repaired = f.a && f.b && v.seq === f.b.seq
+    const href = worst && v.seq === worst.seq && v.verdict === 'DATA LOSS' ? 'impact' : f.a && v.seq === f.a.seq ? `${base}/denied` : repaired ? `${base}/repaired` : `${base}/rehearsed`
+    steps.push({ id: `v${v.seq}`, label: v.available ? v.verdict : 'NOT VERIFIED', tone: v.available ? toneOf(v.verdict) : 'mute', text: hero.headline, receipt: rcpt(v), href, version: v })
+  }
+  for (const n of flight(story)) {
+    if (!['APPROVED', 'EXECUTED', 'VERIFIED'].includes(n.name) || n.state === 'missing') continue
+    steps.push({ id: n.name.toLowerCase(), label: n.name, tone: n.state === 'info' ? 'info' : n.state, text: n.note, receipt: n.receipt?.hash ? { seq: n.receipt.seq, hash: n.receipt.hash } : null, href: `${base}/${n.name.toLowerCase()}` })
+  }
+  return steps
+}
+
+/**
+ * The four featured experiments of the recorded run. Each card names the mission it comes
+ * from and where its evidence opens; a card the recording does not support says so.
+ * @param {Record<string, { story?: any, verify?: any }>} states mission id -> state
+ */
+export function experimentCards(states, provenance = null) {
+  const entries = Object.entries(states ?? {}).filter(([, s]) => s?.story?.ok).map(([id, s]) => [id, s.story.result, s.verify?.result?.ok === true])
+  const find = (pred) => entries.find(([, story]) => pred(story)) ?? null
+  const miss = (id, title, why) => ({ id, title, missing: why })
+
+  const lossE = find((s) => severest(s)?.verdict === 'DATA LOSS')
+  const loss = lossE ? severest(lossE[1]) : null
+  const c1 = loss
+    ? { id: 'hidden-trigger', title: 'Hidden Trigger', tone: 'bad', label: 'DATA LOSS DETECTED', headline: heroOf(loss).headline, lines: tableLines(loss).map((t) => `${t.name} ${t.before ?? '?'} → ${t.after ?? '?'}`), seq: loss.seq, receipt: rcpt(loss), mission: lossE[0], href: 'impact', cta: 'Explore Evidence', note: 'Measured on a disposable copy, before the real database was touched.' }
+    : miss('hidden-trigger', 'Hidden Trigger', 'This recording has no rehearsal that lost data.')
+
+  const bypassE = find((s) => (s.versions ?? []).some((v) => v.available && v.verdict === 'LOGIC BYPASS'))
+  const bypass = bypassE ? bypassE[1].versions.find((v) => v.available && v.verdict === 'LOGIC BYPASS') : null
+  const hb = bypass ? heroOf(bypass) : null
+  const c2 = bypass
+    ? { id: 'logic-bypass', title: 'Logic Bypass', tone: 'bad', label: 'LOGIC BYPASS BLOCKED', headline: hb.headline, lines: hb.why, seq: bypass.seq, receipt: rcpt(bypass), mission: bypassE[0], href: `missions/${bypassE[0]}/denied`, cta: 'Inspect Attempt', note: hb.execution }
+    : miss('logic-bypass', 'Logic Bypass', 'This recording has no blocked bypass.')
+
+  const safeE = find((s) => latestSafe(s) && runOutcome(s)?.label === 'COMPLETED · VERIFIED')
+  const safe = safeE ? latestSafe(safeE[1]) : null
+  const c3 = safe && safeE[2]
+    ? { id: 'safe-execution', title: 'Safe Execution', tone: 'ok', label: 'SAFE · RUN VERIFIED', headline: `${losses(safe).rows_lost} protected rows lost`, lines: [...tableLines(safe).map((t) => `${t.name} ${t.before ?? '?'} → ${t.after ?? '?'}`), runOutcome(safeE[1]).text], seq: safe.seq, receipt: rcpt(safe), mission: safeE[0], href: `missions/${safeE[0]}/verified`, cta: 'View Verified Run', note: 'An operator approved this exact version; the real result was compared with the rehearsal.' }
+    : miss('safe-execution', 'Safe Execution', safe && !safeE[2] ? 'The chain of this run does not pass `justrunme verify`, so no result is claimed.' : 'This recording has no verified run of a SAFE plan.')
+
+  const recE = find((s) => runOutcome(s)?.label === 'RECOVERED · VERIFIED')
+  const limit = recE ? provenance?.missions?.[recE[0]]?.limit ?? null : null
+  const c4 = recE && recE[2]
+    ? { id: 'recovery', title: 'Recovery', tone: 'ok', label: 'RECOVERED · VERIFIED', headline: 'Run, undo, then a recovery check', lines: [runOutcome(recE[1]).text, ...(limit ? [limit] : [])], mission: recE[0], href: 'recovery', cta: 'Open Recovery', note: 'Undo covers only the resource types named in the mission contract.' }
+    : miss('recovery', 'Recovery', recE ? 'The chain of this run does not pass `justrunme verify`, so no recovery is claimed.' : 'This recording has no undo with a passing recovery check.')
+  return [c1, c2, c3, c4]
+}
+
+/**
+ * One line for a mission: every rehearsed revision in order (so DATA LOSS and LOGIC BYPASS stay
+ * two attempts), then what happened after. Read from the verified story only.
+ * @returns {{ revisions: { seq: number, verdict: string, tone: string }[], outcome: string, tone: string }}
+ */
+export function missionSummary(story, verifyOk = true) {
+  const revisions = (story?.versions ?? []).map((v) => ({ seq: v.seq, verdict: v.available ? v.verdict : 'NOT VERIFIED', tone: v.available ? toneOf(v.verdict) : 'mute' }))
+  const v = missionVerdict(story, verifyOk)
+  const out = verifyOk === false ? null : runOutcome(story)
+  const f = focus(story)
+  const outcome = verifyOk === false ? '`justrunme verify` does not pass for this mission, so no result is claimed'
+    : out ? out.text
+      : f.pending ? 'waiting for the operator\'s approval'
+        : f.approved ? 'approved, not run yet'
+          : revisions.length ? 'not run' : 'no rehearsal yet'
+  // A recovery claim carries its limit wherever it is shown.
+  return { revisions, outcome: out?.label === 'RECOVERED · VERIFIED' ? `${outcome} (database grants were not compared)` : outcome, tone: v.tone }
+}
+
+/** What the recovery verification does not cover today (engine issue, tracked separately). */
+export const RECOVERY_LIMIT = 'This recovery check compared the schema, row counts, checksums and files; it did not compare database grants or ownership (its capture was made before privileges were recorded). Captures made since then record them, and their recovery check compares supported database grants and ownership.'
+
+/**
+ * The top of Recovery & Replay: what the run and the undo showed, from the verified story only.
+ * @returns {{ label: string, tone: string, lines: { ok: boolean | null, text: string }[], limit: string | null }}
+ */
+export function recoverySummary(story, verifyOk = true) {
+  const f = focus(story)
+  const r = f.run
+  if (verifyOk === false) return { label: 'NOT VERIFIED', tone: 'mute', lines: [{ ok: false, text: '`justrunme verify` does not pass for this mission, so no result is claimed' }], limit: null }
+  if (!r) return { label: 'NO REAL RUN', tone: 'mute', lines: [{ ok: null, text: f.pending ? 'A request is waiting for the operator; nothing has run on the real database.' : 'Nothing has run on the real database for this mission.' }], limit: null }
+  const link = (code) => f.links?.links?.find((l) => l.code === code)?.ok
+  const out = runOutcome(story)
+  const lines = [
+    f.links ? { ok: link('EXECUTED_AS_AUTHORIZED') === true, text: 'The authorized version was the one executed' } : { ok: r.authorization ? true : null, text: r.authorization ? 'Authorized at the command line (no approval request to link)' : 'No authorization recorded for the run' },
+    { ok: r.verdict === 'completed', text: `Run #${r.seq}: ${r.verdict}` },
+    { ok: r.matches_rehearsal === true, text: r.matches_rehearsal === true ? 'The real result matched the rehearsal' : `${r.differences ?? '?'} difference(s) from the rehearsal` },
+  ]
+  if (r.undo) lines.push({ ok: r.undo.verification === 'PASS', text: `Undone; recovery verification ${r.undo.verification ?? 'not recorded'}` })
+  const label = out?.label === 'COMPLETED · VERIFIED' ? 'EXECUTION VERIFIED' : out?.label ?? 'RUN RECORDED'
+  return { label, tone: out?.tone ?? 'mute', lines, limit: r.undo ? RECOVERY_LIMIT : null }
+}

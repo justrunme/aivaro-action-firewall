@@ -92,13 +92,17 @@ async function screens() {
 }
 
 describe('Console screens render demo data (T28)', () => {
-  it('Missions: a card with the mission, its verdict, the four beats, the last step and time', async () => {
+  it('Missions: a compact card with the mission, its verdict, the revisions, one outcome, the last step and time', async () => {
     const { missionsScreen } = await screens()
     const root = missionsScreen(state, ctxOf())
     const t = text(root)
     assert.ok(t.includes(MISSION) && t.includes('COMPLETED · VERIFIED'))
-    for (const beat of ['Plan proposed', 'JustRunMe rehearsed', 'Blocked, then repaired', 'COMPLETED · VERIFIED']) assert.ok(t.includes(beat), beat)
-    assert.ok(t.includes('orders 3 → 2') && t.includes('1 protected row lost'), 'the measured loss is shown')
+    const card = findAll(root, (e) => e.tag === 'a' && hasClass(e, 'card'))[0]
+    const revs = findAll(card, (e) => hasClass(e, 'revs'))[0]
+    assert.ok(/#0 DATA LOSS\s*→\s*#\d SAFE/.test(text(revs)), text(revs))
+    assert.ok(text(card).includes('approved, executed, and the real result equals the rehearsal'), 'one outcome')
+    assert.equal(findAll(card, (e) => hasClass(e, 'story')).length, 0, 'the four narrative cards are gone')
+    assert.ok(text(card).includes('Open Flight Recorder'))
     assert.ok(t.includes('last step: #4 run_result · completed') && t.includes('2026-11-18 12:00:04Z'))
     assert.equal(findAll(root, (e) => e.tag === 'a' && e.attrs.href === `#/missions/${MISSION}`).length, 1)
     for (const label of ['SAFE · VERIFIED · RECOVERED', 'NEEDS APPROVAL · CONFLICT', 'DATA LOSS · LOGIC BYPASS', 'REPAIRED', 'UNVERIFIABLE']) assert.ok(t.includes(label), label)
@@ -154,15 +158,15 @@ describe('Console screens render demo data (T28)', () => {
     const t = text(root)
     assert.ok(t.includes('Counterfactual Replay') && t.includes('WITHOUT JUSTRUNME') && t.includes('WITH JUSTRUNME'))
     assert.ok(t.includes('DENIED · DATA LOSS') && t.includes('the real result equals the rehearsal'))
-    assert.ok(t.includes('Review verdicts are not recorded in the chain'), 'no invented review verdict')
-    assert.ok(t.includes('Recorded experiment T25 v1 (other runs, not this mission)') && t.includes('5 of 5 reviews said REVIEW: APPROVE') && t.includes('5 of 5 runs lost 1 of 3 orders') && t.includes('not part of this mission') && t.includes('docs/agent-runs/T25-results-v1.md'), 'the published number, labelled as another experiment')
+    assert.ok(t.includes('Recorded experiment T25 v1 (other runs, not this mission)') && t.includes('5 of 5 reviews said REVIEW: APPROVE') && t.includes('5 of 5 runs lost 1 of 3 orders') && t.includes('docs/agent-runs/T25-results-v1.md'), 'the published number, labelled as another experiment')
     assert.ok(readFileSync(new URL('../docs/agent-runs/T25-results-v1.md', import.meta.url), 'utf8').includes('| Verdict on the teammate\'s SQL | 5 of 5 `REVIEW: APPROVE`') && readFileSync(new URL('../docs/agent-runs/T25-results-v1.md', import.meta.url), 'utf8').includes('| Orders lost on the real database | 1 of 3 in every run (5 of 5)'), 'both numbers are in the results file')
     const [without, withJrm] = findAll(root, (e) => hasClass(e, 'col') && (hasClass(e, 'without') || hasClass(e, 'with')))
     assert.ok(text(without).includes('1protected rows lost') && text(without).includes('orders') && text(without).includes('3 → 2'))
     assert.ok(text(withJrm).includes('3 → 3'))
+    assert.ok(!/REVIEW/.test(text(withJrm)), 'no review verdict in the mission\'s own columns: the chain records none')
     const c = counterfactual(state.story.result)
     assert.deepEqual([c.without.tables[0].lost, c.with.tables[0].lost, c.with.ran, c.with.matched], [1, 0, true, true])
-    assert.ok(findAll(root, (e) => hasClass(e, 'sqlpanel') && hasClass(e, 'compare')).length === 1 && t.includes('Plan against plan'))
+    assert.ok(findAll(root, (e) => hasClass(e, 'sqlpanel') && hasClass(e, 'compare')).length === 1 && t.includes('Revision against revision'))
   })
 
   it('Approval Center: risk verdict, SQL, Approve and Reject for a pending request; the source for an approved one', async () => {
@@ -385,7 +389,9 @@ describe('Console look: contrast, offline, header (T28)', () => {
   it('the page and its scripts load nothing from outside: no URL, import or font file', () => {
     for (const f of readdirSync(STATIC_DIR)) {
       const src = readFileSync(path.join(STATIC_DIR, f), 'utf8')
-      const urls = [...src.matchAll(/https?:\/\/[^\s'")]+/g)].map((m) => m[0]).filter((u) => u !== 'http://www.w3.org/2000/svg' && !u.startsWith('http://127.0.0.1'))
+      // Links (never loaded) to the project's own public repository are allowed in the Setup and Built with Kiro module only.
+      const own = (u) => f === 'onboarding.js' && /^https:\/\/github\.com\/justrunme\/justrunme-zero(\/|\\|$)/.test(u)
+      const urls = [...src.matchAll(/https?:\/\/[^\s'")`]+/g)].map((m) => m[0]).filter((u) => u !== 'http://www.w3.org/2000/svg' && !u.startsWith('http://127.0.0.1') && !own(u))
       assert.deepEqual(urls, [], f)
       assert.doesNotMatch(src, /@import|@font-face|url\(|\.innerHTML|insertAdjacentHTML|outerHTML|document\.write|\beval\(|new Function/, f)
     }
