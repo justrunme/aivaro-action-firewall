@@ -7,8 +7,8 @@
 // Everything shown is read from the signed chain and the plan history; a step the
 // chain does not show is drawn greyed with the reason, never filled in.
 
-import { badge, diffView, fmtTime, h, hashChip, icon, lineDiff, short, sqlOf, stateBox } from './ui.js'
-import { approvalSource, counterfactual, flight, focus, headline, lossText, losses, missionVerdict, passphraseWords, receiptRows, sameBase, tableLines, toneOf } from './model.js'
+import { badge, fmtTime, h, hashChip, icon, short, sqlCompare, sqlOf, sqlView, stateBox } from './ui.js'
+import { approvalSource, counterfactual, eligibility, flight, headline, heroOf, latestSafe, lossText, losses, missionVerdict, passphraseWords, receiptRows, sameBase, severest, tableLines, toneOf, urgency } from './model.js'
 
 const TONE_LABEL = { ok: 'verified', bad: 'denied', warn: 'needs approval', fix: 'repaired', mute: 'unverifiable', info: 'recorded', missing: 'not in the chain' }
 const NODE_ICON = { ok: 'bolt', bad: 'cross', warn: 'lock', fix: 'check', mute: 'dash', info: 'check', missing: 'dash' }
@@ -30,27 +30,91 @@ function storyProblem(state, what) {
 }
 
 const mission = (s) => h('span', { class: 'mono', text: s.mission_id })
+/** `justrunme verify` passed for this mission: the only basis for a green label. */
+const verifiedOk = (state) => state?.verify?.ok === true && state?.verify?.result?.ok === true
+/** Flight nodes, greyed when the chain check does not pass: no green or red claim without it. */
+const nodesOf = (s, state) => flight(s).map((n) => (verifiedOk(state) || n.state === 'missing' ? n : { ...n, state: 'mute', note: `${n.note} (not verified)` }))
+
+/**
+ * What happened, why, and what the operator can safely do next, for one rehearsed version.
+ * The trigger that fired is read from the signed rehearsal receipt (T25 v3 change 2).
+ */
+function hero(v, ctx, { compact = false } = {}) {
+  const x = heroOf(v)
+  const trig = h('div', { class: 'callout-slot', 'aria-live': 'polite' })
+  if (v?.available && v.verdict !== 'SAFE' && (v.impact?.evidence ?? []).some((e) => e.kind === 'trigger_fired') && ctx?.api) {
+    trig.replaceChildren(h('div', { class: 'muted', text: 'Reading which database trigger fired…' }))
+    ctx.api(`/api/receipt/${v.seq}`).then((out) => {
+      const fired = (out?.result?.receipt?.subject?.evidence ?? []).filter((e) => e.kind === 'trigger_fired')
+      trig.replaceChildren(...fired.map((e) => h('div', { class: 'callout bad' }, icon('bolt'), h('span', { class: 'k', text: 'Trigger' }), h('code', { class: 'mono tname', text: e.trigger }), h('span', { text: ' on ' }), h('code', { class: 'mono', text: e.table }),
+        h('span', { class: 'muted', text: ` · ${e.timing ?? '?'} ${e.event ?? '?'} · per ${String(e.level ?? 'row').toLowerCase()} · fired ${e.fired} time${e.fired === 1 ? '' : 's'} · from signed receipt #${v.seq}` }))))
+    }).catch(() => trig.replaceChildren(h('div', { class: 'muted', text: 'The receipt could not be read; no trigger is shown.' })))
+  }
+  return h('section', { class: `hero ${x.tone}${compact ? ' compact' : ''}`, 'aria-label': `${x.label}: ${x.headline}` },
+    h('div', { class: 'hero-top' }, h('span', { class: `hero-label ${x.tone}` }, icon(x.tone === 'ok' ? 'shield' : x.tone === 'bad' ? 'alert' : 'dash'), x.label), v ? h('span', { class: 'muted mono', text: `#${v.seq} · ${v.plan_id}` }) : null),
+    h('div', { class: 'hero-head', text: x.headline }),
+    h('div', { class: 'hero-grid' },
+      h('div', {}, h('div', { class: 'biglabel', text: 'Why' }), h('ul', { class: 'why' }, x.why.map((w) => h('li', { text: w }))), trig),
+      h('div', {}, h('div', { class: 'biglabel', text: 'Execution' }), h('div', { class: `exec ${x.tone}`, text: x.execution }), h('div', { class: 'biglabel next', text: 'Next' }), h('div', { text: x.next }))))
+}
 
 // ---- Missions and the Flight Recorder -------------------------------------------
 
 export function missionsScreen(state, ctx) {
-  const bad = storyProblem(state, 'mission')
-  if (bad) return bad
-  const s = state.story.result
-  if (ctx.route?.arg === s.mission_id) return flightRecorder(state, ctx)
-  const v = missionVerdict(s)
-  const last = s.timeline.at(-1)
-  const nodes = flight(s)
-  return h('div', {},
-    h('div', { class: 'row' }, h('h1', { text: 'Missions' }), h('span', { class: 'spacer' }), h('span', { class: 'muted', text: 'one card per mission; open one to see its Flight Recorder' })),
-    h('a', { class: 'card', href: `#/missions/${s.mission_id}`, 'aria-label': `Open the Flight Recorder of ${s.mission_id}` },
-      h('div', { class: 'row' }, h('h2', { class: 'mono', text: s.mission_id }), h('span', { class: 'spacer' }), badge(v.label, v.tone, v.tone === 'ok' ? 'bolt' : null)),
-      h('ol', { class: 'mini', 'aria-label': 'Flight steps' }, nodes.map((n) => h('li', { class: n.state, title: `${n.name}: ${n.note}` }, h('span', { class: 'sr', text: `${n.name}: ${TONE_LABEL[n.state]}` })))),
-      story(headline(s)),
-      h('div', { class: 'row meta' }, h('span', { text: last ? `last step: #${last.seq} ${last.kind}${last.verdict ? ` · ${last.verdict}` : ''}` : 'no receipts' }), h('span', { class: 'spacer' }), h('span', { class: 'mono', text: last ? fmtTime(last.at) : '' }))),
+  // Every mission of the workspace (ctx.all), or just the one loaded.
+  const all = ctx.all?.length ? ctx.all : [{ mission_id: state.story?.result?.mission_id ?? state.mission ?? null, state }]
+  const open = all.find((m) => m.mission_id && m.mission_id === ctx.route?.arg)
+  if (open) {
+    const bad = storyProblem(open.state, 'mission')
+    return bad ?? flightRecorder(open.state, ctx)
+  }
+  if (all.length === 1) {
+    const bad = storyProblem(all[0].state, 'mission')
+    if (bad) return bad
+  }
+  const rank = (m) => (m.state?.story?.ok ? urgency(m.state.story.result, verifiedOk(m.state)) : 6)
+  const sorted = [...all].sort((a, b) => rank(a) - rank(b) || String(a.mission_id).localeCompare(String(b.mission_id)))
+  return h('div', { class: 'reveal' },
+    h('div', { class: 'row' }, h('h1', { text: 'Missions' }), h('span', { class: 'count', text: `${all.length} in this workspace` }), h('span', { class: 'spacer' }), h('span', { class: 'muted', text: 'most urgent first · open a mission to see its Flight Recorder' })),
+    triage(sorted),
+    h('div', { class: 'cards' }, sorted.map((m, i) => missionCard(m, i))),
     h('hr', { class: 'stitch' }),
     h('h2', { text: 'What the colours mean' }),
-    h('div', { class: 'legend' }, [['SAFE · VERIFIED', 'ok', 'measured and checked against signed receipts'], ['NEEDS APPROVAL', 'warn', 'waiting for the operator'], ['DENIED', 'bad', 'blocked, with the measured loss'], ['REPAIRED', 'fix', 'revised plan rehearsed SAFE'], ['UNVERIFIABLE', 'mute', 'the chain cannot show it']].map(([t, tone, d]) => h('div', {}, badge(t, tone), h('span', { class: 'muted', text: d })))))
+    h('div', { class: 'legend' }, [['SAFE · VERIFIED · RECOVERED', 'ok', 'measured and checked against signed receipts'], ['NEEDS APPROVAL · CONFLICT', 'warn', 'waiting for the operator, or requirements that cannot all hold'], ['DATA LOSS · LOGIC BYPASS', 'bad', 'blocked, with the measured evidence'], ['REPAIRED', 'fix', 'revised plan rehearsed SAFE'], ['UNVERIFIABLE', 'mute', 'the chain cannot show it']].map(([t, tone, d]) => h('div', {}, badge(t, tone), h('span', { class: 'muted', text: d })))))
+}
+
+/** The five-second view: how many missions need a person, are blocked, are proven. */
+function triage(list) {
+  const counts = { warn: 0, bad: 0, ok: 0, mute: 0 }
+  for (const m of list) {
+    const tone = m.state?.story?.ok ? missionVerdict(m.state.story.result, verifiedOk(m.state)).tone : 'mute'
+    counts[tone === 'fix' || tone === 'info' ? 'ok' : tone] = (counts[tone === 'fix' || tone === 'info' ? 'ok' : tone] ?? 0) + 1
+  }
+  const tile = (n, label, tone, href) => h(href ? 'a' : 'div', { class: `tri ${tone}${n ? '' : ' zero'}`, ...(href ? { href } : {}) }, h('div', { class: 'tri-n', text: String(n) }), h('div', { class: 'tri-l', text: label }))
+  return h('div', { class: 'triage', role: 'group', 'aria-label': 'Missions by state' },
+    tile(counts.warn, 'need your decision', 'warn', counts.warn ? '#/approvals' : null), tile(counts.bad, 'blocked or broken', 'bad'), tile(counts.ok, 'safe, proven or recovered', 'ok'), tile(counts.mute, 'no signed record or not verified', 'mute'))
+}
+
+/** One mission card. A mission whose chain cannot be read says so; nothing is filled in. */
+function missionCard(m, i) {
+  const st = m.state
+  const problem = cliProblem(st?.story)
+  if (problem) {
+    const none = st?.story?.error?.code === 'NO_RECEIPTS'
+    return h('div', { class: 'card empty', 'data-i': i },
+      h('div', { class: 'row' }, h('h2', { class: 'mono', text: m.mission_id ?? 'mission' }), h('span', { class: 'spacer' }), badge(none ? 'NO SIGNED RECORD' : 'UNREADABLE', 'mute')),
+      h('p', { class: 'muted', text: none ? 'This mission has no receipts, so the Console has nothing signed to show. A rehearsal that JustRunMe refused before it ran (for example CONFLICT: requirements unsatisfiable) writes no receipt.' : problem }))
+  }
+  const s = st.story.result
+  const v = missionVerdict(s, verifiedOk(st))
+  const last = s.timeline.at(-1)
+  const nodes = nodesOf(s, st)
+  const pending = (s.requests ?? []).some((q) => q.state === 'pending')
+  return h('a', { class: `card tone-${v.tone}${pending ? ' pending' : ''}`, href: `#/missions/${s.mission_id}`, 'aria-label': `Open the Flight Recorder of ${s.mission_id}`, 'data-i': i },
+    h('div', { class: 'row' }, h('h2', { class: 'mono', text: s.mission_id }), h('span', { class: 'spacer' }), badge(v.label, v.tone, v.tone === 'ok' ? 'bolt' : v.tone === 'warn' ? 'lock' : null)),
+    h('ol', { class: 'mini', 'aria-label': 'Flight steps' }, nodes.map((n) => h('li', { class: n.state, title: `${n.name}: ${n.note}` }, h('span', { class: 'sr', text: `${n.name}: ${TONE_LABEL[n.state]}` })))),
+    story(headline(s, verifiedOk(st))),
+    h('div', { class: 'row meta' }, h('span', { text: last ? `last step: #${last.seq} ${last.kind}${last.verdict ? ` · ${last.verdict}` : ''}` : 'no receipts' }), h('span', { class: 'spacer' }), h('span', { class: 'mono', text: last ? fmtTime(last.at) : '' })))
 }
 
 function story(beats) {
@@ -59,13 +123,13 @@ function story(beats) {
 
 function flightRecorder(state, ctx) {
   const s = state.story.result
-  const nodes = flight(s)
+  const nodes = nodesOf(s, state)
   const wanted = (ctx.route.sub ?? ctx.ui.node ?? '').toUpperCase()
   const chosen = nodes.find((n) => n.name === wanted) ?? nodes.find((n) => n.state === 'bad' || n.state === 'warn') ?? [...nodes].reverse().find((n) => n.state !== 'missing') ?? nodes[0]
-  const v = missionVerdict(s)
+  const v = missionVerdict(s, verifiedOk(state))
   return h('div', {},
     h('div', { class: 'row' }, h('a', { href: '#/missions', class: 'back', text: '← Missions' }), h('h1', { text: 'Flight Recorder' }), mission(s), h('span', { class: 'spacer' }), badge(v.label, v.tone, v.tone === 'ok' ? 'bolt' : null)),
-    story(headline(s)),
+    story(headline(s, verifiedOk(state))),
     h('ol', { class: 'flight', 'aria-label': 'Flight Recorder: the steps of this mission' }, nodes.map((n, i) => h('li', { class: `node ${n.state}${n === chosen ? ' on' : ''}` },
       h('a', { href: `#/missions/${s.mission_id}/${n.name.toLowerCase()}`, 'aria-current': n === chosen ? 'step' : null, 'aria-label': `${i + 1}. ${n.name}: ${TONE_LABEL[n.state]}. ${n.note}` },
         h('span', { class: 'disc' }, icon(NODE_ICON[n.state]), n.name === 'VERIFIED' && n.state === 'ok' ? h('span', { class: 'spark', title: 'verified: the real result equals the rehearsal' }, icon('spark')) : null), h('span', { class: 'name', text: n.name }), h('span', { class: 'nnote', text: n.state === 'missing' ? 'not in the chain' : n.note }))))),
@@ -76,19 +140,20 @@ function evidence(n, s, ctx) {
   const head = h('div', { class: 'row' }, h('h2', { text: n.name }), badge(TONE_LABEL[n.state].toUpperCase(), n.state === 'missing' ? 'mute' : n.state), h('span', { class: 'muted', text: n.note }))
   if (n.state === 'missing') return h('div', {}, head, stateBox('empty', 'Not in the signed chain', `${n.note}. This step is shown greyed because the chain holds nothing for it; it is not filled in.`))
   const parts = [head]
-  if (n.version?.available) parts.push(versionEvidence(n))
+  if (n.version && ['PROPOSED', 'REHEARSED', 'DENIED', 'REPAIRED'].includes(n.name)) parts.push(hero(n.version, ctx))
+  if (n.version?.available) parts.push(versionEvidence(n, ctx))
   if (n.request) parts.push(requestEvidence(n.request, s))
   if (n.run) parts.push(runEvidence(n.run, s))
   if (n.receipt) parts.push(receiptBlock(n.receipt, s, ctx))
   return h('div', {}, parts)
 }
 
-function versionEvidence(n) {
+function versionEvidence(n, ctx) {
   const v = n.version
   const rows = tableLines(v)
-  const sql = n.from ? diffView(lineDiff(sqlOf(n.from), sqlOf(v))) : h('pre', { class: 'sql', text: sqlOf(v) })
-  return h('div', { class: 'grid2' },
-    h('div', {}, h('h3', { text: n.from ? `SQL diff: ${n.from.plan_id} → ${v.plan_id}` : `SQL · ${v.plan_id}` }), sql),
+  const sql = n.from ? sqlCompare(sqlOf(n.from), sqlOf(v), { left: `#${n.from.seq} ${n.from.verdict}`, right: `#${v.seq} ${v.verdict}`, ui: ctx.ui, key: 'flightSql' }) : sqlView(sqlOf(v), { title: `SQL · #${v.seq}`, sub: v.plan_id })
+  return h('div', { class: 'grid2 wide-left' },
+    h('div', { class: 'minw0' }, sql),
     h('div', {}, h('h3', { text: 'Rows lost (measured on a disposable copy)' }),
       h('div', { class: 'row' }, h('div', {}, h('div', { class: `big ${losses(v).rows_lost > 0 ? 'bad' : 'ok'}`, text: losses(v).rows_lost }), h('div', { class: 'biglabel', text: 'protected rows lost' })), badge(v.verdict, toneOf(v.verdict))),
       rowsTable(rows), h('p', { class: 'muted', text: lossText(v) }),
@@ -152,22 +217,36 @@ export function impactScreen(state, ctx) {
   const s = state.story.result
   const versions = s.versions.filter((v) => v.available)
   if (versions.length === 0) return stateBox('empty', 'No archived rehearsal to compare', 'The plan history has no readable rehearsal for this mission yet.')
-  const f = focus(s)
-  const pickA = ctx.ui.impactA ?? f.a?.seq ?? versions[0].seq
-  const pickB = ctx.ui.impactB ?? f.b?.seq ?? versions.at(-1).seq
+  // Default: the most severe measured loss on the left, the latest SAFE plan on the right.
+  const worst = severest(s)
+  const safe = latestSafe(s)
+  const pickA = ctx.ui.impactA ?? worst?.seq ?? versions[0].seq
+  const pickB = ctx.ui.impactB ?? safe?.seq ?? versions.at(-1).seq
   const a = versions.find((v) => v.seq === pickA) ?? versions[0]
   const b = versions.find((v) => v.seq === pickB) ?? versions.at(-1)
   const chooser = (label, current, key) => h('label', {}, label, h('select', { onChange: (e) => { ctx.ui[key] = Number(e.target.value); ctx.rerender() } },
     versions.map((v) => h('option', { value: v.seq, selected: v.seq === current.seq, text: `#${v.seq} ${v.plan_id} ${v.verdict}` }))))
-  return h('div', {},
+  return h('div', { class: 'reveal' },
     h('div', { class: 'row' }, h('h1', { text: 'Impact Diff' }), mission(s)),
+    impactHeadline(a, b),
+    hero(a, ctx),
     counterfactualPanel(s),
     h('hr', { class: 'stitch' }),
     h('div', { class: 'row' }, h('h2', { text: 'Plan against plan' }), h('span', { class: 'spacer' }), chooser('Left', a, 'impactA'), chooser('Right', b, 'impactB')),
     sameBase(a, b) ? null : h('div', { class: 'banner', text: 'Measured on different database states (the base hash differs): compare each card with its own "before", not row for row with the other.' }),
     h('div', { class: 'grid2' }, planCard('Plan A', a), planCard('Plan B', b)),
     h('h2', { text: 'SQL difference' }),
-    diffView(lineDiff(sqlOf(a), sqlOf(b))))
+    sqlCompare(sqlOf(a), sqlOf(b), { left: `Plan A #${a.seq} ${a.verdict}`, right: `Plan B #${b.seq} ${b.verdict}`, ui: ctx.ui, key: 'impactSql' }))
+}
+
+/** "1 protected row lost" against "0 lost", in one line, from the two signed reports. */
+function impactHeadline(a, b) {
+  const la = losses(a).rows_lost
+  const lb = losses(b).rows_lost
+  return h('section', { class: 'panel versus' },
+    h('div', { class: `vs-side ${la > 0 ? 'bad' : 'ok'}` }, h('div', { class: 'biglabel', text: `#${a.seq} · ${a.verdict}` }), h('div', { class: `big ${la > 0 ? 'bad' : 'ok'}`, text: `${la}` }), h('div', { class: 'biglabel', text: `protected row${la === 1 ? '' : 's'} lost` })),
+    h('div', { class: 'vs', text: 'vs' }),
+    h('div', { class: `vs-side ${lb > 0 ? 'bad' : 'ok'}` }, h('div', { class: 'biglabel', text: `#${b.seq} · ${b.verdict}` }), h('div', { class: `big ${lb > 0 ? 'bad' : 'ok'}`, text: `${lb}` }), h('div', { class: 'biglabel', text: `protected row${lb === 1 ? '' : 's'} lost` })))
 }
 
 function counterfactualPanel(s) {
@@ -211,8 +290,7 @@ function planCard(title, v) {
       l.removed_tables.map((x) => h('li', { class: 'rm', text: `− table ${x}` })), l.removed_columns.map((x) => h('li', { class: 'rm', text: `− column ${x}` })),
       l.removed_logic.map((x) => h('li', { class: 'rm', text: `− ${x}` })), l.changed_logic.map((x) => h('li', { class: 'rm', text: `~ ${x}` })),
       l.added_tables.map((x) => h('li', { class: 'add', text: `+ table ${x}` })), l.added_columns.map((x) => h('li', { class: 'add', text: `+ column ${x}` })),
-      v.impact.failed_steps.map((x) => h('li', { class: 'rm', text: `✗ step ${x} failed` }))),
-    h('h3', { text: 'SQL' }), h('pre', { class: 'sql', text: sqlOf(v) }))
+      v.impact.failed_steps.map((x) => h('li', { class: 'rm', text: `✗ step ${x} failed` }))))
 }
 
 function bar(name, t, max) {
@@ -233,7 +311,10 @@ export function approvalsScreen(state, ctx) {
   if (problem) return stateBox('error', 'Approval requests cannot be read', problem)
   const requests = state.approvals.result.requests
   if (requests.length === 0) return h('div', {}, h('h1', { text: 'Approval Center' }), stateBox('empty', 'Nothing to approve', 'No approval request exists. The agent asks with the `request_approval` tool after a SAFE rehearsal; the request then waits here.'))
-  const id = ctx.ui.request ?? (requests.find((q) => q.state === 'pending') ?? requests.at(-1)).request_id
+  // Default: a pending request, else the newest answered one (an approval is the record worth showing), else the newest.
+  const newest = (list) => [...list].sort((a, b) => Date.parse(b.requested_at) - Date.parse(a.requested_at))[0]
+  const answered = requests.filter((q) => q.state !== 'expired' && q.state !== 'pending')
+  const id = ctx.ui.request ?? (requests.find((q) => q.state === 'pending') ?? newest(answered.length ? answered : requests)).request_id
   const pick = (rid) => { ctx.ui.request = rid; ctx.rerender() }
   const list = h('div', { class: 'panel' }, h('table', {},
     h('thead', {}, h('tr', {}, ['request', 'plan', 'state', 'requested', 'expires'].map((t) => h('th', { text: t })))),
@@ -250,28 +331,45 @@ function requestDetail(out, ctx, state) {
   if (problem) return stateBox('error', 'The request cannot be shown', problem)
   const r = out.result
   const rep = r.report
-  const changed = r.files.filter((f) => !f.matches_now)
-  const left = Date.parse(r.expires_at) - Date.now()
-  const q = state.story?.result?.requests?.find((x) => x.request_id === r.request_id)
-  const risk = rep?.valid ? { text: rep.verdict, tone: toneOf(rep.verdict) } : { text: 'UNVERIFIABLE', tone: 'mute' }
-  const sqlAndImpact = h('div', { class: 'grid2' },
-    h('section', { class: 'panel' }, h('h3', { text: 'The SQL that will run' }), r.files.map((f) => h('div', {}, h('div', { class: 'row' }, h('span', { class: 'mono', text: f.path }), badge(f.matches_now ? 'unchanged' : 'changed', f.matches_now ? 'ok' : 'bad')), h('pre', { class: 'sql', text: f.sql ?? '(file missing)' })))),
-    h('section', { class: 'panel' }, h('h3', { text: 'Measured in rehearsal' }),
-      rep?.valid
-        ? h('ul', { class: 'delta' }, (rep.schema_delta?.removed_columns ?? []).map((c) => h('li', { class: 'rm', text: `− column ${c}` })), (rep.schema_delta?.added_columns ?? []).map((c) => h('li', { class: 'add', text: `+ column ${c}` })), (rep.schema_delta?.removed_tables ?? []).map((t) => h('li', { class: 'rm', text: `− table ${t}` })), h('li', { text: `${rep.rows_deleted} rows deleted` }))
-        : h('div', { class: 'banner bad', text: rep?.problem ?? 'no report' }),
-      h('h3', { text: 'How this approval is recorded' }), howRecorded(r, q)))
-  return h('div', {},
-    h('section', { class: `panel summary ${risk.tone}` },
-      h('div', { class: 'row' }, h('div', {}, h('div', { class: 'biglabel', text: 'RISK VERDICT (measured in rehearsal)' }), h('div', { class: 'verdict' }, badge(risk.text, risk.tone, risk.tone === 'ok' ? 'bolt' : null))),
-        h('span', { class: 'spacer' }), badge(r.state.toUpperCase(), toneOf(r.state)), h('span', { class: 'mono', text: r.plan_id }),
-        h('span', { class: 'muted', text: r.state === 'pending' ? `expires in ${Math.max(0, Math.round(left / 60000))} min (${fmtTime(r.expires_at)})` : `expires ${fmtTime(r.expires_at)}` })),
-      rep?.valid ? h('p', { class: 'lead', text: `${rep.rows_deleted} row${rep.rows_deleted === 1 ? '' : 's'} deleted in rehearsal${(rep.schema_delta?.removed_columns ?? []).length + (rep.schema_delta?.removed_tables ?? []).length === 0 ? ', no table or column removed' : ''}.` }) : h('p', { class: 'lead', text: rep?.problem ?? 'The rehearsal report cannot be shown.' }),
-      changed.length ? h('div', { class: 'banner bad', text: `Changed since the request: ${changed.map((f) => f.path).join(', ')}. This request cannot be approved; the agent must rehearse again.` }) : null,
-      h('div', { class: 'note' }, h('div', { class: 'muted', text: `Agent note: ${r.agent_note_is}` }), h('div', { text: r.agent_note || '(none)' }))),
-    r.state === 'pending' ? decide(r, ctx) : null,
-    sqlAndImpact)
+  const s = state.story?.result
+  const q = s?.requests?.find((x) => x.request_id === r.request_id)
+  const requested = s?.versions?.find((v) => v.report_hash === q?.report_hash) ?? null
+  const worst = s ? severest(s) : null
+  const against = worst && requested && worst.seq !== requested.seq ? worst : null
+  const verdict = rep?.valid ? rep.verdict : 'NOT VERIFIED'
+  const tone = rep?.valid ? toneOf(rep.verdict) : 'mute'
+  const sql = r.files.map((f) => h('div', { class: 'filesql' },
+    h('div', { class: 'row' }, h('span', { class: 'mono', text: f.path }), badge(f.matches_now ? 'unchanged since the request' : 'CHANGED since the request', f.matches_now ? 'ok' : 'bad')),
+    sqlView(f.sql ?? '-- (file missing)', { title: 'The exact SQL that will run', sub: f.sha256 ? `sha256 ${short(f.sha256, 16)}` : '' })))
+  const left = h('div', { class: 'minw0' },
+    h('section', { class: `hero ${tone}` },
+      h('div', { class: 'hero-top' }, h('span', { class: `hero-label ${tone}` }, icon(tone === 'ok' ? 'shield' : 'alert'), r.state === 'pending' && verdict === 'SAFE' ? 'SAFE · READY FOR YOUR DECISION' : `${verdict} · ${r.state.toUpperCase()}`), h('span', { class: 'muted mono', text: `${r.request_id} · ${r.plan_id}` })),
+      h('div', { class: 'hero-head', text: rep?.valid ? `${rep.rows_deleted} row${rep.rows_deleted === 1 ? '' : 's'} deleted in rehearsal${(rep.schema_delta?.removed_columns ?? []).length + (rep.schema_delta?.removed_tables ?? []).length === 0 ? ', no table or column removed' : ''}` : rep?.problem ?? 'The rehearsal report cannot be shown' }),
+      rehearsalSummary(rep)),
+    h('div', { class: 'note' }, h('div', { class: 'muted', text: `Agent note: ${r.agent_note_is}` }), h('div', { text: r.agent_note || '(none)' })),
+    against ? h('div', {}, h('h2', { text: 'What changed since the plan that lost data' }), sqlCompare(sqlOf(against), sqlOf(requested), { left: `denied #${against.seq} ${against.verdict}`, right: `requested #${requested.seq} ${requested.verdict}`, ui: ctx.ui, key: 'approveSql' })) : null,
+    h('h2', { text: 'The SQL that will run' }), sql)
+  const right = h('div', { class: 'decision-col' }, r.state === 'pending' ? decide(r, ctx, state, q) : h('section', { class: 'panel decide' }, h('h3', { text: 'How this request was answered' }), howRecorded(r, q)))
+  return h('div', { class: 'approve-layout reveal' }, left, right)
 }
+
+/** Rows, tables checked and schema change of the requested version, from its signed report. */
+function rehearsalSummary(rep) {
+  if (!rep?.valid) return h('div', { class: 'banner bad', text: rep?.problem ?? 'The rehearsal report cannot be shown.' })
+  const tables = Object.entries(rep.tables ?? {})
+  const prot = tables.filter(([, t]) => t.protected)
+  const max = Math.max(1, ...tables.map(([, t]) => Math.max(t.rows_before ?? 0, t.rows_after ?? 0)))
+  const removed = (rep.schema_delta?.removed_columns ?? []).length + (rep.schema_delta?.removed_tables ?? []).length
+  const lost = prot.reduce((n, [, t]) => n + (t.rows_lost ?? 0), 0)
+  return h('div', { class: 'rsum' },
+    h('div', { class: 'facts' },
+      fact(`${lost}`, `protected row${lost === 1 ? '' : 's'} lost`, lost > 0 ? 'bad' : 'ok'),
+      fact(`${prot.length}`, `protected table${prot.length === 1 ? '' : 's'} checked`, 'info'),
+      fact(`${removed}`, 'tables / columns removed', removed > 0 ? 'bad' : 'ok')),
+    h('div', { class: 'bars' }, prot.map(([name, t]) => bar(name, t, max))))
+}
+
+const fact = (n, label, tone) => h('div', { class: `fact ${tone}` }, h('div', { class: `big ${tone}`, text: n }), h('div', { class: 'biglabel', text: label }))
 
 /** Scripted against human: said plainly, from the receipt when there is one. */
 function howRecorded(r, q) {
@@ -283,47 +381,179 @@ function howRecorded(r, q) {
   return h('p', { class: 'muted', text: r.state === 'denied' ? 'The request was rejected; it cannot be approved later.' : 'No approval was recorded for this request.' })
 }
 
-function decide(r, ctx) {
-  const confirm = h('input', { id: 'confirm', autocomplete: 'off', spellcheck: 'false', placeholder: r.plan_id, 'aria-describedby': 'confirm-help' })
-  const pass = h('input', { id: 'passphrase', name: 'jrm-approver-once', type: 'password', autocomplete: 'new-password' })
-  const reason = h('input', { id: 'reason', autocomplete: 'off', placeholder: 'why' })
-  const result = h('div', { class: 'result', 'aria-live': 'polite' })
-  const go = (button, path, body) => async () => {
-    button.disabled = true
-    result.replaceChildren(stateBox('loading', 'Working…', ''))
+/**
+ * Approve or reject. The review box is new on every render, so it starts unticked whenever
+ * the mission, the request or its report changes (the shell re-renders on any such change).
+ * Approve is offered only for an eligible request (model.eligibility); the CLI checks the
+ * request, files, report, fingerprint, expiry and single use again. One submission at a time;
+ * the passphrase is cleared after every attempt and never stored.
+ */
+function decide(r, ctx, state, q) {
+  const elig = eligibility(r, { storyState: q?.state ?? null, verifyOk: state?.verify?.result?.ok !== false })
+  const reviewed = h('input', { id: 'reviewed', type: 'checkbox', disabled: elig.ok ? null : true })
+  const pass = h('input', { id: 'passphrase', name: 'jrm-approver-once', type: 'password', autocomplete: 'new-password', spellcheck: 'false', 'aria-describedby': 'approve-msg', disabled: elig.ok ? null : true })
+  const eye = h('button', { type: 'button', class: 'eye', 'aria-label': 'Show the passphrase', 'aria-pressed': 'false', title: 'Show or hide the passphrase' }, icon('eye'))
+  const approve = h('button', { class: 'approve', type: 'button', text: 'Approve this plan', disabled: true })
+  const msg = h('div', { id: 'approve-msg', class: 'inline-msg', role: 'status', 'aria-live': 'polite' })
+  const clock = h('span', { class: 'mono countdown' })
+  const leftMs = () => Date.parse(r.expires_at) - Date.now()
+  const tickClock = () => {
+    const ms = Math.max(0, leftMs())
+    const m = Math.floor(ms / 60000)
+    const sec = Math.floor((ms % 60000) / 1000)
+    clock.textContent = ms > 0 ? `expires in ${m}:${String(sec).padStart(2, '0')}` : 'EXPIRED'
+    if (ms <= 0 && !done) {
+      approve.disabled = true
+      msg.replaceChildren(h('div', { class: 'banner bad', text: 'The request expired. The agent can ask again with request_approval.' }))
+    }
+    if (ms < 5 * 60000) clock.setAttribute('class', 'mono countdown low')
+  }
+  let done = false
+  let busy = false
+  const ready = () => elig.ok && !done && !busy && reviewed.checked === true && pass.value.length > 0 && leftMs() > 0
+  const refresh = () => {
+    approve.disabled = !ready()
+  }
+  if (typeof setInterval === 'function' && typeof clock.isConnected === 'boolean') {
+    const t = setInterval(() => (clock.isConnected ? tickClock() : clearInterval(t)), 1000)
+  }
+  tickClock()
+  const submit = async () => {
+    if (busy || done) return
+    if (!ready()) {
+      msg.replaceChildren(h('span', { class: 'bad-text', text: !elig.ok ? 'This request cannot be approved.' : !reviewed.checked ? 'Tick the review box first.' : leftMs() <= 0 ? 'The request expired.' : 'Type the approver passphrase.' }))
+      return
+    }
+    busy = true
+    ctx.ui.submitting = true
+    approve.disabled = true
+    approve.textContent = 'Approving…'
+    reviewed.disabled = true
+    msg.replaceChildren(h('span', { class: 'muted working', text: 'The CLI checks the request, the files, the rehearsal and the fingerprint again, then decrypts the approver key' }))
     try {
-      const out = await ctx.api(path, body())
+      const out = await ctx.api('/api/approve', { method: 'POST', body: { request_id: r.request_id, confirm: r.plan_id, passphrase: pass.value } })
       pass.value = ''
-      result.replaceChildren(outcome(out))
+      const bad = cliProblem(out)
+      if (bad) {
+        msg.replaceChildren(h('div', { class: 'banner bad shake', text: bad }))
+        return
+      }
+      done = true
+      approve.textContent = 'Approved'
+      msg.replaceChildren(h('div', { class: 'banner good pop' }, icon('check'), ` ${outcomeText(out)}`))
+      setNotice(ctx, ctx.mission ?? out.result?.mission_id, 'good', out)
       await ctx.reload()
     } catch (e) {
-      result.replaceChildren(stateBox('error', 'The action failed', e.message))
+      msg.replaceChildren(h('div', { class: 'banner bad shake', text: e.message }))
     } finally {
       pass.value = ''
-      button.disabled = false
+      busy = false
+      ctx.ui.submitting = false
+      if (!done) {
+        approve.textContent = 'Approve this plan'
+        reviewed.disabled = !elig.ok
+      }
+      refresh()
     }
   }
-  const approve = h('button', { class: 'approve', type: 'button', text: 'Approve this plan' })
+  reviewed.addEventListener('change', refresh)
+  pass.addEventListener('input', refresh)
+  pass.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault?.()
+      submit()
+    }
+  })
+  eye.addEventListener('click', () => {
+    const show = pass.getAttribute('type') === 'password'
+    pass.setAttribute('type', show ? 'text' : 'password')
+    eye.setAttribute('aria-pressed', show ? 'true' : 'false')
+    eye.setAttribute('aria-label', show ? 'Hide the passphrase' : 'Show the passphrase')
+  })
+  approve.addEventListener('click', submit)
+
+  const reason = h('input', { id: 'reason', autocomplete: 'off', placeholder: 'why' })
   const deny = h('button', { class: 'deny', type: 'button', text: 'Reject' })
-  approve.addEventListener('click', go(approve, '/api/approve', () => ({ method: 'POST', body: { request_id: r.request_id, confirm: confirm.value.trim(), passphrase: pass.value } })))
-  deny.addEventListener('click', go(deny, '/api/deny', () => ({ method: 'POST', body: { request_id: r.request_id, reason: reason.value } })))
-  return h('div', { class: 'grid2' },
-    h('section', { class: 'panel decide approve-box' }, h('h3', { text: 'Approve' }),
-      h('p', { class: 'muted', id: 'confirm-help', text: `Type the plan id (${r.plan_id}) and the approver passphrase. The passphrase goes to \`justrunme approve --passphrase-stdin\`; this page and the server never hold the approver key.` }),
-      h('div', { class: 'row' }, h('label', { for: 'confirm' }, 'Plan id', confirm), h('label', { for: 'passphrase' }, 'Approver passphrase', pass), approve)),
-    h('section', { class: 'panel decide reject-box' }, h('h3', { text: 'Reject' }), h('p', { class: 'muted', text: 'Rejecting needs a reason, no passphrase. A rejected request cannot be approved later.' }),
-      h('div', { class: 'row' }, h('label', { for: 'reason' }, 'Reason', reason), deny)),
-    result)
+  const denyMsg = h('div', { class: 'inline-msg', role: 'status', 'aria-live': 'polite' })
+  let denying = false
+  deny.addEventListener('click', async () => {
+    if (denying) return
+    denying = true
+    ctx.ui.submitting = true
+    deny.disabled = true
+    denyMsg.replaceChildren(h('span', { class: 'muted working', text: 'Rejecting' }))
+    try {
+      const out = await ctx.api('/api/deny', { method: 'POST', body: { request_id: r.request_id, reason: reason.value } })
+      const bad = cliProblem(out)
+      denyMsg.replaceChildren(bad ? h('div', { class: 'banner bad shake', text: bad }) : h('div', { class: 'banner good pop', text: outcomeText(out) }))
+      if (!bad) {
+        setNotice(ctx, ctx.mission ?? out.result?.mission_id, 'good', out)
+        await ctx.reload()
+      }
+    } catch (e) {
+      denyMsg.replaceChildren(h('div', { class: 'banner bad shake', text: e.message }))
+    } finally {
+      denying = false
+      ctx.ui.submitting = false
+      deny.disabled = false
+    }
+  })
+
+  return h('div', { class: 'decision' },
+    h('section', { class: `panel decide approve-box${elig.ok ? '' : ' blocked'}` },
+      h('div', { class: 'row' }, h('h3', { text: 'Your decision' }), h('span', { class: 'spacer' }), clock),
+      elig.ok
+        ? h('div', { class: 'checklist' }, h('div', {}, icon('check'), ' exact SQL shown (left)'), h('div', {}, icon('check'), ' rehearsal measured on a disposable copy'), h('div', {}, icon('check'), ' files unchanged since the request'))
+        : h('div', { class: 'banner bad' }, h('div', {}, h('strong', { text: 'Approve is not offered' }), h('ul', { class: 'why' }, elig.reasons.map((x) => h('li', { text: x }))))),
+      h('label', { class: 'check', for: 'reviewed' }, reviewed, h('span', {}, 'I reviewed the SQL and the measured rehearsal diff ', h('code', { class: 'mono', text: `(${r.plan_id})` }))),
+      h('label', { for: 'passphrase' }, 'Approver passphrase', h('span', { class: 'pass-wrap' }, pass, eye)),
+      h('div', { class: 'row' }, approve, h('span', { class: 'muted', text: 'Enter also approves' })),
+      msg,
+      h('details', { class: 'how' }, h('summary', { text: 'How approval is signed' }),
+        h('p', { class: 'muted', text: 'The passphrase goes to `justrunme approve --passphrase-stdin` in a separate process; this page and the Console server never hold the approver key. The CLI checks again that the request is pending and unexpired, the files are unchanged, the rehearsal was SAFE and the database still matches the rehearsed fingerprint, then signs the authorization with the approver key. A request can be approved once.' }),
+        howRecorded(r, null))),
+    h('section', { class: 'panel decide reject-box' }, h('h3', { text: 'Reject' }), h('p', { class: 'muted', text: 'Needs a reason, no passphrase. A rejected request cannot be approved later.' }),
+      h('label', { for: 'reason' }, 'Reason', reason), h('div', { class: 'row' }, deny), denyMsg))
 }
 
-function outcome(out) {
-  const problem = cliProblem(out)
-  if (problem) return h('div', { class: 'banner bad', text: problem })
+/**
+ * Keep the outcome of Approve, Reject or Undo in ctx.ui.notice so it survives ctx.reload()
+ * (which rebuilds the whole view). It is cleared by its dismiss button or a mission switch.
+ * The receipt shown is the one the CLI returned; when it returns none, the newest receipt
+ * of the reloaded chain is shown with its kind, so the operator sees what it is.
+ */
+export function setNotice(ctx, mission, tone, out) {
+  ctx.ui.notice = { mission, tone, text: outcomeText(out), command: out.command, receipt_hash: out.result?.receipt_hash ?? null }
+}
+
+/** @returns {HTMLElement | null} the persistent confirmation, or null when none applies to this mission. */
+export function noticeBar(notice, state, ctx, mission) {
+  if (!notice || notice.mission !== mission) return null
+  const tl = state?.story?.result?.timeline ?? []
+  const last = tl.length ? tl[tl.length - 1] : null
+  const hash = notice.receipt_hash ?? last?.hash ?? null
+  const seq = notice.receipt_hash ? tl.find((x) => x.hash === notice.receipt_hash)?.seq : last?.seq
+  const dismiss = h('button', { class: 'ghost dismiss', type: 'button', 'aria-label': 'Dismiss this confirmation', text: 'Dismiss' })
+  dismiss.addEventListener('click', () => {
+    ctx.ui.notice = null
+    ctx.rerender?.()
+  })
+  return h('div', { class: `notice ${notice.tone === 'good' ? 'good' : 'bad'} pop`, role: 'status', 'aria-live': 'polite' },
+    icon(notice.tone === 'good' ? 'check' : 'alert'),
+    h('div', { class: 'notice-body' },
+      h('div', { text: notice.text }),
+      hash
+        ? h('div', { class: 'row' }, h('span', { class: 'muted', text: `signed receipt${seq === undefined || seq === null ? '' : ` #${seq}`}${notice.receipt_hash ? '' : ' (newest in the chain)'}` }), hashChip(hash, 16), h('a', { href: `#/missions/${encodeURIComponent(mission)}`, text: 'Open in the Flight Recorder' }))
+        : h('div', { class: 'muted', text: 'No signed receipt was returned for this action.' })),
+    dismiss)
+}
+
+function outcomeText(out) {
   const r = out.result ?? {}
-  if (out.command === 'approve') return h('div', { class: 'banner good', text: `Approved ${r.request_id} for ${r.plan_id}; authorization expires ${fmtTime(r.expires_at)}; passphrase ${passphraseWords(r.passphrase_source)}.` })
-  if (out.command === 'deny') return h('div', { class: 'banner good', text: `Rejected ${r.request_id}.` })
-  if (out.command === 'undo') return h('div', { class: r.status === 'RECOVERED' ? 'banner good' : 'banner bad', text: `Undo ${r.capture_id}: ${r.status}; recovery check ${r.verification?.status ?? '—'}.` })
-  return h('pre', { class: 'sql', text: JSON.stringify(r, null, 2) })
+  if (out.command === 'approve') return `Approved ${r.request_id} for ${r.plan_id}; authorization expires ${fmtTime(r.expires_at)}; passphrase ${passphraseWords(r.passphrase_source)}.`
+  if (out.command === 'deny') return `Rejected ${r.request_id}.`
+  if (out.command === 'undo') return `Undo ${r.capture_id}: ${r.status}; recovery check ${r.verification?.status ?? '—'}.`
+  return 'Done.'
 }
 
 // ---- Recovery & Replay and the receipt chain ----------------------------------------
@@ -383,7 +613,7 @@ function receiptChain(s, ctx) {
       r.hash ? h('button', { type: 'button', class: 'ghost', text: 'Details', onClick: async () => {
         open.replaceChildren(stateBox('loading', 'Reading the receipt…', ''))
         const out = await ctx.api(`/api/receipt/${r.seq}`).catch((err) => ({ ok: false, error: { code: 'ERROR', message: err.message } }))
-        open.replaceChildren(h('pre', { class: 'sql', text: JSON.stringify(out.result ?? out.error, null, 2) }))
+        open.replaceChildren(sqlView(JSON.stringify(out.result ?? out.error, null, 2), { title: `Receipt #${r.seq}`, sub: r.kind }))
       } }) : h('span')))),
     open)
 }
@@ -406,21 +636,44 @@ function runsTable(runs, ctx) {
 
 function undoForm(r, ctx) {
   if (!r.capture_id) return h('span', { class: 'muted', text: '—' })
-  const input = h('input', { autocomplete: 'off', spellcheck: 'false', placeholder: 'type the capture id', 'aria-label': `Type ${r.capture_id} to confirm the undo` })
-  const btn = h('button', { class: 'undo', type: 'button', text: 'Undo' })
-  const result = h('div', { 'aria-live': 'polite' })
-  btn.addEventListener('click', async () => {
-    btn.disabled = true
-    result.replaceChildren(h('span', { class: 'muted', text: 'Restoring…' }))
-    try {
-      const out = await ctx.api('/api/undo', { method: 'POST', body: { capture_id: r.capture_id, confirm: input.value.trim() } })
-      result.replaceChildren(outcome(out))
-      await ctx.reload()
-    } catch (e) {
-      result.replaceChildren(h('div', { class: 'banner bad', text: e.message }))
-    } finally {
-      btn.disabled = false
-    }
+  // Two clicks: "Undo Mission", then "Confirm Undo <capture id>". The second sends the capture id as the confirmation.
+  const box = h('div', { class: 'undo-box' })
+  const result = h('div', { class: 'inline-msg', 'aria-live': 'polite' })
+  const first = h('button', { class: 'undo', type: 'button', text: 'Undo Mission' })
+  const show = (...kids) => box.replaceChildren(...kids, result)
+  first.addEventListener('click', () => {
+    const confirm = h('button', { class: 'undo confirm', type: 'button' }, 'Confirm Undo ', h('code', { class: 'mono', text: r.capture_id }))
+    const cancel = h('button', { class: 'ghost', type: 'button', text: 'Cancel' })
+    cancel.addEventListener('click', () => {
+      result.replaceChildren()
+      show(first)
+    })
+    confirm.addEventListener('click', async () => {
+      if (ctx.ui.submitting) return
+      ctx.ui.submitting = true
+      confirm.disabled = true
+      cancel.disabled = true
+      result.replaceChildren(h('span', { class: 'muted working', text: 'Restoring the captured state, then running the recovery verification' }))
+      try {
+        const out = await ctx.api('/api/undo', { method: 'POST', body: { capture_id: r.capture_id, confirm: r.capture_id } })
+        const bad = cliProblem(out)
+        // RECOVERED · VERIFIED is shown only from the verification the CLI returned, never from "no error".
+        const st = out.result?.status
+        const vs = out.result?.verification?.status
+        result.replaceChildren(bad ? h('div', { class: 'banner bad shake', text: bad }) : h('div', { class: st === 'RECOVERED' && vs === 'PASS' ? 'banner good pop' : 'banner bad shake', text: outcomeText(out) }))
+        if (!bad) setNotice(ctx, ctx.mission ?? out.result?.mission_id, st === 'RECOVERED' && vs === 'PASS' ? 'good' : 'bad', out)
+        ctx.ui.submitting = false
+        await ctx.reload()
+      } catch (e) {
+        result.replaceChildren(h('div', { class: 'banner bad shake', text: e.message }))
+        confirm.disabled = false
+        cancel.disabled = false
+      } finally {
+        ctx.ui.submitting = false
+      }
+    })
+    show(h('div', { class: 'row' }, confirm, cancel), h('p', { class: 'muted', text: `Restores what capture ${r.capture_id} recorded before run #${r.seq}: the tracked files, the Postgres databases, the config files and the container images named in the contract; then runs the recovery verification. Writes made to these after the run are discarded. Not undone: network calls, emails, payments or any other external side effect.` }))
   })
-  return h('div', {}, h('div', { class: 'row' }, input, btn), result)
+  show(first)
+  return box
 }

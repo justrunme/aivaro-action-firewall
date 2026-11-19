@@ -12,9 +12,16 @@
  * argv or in the environment, and this process never opens the approver key. The
  * child's environment has JUSTRUNME_APPROVER_PASSPHRASE removed, so an approval made
  * here is recorded with passphrase_source "stdin", never "env".
+ *
+ * Several missions: every directory under .justrunme/missions/ whose name is a valid
+ * mission id is one mission of this workspace (`missions()`). A call may name one of
+ * them; the name is checked against that list and the mission-id pattern before it is
+ * passed on as `--mission <id>`, so a request can never point the CLI anywhere else.
  */
 
 import { spawn } from 'node:child_process'
+import { existsSync, readdirSync } from 'node:fs'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main } from '../cli/index.js'
 
@@ -25,6 +32,8 @@ const REQUEST_ID_RE = /^apr-[0-9a-f]{16}$/
 const PLAN_ID_RE = /^plan-[0-9a-f]{12}$/
 const CAPTURE_RE = /^cap-\d{14}-[0-9a-f]{6}$/
 const SEQ_RE = /^\d{1,9}$/
+// The same pattern the CLI and the receipt chain use for mission ids.
+export const MISSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/
 const MAX_PASSPHRASE = 1024
 const MAX_REASON = 300
 
@@ -46,14 +55,31 @@ export function readArgv(command, args, scope) {
   return [command, ...args, ...scope]
 }
 
+/** Mission ids of a workspace: the valid directory names under .justrunme/missions/, sorted. */
+export function listMissions(repoDir) {
+  const dir = path.join(repoDir, '.justrunme', 'missions')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && MISSION_RE.test(e.name))
+    .map((e) => ({ mission_id: e.name, has_receipts: existsSync(path.join(dir, e.name, 'receipts.jsonl')) }))
+    .sort((a, b) => a.mission_id.localeCompare(b.mission_id))
+}
+
 /**
  * @param {{ repoDir: string, mission?: string, cliPath?: string, env?: NodeJS.ProcessEnv, runMain?: typeof main }} cfg
  */
 export function createApi({ repoDir, mission, cliPath = CLI, env = process.env, runMain = main }) {
-  const scope = ['--repo', repoDir, ...(mission ? ['--mission', mission] : [])]
+  /** The mission a call names: the fixed one of this Console, or one of the workspace's missions. */
+  function missionOf(asked) {
+    if (asked === undefined || asked === null || asked === '') return mission ?? null
+    if (typeof asked !== 'string' || !MISSION_RE.test(asked)) throw new InputError('MISSION_INVALID', 'mission must be a mission id')
+    if (asked !== mission && !listMissions(repoDir).some((m) => m.mission_id === asked)) throw new InputError('MISSION_UNKNOWN', 'no such mission in this workspace')
+    return asked
+  }
+  const scopeOf = (m) => ['--repo', repoDir, ...(m ? ['--mission', m] : [])]
 
-  async function read(command, ...args) {
-    const { output } = await runMain(readArgv(command, args, scope))
+  async function read(m, command, ...args) {
+    const { output } = await runMain(readArgv(command, args, scopeOf(m)))
     return output
   }
 
@@ -64,9 +90,9 @@ export function createApi({ repoDir, mission, cliPath = CLI, env = process.env, 
     return e
   }
 
-  function runChild(args, { stdin = null, timeoutMs }) {
+  function runChild(m, args, { stdin = null, timeoutMs }) {
     return new Promise((resolve) => {
-      const child = spawn(process.execPath, [cliPath, ...args, ...scope], { env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
+      const child = spawn(process.execPath, [cliPath, ...args, ...scopeOf(m)], { env: childEnv(), stdio: ['pipe', 'pipe', 'pipe'] })
       const out = []
       let size = 0
       const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs)
@@ -92,50 +118,62 @@ export function createApi({ repoDir, mission, cliPath = CLI, env = process.env, 
   }
 
   return {
-    /** Everything the Missions, Impact Diff and Recovery screens show. */
-    async state() {
-      const [story, verify, approvals, status] = await Promise.all([read('history'), read('verify'), read('approvals'), read('status')])
-      return { story, verify, approvals, status }
+    /**
+     * The missions of this workspace. `default` is the mission a call without one reads:
+     * the Console's fixed mission, else (null) the one the contract file names.
+     */
+    missions() {
+      const list = listMissions(repoDir)
+      if (mission && !list.some((m) => m.mission_id === mission)) list.unshift({ mission_id: mission, has_receipts: false })
+      return { ok: true, default: mission ?? null, missions: list }
     },
 
-    async approval(id) {
+    /** Everything the Missions, Impact Diff and Recovery screens show, for one mission. */
+    async state(asked) {
+      const m = missionOf(asked)
+      const [story, verify, approvals, status] = await Promise.all([read(m, 'history'), read(m, 'verify'), read(m, 'approvals'), read(m, 'status')])
+      return { mission: m, story, verify, approvals, status }
+    },
+
+    async approval(id, asked) {
       if (!REQUEST_ID_RE.test(id ?? '')) throw new InputError('REQUEST_INVALID', 'request id must look like apr-<16 hex>')
-      return read('approvals', id)
+      return read(missionOf(asked), 'approvals', id)
     },
 
-    async receipt(seq) {
+    async receipt(seq, asked) {
       if (!SEQ_RE.test(seq ?? '')) throw new InputError('INVALID_SEQ', 'seq must be a number')
-      return read('receipt', '--seq', seq)
+      return read(missionOf(asked), 'receipt', '--seq', seq)
     },
 
-    async replay() {
-      return read('replay')
+    async replay(asked) {
+      return read(missionOf(asked), 'replay')
     },
 
-    async approve({ request_id, confirm, passphrase } = {}) {
+    async approve({ request_id, confirm, passphrase, mission: asked } = {}) {
       if (!REQUEST_ID_RE.test(request_id ?? '')) throw new InputError('REQUEST_INVALID', 'request id must look like apr-<16 hex>')
-      if (!PLAN_ID_RE.test(confirm ?? '')) throw new InputError('CONFIRMATION_REQUIRED', 'type the plan id of the request (plan-<12 hex>) to confirm')
+      if (!PLAN_ID_RE.test(confirm ?? '')) throw new InputError('CONFIRMATION_REQUIRED', 'confirm that you reviewed the plan (its plan id, plan-<12 hex>)')
       if (typeof passphrase !== 'string' || passphrase.length === 0 || passphrase.length > MAX_PASSPHRASE || /[\r\n]/.test(passphrase)) {
         throw new InputError('PASSPHRASE_REQUIRED', 'the approver passphrase is required (one line)')
       }
-      const out = await runChild(['approve', request_id, '--confirm', confirm, '--passphrase-stdin'], { stdin: passphrase, timeoutMs: 180_000 })
+      const m = missionOf(asked)
+      const out = await runChild(m, ['approve', request_id, '--confirm', confirm, '--passphrase-stdin'], { stdin: passphrase, timeoutMs: 180_000 })
       // The CLI never prints the passphrase; this keeps it out of the response even if that changed.
       const text = JSON.stringify(out)
       const needle = JSON.stringify(passphrase).slice(1, -1)
       return needle.length >= 4 && text.includes(needle) ? JSON.parse(text.split(needle).join('[redacted]')) : out
     },
 
-    async deny({ request_id, reason } = {}) {
+    async deny({ request_id, reason, mission: asked } = {}) {
       if (!REQUEST_ID_RE.test(request_id ?? '')) throw new InputError('REQUEST_INVALID', 'request id must look like apr-<16 hex>')
       if (typeof reason !== 'string' || reason.trim().length < 3 || reason.length > MAX_REASON) throw new InputError('REASON_REQUIRED', `a reason of 3 to ${MAX_REASON} characters is required`)
       // `--reason=<text>`: a reason that starts with "-" stays the reason, never an option.
-      return runChild(['deny', request_id, `--reason=${reason.trim()}`], { timeoutMs: 60_000 })
+      return runChild(missionOf(asked), ['deny', request_id, `--reason=${reason.trim()}`], { timeoutMs: 60_000 })
     },
 
-    async undo({ capture_id, confirm } = {}) {
+    async undo({ capture_id, confirm, mission: asked } = {}) {
       if (!CAPTURE_RE.test(capture_id ?? '')) throw new InputError('INVALID_CAPTURE_ID', 'capture id must look like cap-<14 digits>-<6 hex>')
-      if (confirm !== capture_id) throw new InputError('CONFIRMATION_REQUIRED', 'type the capture id again to confirm the undo')
-      return runChild(['undo', capture_id], { timeoutMs: 600_000 })
+      if (confirm !== capture_id) throw new InputError('CONFIRMATION_REQUIRED', 'confirm the undo of this capture')
+      return runChild(missionOf(asked), ['undo', capture_id], { timeoutMs: 600_000 })
     },
   }
 }

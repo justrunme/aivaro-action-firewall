@@ -1,9 +1,9 @@
-// Console shell: token, API calls, routing, refresh.
+// Console shell: token, API calls, routing, refresh, and the missions of the workspace.
 // The token arrives in the URL fragment (#token=...), is kept in sessionStorage for
 // this tab only, and is removed from the address bar at once.
 
 import { badge, h, stateBox } from './ui.js'
-import { approvalsScreen, impactScreen, missionsScreen, recoveryScreen } from './screens.js'
+import { approvalsScreen, impactScreen, missionsScreen, noticeBar, recoveryScreen } from './screens.js'
 
 const SCREENS = { missions: missionsScreen, impact: impactScreen, approvals: approvalsScreen, recovery: recoveryScreen }
 const KEY = 'justrunme-console-token'
@@ -18,7 +18,7 @@ if (fromHash) {
 }
 const token = sessionStorage.getItem(KEY)
 
-async function api(path, { method = 'GET', body } = {}) {
+async function raw(path, { method = 'GET', body } = {}) {
   const res = await fetch(path, {
     method,
     headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
@@ -32,8 +32,11 @@ async function api(path, { method = 'GET', body } = {}) {
 
 const view = document.getElementById('view')
 const chainstate = document.getElementById('chainstate')
+const picker = document.getElementById('missionpick')
 const ui = {}
-let state = null
+let missions = [] // [{ mission_id, has_receipts }]
+let states = {} // mission id -> state
+let fallback = null // the state read without a mission (no mission directory yet)
 let lastText = ''
 
 /** #/<screen>[/<arg>[/<sub>]]: for Missions, arg is the mission id and sub is a Flight Recorder node. */
@@ -41,9 +44,27 @@ const routeOf = () => {
   const m = /^#\/(\w+)(?:\/([\w.-]+))?(?:\/(\w+))?/.exec(location.hash)
   return m && SCREENS[m[1]] ? { screen: m[1], arg: m[2] ?? null, sub: m[3] ?? null } : { screen: 'missions', arg: null, sub: null }
 }
-const screenName = () => routeOf().screen
 
-function renderChainState() {
+const pendingOf = (st) => st?.approvals?.result?.requests?.filter((q) => q.state === 'pending').length ?? 0
+
+/** The mission the other screens show: the opened one, the picked one, one waiting for approval, or the first. */
+function current() {
+  const r = routeOf()
+  const ids = missions.map((m) => m.mission_id)
+  if (r.screen === 'missions' && r.arg && ids.includes(r.arg)) ui.mission = r.arg
+  if (ui.mission && ids.includes(ui.mission)) return ui.mission
+  return ids.find((id) => pendingOf(states[id]) > 0) ?? ids.find((id) => states[id]?.story?.ok) ?? ids[0] ?? null
+}
+
+/** The API, scoped to the current mission: GET with ?mission=, POST with { mission }. */
+function api(path, opts = {}) {
+  const m = current()
+  if (!m) return raw(path, opts)
+  if (opts.body) return raw(path, { ...opts, body: { ...opts.body, mission: m } })
+  return raw(`${path}${path.includes('?') ? '&' : '?'}mission=${encodeURIComponent(m)}`, opts)
+}
+
+function renderChainState(state) {
   const v = state?.verify
   const s = state?.story?.result
   const pills = []
@@ -54,49 +75,84 @@ function renderChainState() {
     if (chainOk && other > 0) pills.push(h('a', { href: '#/recovery', class: 'pill bad', text: `${other} policy finding${other === 1 ? '' : 's'}` }))
   } else if (v?.error) pills.push(badge(v.error.code, 'mute'))
   if (s?.history) pills.push(badge(s.history.ok ? 'history intact' : 'history altered', s.history.ok ? 'ok' : 'bad', s.history.ok ? 'check' : 'cross'))
-  const pending = state?.approvals?.result?.requests?.filter((q) => q.state === 'pending').length ?? 0
-  if (pending > 0) pills.push(h('a', { href: '#/approvals', class: 'pill warn', text: `${pending} awaiting approval` }))
+  const pending = missions.reduce((n, m) => n + pendingOf(states[m.mission_id]), 0)
+  if (pending > 0) pills.push(h('a', { href: '#/approvals', class: 'pill warn pulse', text: `${pending} awaiting approval` }))
   chainstate.replaceChildren(...pills)
 }
 
+function renderPicker(cur) {
+  if (!picker) return
+  picker.parentElement.hidden = missions.length < 2
+  picker.replaceChildren(...missions.map((m) => h('option', { value: m.mission_id, selected: m.mission_id === cur, text: `${m.mission_id}${pendingOf(states[m.mission_id]) ? ' · needs approval' : ''}` })))
+}
+
 function render() {
-  const name = screenName()
-  for (const a of document.querySelectorAll('.tabs a')) a.classList.toggle('active', a.dataset.screen === name)
+  const r = routeOf()
+  for (const a of document.querySelectorAll('.tabs a')) a.classList.toggle('active', a.dataset.screen === r.screen)
   if (!token) {
     view.replaceChildren(stateBox('empty', 'No console token', 'Open the URL that `justrunme console` printed; it carries the token for this session.'))
     return
   }
+  const cur = current()
+  const state = cur ? states[cur] : fallback
   if (!state) return
-  renderChainState()
-  view.replaceChildren(SCREENS[name](state, { api, reload, rerender: render, ui, route: routeOf() }))
+  renderChainState(state)
+  renderPicker(cur)
+  const all = missions.map((m) => ({ mission_id: m.mission_id, state: states[m.mission_id] })).filter((m) => m.state)
+  if (ui.notice && ui.notice.mission !== cur) ui.notice = null // a mission switch ends the confirmation
+  const ctx = { api, reload, rerender: render, ui, route: r, all, mission: cur }
+  const note = noticeBar(ui.notice, state, ctx, cur)
+  view.replaceChildren(...(note ? [note] : []), SCREENS[r.screen](state, ctx))
+}
+
+async function readAll() {
+  const list = await raw('/api/missions')
+  const next = {}
+  const ids = list.missions.map((m) => m.mission_id)
+  await Promise.all(ids.map(async (id) => {
+    next[id] = await raw(`/api/state?mission=${encodeURIComponent(id)}`)
+  }))
+  return { list: list.missions, next, single: ids.length === 0 ? await raw('/api/state') : null }
 }
 
 async function reload() {
   try {
-    state = await api('/api/state')
-    lastText = JSON.stringify(state)
+    const got = await readAll()
+    missions = got.list
+    states = got.next
+    fallback = got.single
+    lastText = JSON.stringify(got)
   } catch (e) {
     const retry = h('button', { type: 'button', text: 'Try again' })
     retry.addEventListener('click', () => {
-      view.replaceChildren(stateBox('loading', 'Loading…', 'Reading the mission from the signed chain.'))
+      view.replaceChildren(stateBox('loading', 'Loading…', 'Reading the missions from the signed chain.'))
       reload()
     })
-    view.replaceChildren(stateBox('error', 'The Console cannot read the mission', e.message, retry))
+    view.replaceChildren(stateBox('error', 'The Console cannot read the missions', e.message, retry))
     return
   }
   render()
 }
 
-/** Refresh when the chain changed, unless the operator is typing. */
+/**
+ * Refresh when a chain changed. While the operator is typing, only a change of the mission on
+ * screen re-renders it (a new request, report or state must reset the review box); never while
+ * an approve, deny or undo is being submitted.
+ */
 async function poll() {
-  if (document.hidden || !token) return
-  const typing = [...view.querySelectorAll('input, textarea')].some((el) => el.value !== '' || el === document.activeElement)
-  if (typing) return
+  if (document.hidden || !token || ui.submitting) return
+  const typing = [...view.querySelectorAll('input, textarea')].some((el) => (el.type === 'checkbox' ? el.checked : el.value !== '') || el === document.activeElement)
   try {
-    const next = await api('/api/state')
-    const text = JSON.stringify(next)
+    const got = await readAll()
+    const text = JSON.stringify(got)
+    const cur = current()
+    const mine = (x) => JSON.stringify([x?.story, x?.approvals])
+    if (typing && mine(got.next[cur]) === mine(states[cur])) return
+    if (ui.submitting) return
     if (text !== lastText) {
-      state = next
+      missions = got.list
+      states = got.next
+      fallback = got.single
       lastText = text
       render()
     }
@@ -105,6 +161,27 @@ async function poll() {
   }
 }
 
+// Keys 1 to 4 open the four screens; Escape closes a SQL panel shown over the full width.
+const ORDER = ['missions', 'impact', 'approvals', 'recovery']
+document.addEventListener('keydown', (e) => {
+  const t = e.target
+  if (e.key === 'Escape') {
+    for (const p of document.querySelectorAll('.sqlpanel.expanded')) {
+      p.classList.remove('expanded')
+      p.querySelector('[aria-pressed="true"][aria-label^="Show this SQL"]')?.setAttribute('aria-pressed', 'false')
+    }
+    return
+  }
+  if (e.altKey || e.ctrlKey || e.metaKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t?.tagName ?? '') || t?.isContentEditable) return
+  const n = Number(e.key)
+  if (n >= 1 && n <= 4) location.hash = `#/${ORDER[n - 1]}`
+})
+
+picker?.addEventListener('change', (e) => {
+  ui.mission = e.target.value
+  if (routeOf().screen === 'missions' && routeOf().arg) location.hash = `#/missions/${ui.mission}`
+  else render()
+})
 window.addEventListener('hashchange', () => {
   view.focus({ preventScroll: true })
   render()

@@ -17,7 +17,10 @@
         <p class="tag">AI agents can write code. JustRunMe proves what happens when they run it.</p>
       </div>
     </div>
-    <div class="chainstate" id="chainstate" aria-live="polite"></div>
+    <div class="side">
+      <label class="mission-pick" hidden>Mission <select id="missionpick" aria-label="Mission shown on Impact Diff, Approval Center and Recovery"></select></label>
+      <div class="chainstate" id="chainstate" aria-live="polite"></div>
+    </div>
     <nav class="tabs" aria-label="Screens">
       <a href="#/missions" data-screen="missions">Missions</a>
       <a href="#/impact" data-screen="impact">Impact Diff</a>
@@ -26,10 +29,10 @@
     </nav>
   </header>
   <main id="view" tabindex="-1">
-    <div class="statebox loading" role="status"><h2>Loading&hellip;</h2><p>Reading the mission from the signed receipt chain.</p></div>
+    <div class="statebox loading" role="status"><h2>Loading&hellip;</h2><p>Reading the missions from the signed receipt chains.</p></div>
   </main>
   <footer class="foot">
-    Local console on 127.0.0.1. Everything shown is read from the signed receipt chain and the plan history; approvals go through the <code>justrunme approve</code> command.
+    Local console on 127.0.0.1. Everything shown is read from the signed receipt chains and the plan history of this workspace; approvals go through the <code>justrunme approve</code> command.
   </footer>
 </body>
 </html>

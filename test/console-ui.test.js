@@ -96,12 +96,12 @@ describe('Console screens render demo data (T28)', () => {
     const { missionsScreen } = await screens()
     const root = missionsScreen(state, ctxOf())
     const t = text(root)
-    assert.ok(t.includes(MISSION) && t.includes('PROVEN'))
-    for (const beat of ['Plan proposed', 'JustRunMe rehearsed', 'Blocked, then repaired', 'Proven']) assert.ok(t.includes(beat), beat)
+    assert.ok(t.includes(MISSION) && t.includes('COMPLETED · VERIFIED'))
+    for (const beat of ['Plan proposed', 'JustRunMe rehearsed', 'Blocked, then repaired', 'COMPLETED · VERIFIED']) assert.ok(t.includes(beat), beat)
     assert.ok(t.includes('orders 3 → 2') && t.includes('1 protected row lost'), 'the measured loss is shown')
     assert.ok(t.includes('last step: #4 run_result · completed') && t.includes('2026-11-18 12:00:04Z'))
     assert.equal(findAll(root, (e) => e.tag === 'a' && e.attrs.href === `#/missions/${MISSION}`).length, 1)
-    for (const label of ['SAFE · VERIFIED', 'NEEDS APPROVAL', 'DENIED', 'REPAIRED', 'UNVERIFIABLE']) assert.ok(t.includes(label), label)
+    for (const label of ['SAFE · VERIFIED · RECOVERED', 'NEEDS APPROVAL · CONFLICT', 'DATA LOSS · LOGIC BYPASS', 'REPAIRED', 'UNVERIFIABLE']) assert.ok(t.includes(label), label)
   })
 
   it('Flight Recorder: seven nodes in order, each a link; the selected one shows SQL, rows lost, receipt hash and signature', async () => {
@@ -124,7 +124,7 @@ describe('Console screens render demo data (T28)', () => {
     const sparks = findAll(root, (e) => hasClass(e, 'spark'))
     assert.equal(sparks.length, 1, 'one spark, on VERIFIED')
     const fixed = missionsScreen(state, ctxOf({ screen: 'missions', arg: MISSION, sub: 'repaired' }))
-    assert.ok(findAll(fixed, (e) => hasClass(e, 'diff')).length === 1)
+    assert.ok(findAll(fixed, (e) => hasClass(e, 'sqlpanel') && hasClass(e, 'compare')).length === 1, 'the repaired node compares the two plans')
     // The approval node says how the passphrase was given: this fixture used the environment.
     const appr = text(missionsScreen(state, ctxOf({ screen: 'missions', arg: MISSION, sub: 'approved' })))
     assert.ok(appr.includes('SCRIPTED') && appr.includes('not a person at a keyboard'))
@@ -162,7 +162,7 @@ describe('Console screens render demo data (T28)', () => {
     assert.ok(text(withJrm).includes('3 → 3'))
     const c = counterfactual(state.story.result)
     assert.deepEqual([c.without.tables[0].lost, c.with.tables[0].lost, c.with.ran, c.with.matched], [1, 0, true, true])
-    assert.ok(findAll(root, (e) => hasClass(e, 'diff')).length === 1 && t.includes('Plan against plan'))
+    assert.ok(findAll(root, (e) => hasClass(e, 'sqlpanel') && hasClass(e, 'compare')).length === 1 && t.includes('Plan against plan'))
   })
 
   it('Approval Center: risk verdict, SQL, Approve and Reject for a pending request; the source for an approved one', async () => {
@@ -184,7 +184,7 @@ describe('Console screens render demo data (T28)', () => {
     assert.ok(text(root).includes('Loading the request'), 'loading state while the request is read')
     await tick()
     const t = text(root)
-    assert.ok(t.includes('RISK VERDICT') && t.includes('SAFE') && t.includes('0 rows deleted in rehearsal'))
+    assert.ok(t.includes('SAFE · READY FOR YOUR DECISION') && t.includes('0 rows deleted in rehearsal'))
     assert.ok(t.includes('Approve this plan') && t.includes('Reject') && t.includes('ALTER TABLE patches ADD COLUMN sold_out'))
     assert.ok(t.includes('records the passphrase source "stdin"') && t.includes('SCRIPTED'), 'scripted against human is explained')
     assert.ok(t.includes('written by the agent; not verified'))
@@ -215,6 +215,89 @@ describe('Console screens render demo data (T28)', () => {
     assert.ok(text(bt).includes('signature does not verify') && findAll(bt, (e) => hasClass(e, 'sig') && hasClass(e, 'n')).length === 1)
     assert.equal(missionVerdict(broken.story.result).label, 'UNVERIFIABLE')
     assert.deepEqual(receiptRows(broken.story.result).map((r) => [r.seq, r.sig]), [[2, false]])
+  })
+})
+
+describe('Console confirmation survives the reload (round 3)', () => {
+  const REQ = 'apr-00000000000000b2'
+  const PLAN_ID = 'plan-0123456789ab'
+  const SQL_TEXT = 'SELECT 1;\n'
+  const pending = () => ({
+    ...state,
+    approvals: { ok: true, result: { requests: [{ request_id: REQ, plan_id: PLAN_ID, state: 'pending', requested_at: new Date().toISOString(), expires_at: new Date(Date.now() + 1800_000).toISOString() }] } },
+  })
+  const detail = {
+    ok: true, command: 'approvals',
+    result: {
+      request_id: REQ, plan_id: PLAN_ID, state: 'pending', expires_at: new Date(Date.now() + 1800_000).toISOString(), agent_note: '', agent_note_is: 'written by the agent; not verified',
+      files: [{ path: 'demo/migrations/004.sql', sql: SQL_TEXT, matches_now: true }],
+      report: { valid: true, verdict: 'SAFE', rows_deleted: 0, tables: { orders: { protected: true, rows_before: 3, rows_after: 3, rows_lost: 0 } }, schema_delta: { added_columns: [], removed_columns: [], removed_tables: [] } },
+    },
+  }
+  const txt = (n) => n.textContent.replace(/\s+/g, ' ')
+  const fire = (el, type, ev = {}) => Promise.all((el.listeners[type] ?? []).map((fn) => fn({ preventDefault() {}, target: el, ...ev })))
+  const tickOnce = () => new Promise((r) => setTimeout(r, 0))
+
+  it('Approve keeps a notice in ctx.ui.notice; it shows after the reload with the receipt, a Flight Recorder link and a dismiss button', async () => {
+    const { approvalsScreen, noticeBar } = await screens()
+    const HASH = 'ab'.repeat(32)
+    const ctx = { ui: {}, mission: MISSION, route: { screen: 'approvals' }, rerender: () => {}, api: null, reload: null }
+    const posted = []
+    ctx.api = async (p, o) => (o?.method === 'POST' ? (posted.push([p, o.body]), { ok: true, command: 'approve', result: { request_id: REQ, plan_id: PLAN_ID, expires_at: new Date().toISOString(), passphrase_source: 'stdin', receipt_hash: HASH } }) : detail)
+    let afterReload = null
+    ctx.reload = async () => {
+      // what app.js render() does: the view is rebuilt, the notice comes from ctx.ui
+      afterReload = noticeBar(ctx.ui.notice, state, ctx, MISSION)
+    }
+    const root = approvalsScreen(pending(), ctx)
+    await tickOnce()
+    await tickOnce()
+    const box = findAll(root, (e) => e.attrs.id === 'reviewed')[0]
+    const pass = findAll(root, (e) => e.attrs.id === 'passphrase')[0]
+    box.checked = true
+    await fire(box, 'change')
+    pass.value = 'demo-only passphrase'
+    await fire(pass, 'input')
+    // duplicate submit: two Enter presses at once send one request
+    await Promise.all([fire(pass, 'keydown', { key: 'Enter' }), fire(pass, 'keydown', { key: 'Enter' })])
+    assert.equal(posted.length, 1, 'one POST only')
+    assert.equal(posted[0][1].confirm, PLAN_ID)
+    assert.ok(ctx.ui.notice && ctx.ui.notice.tone === 'good' && ctx.ui.notice.mission === MISSION)
+    assert.ok(afterReload, 'the notice is built after the reload')
+    const t = txt(afterReload)
+    assert.ok(t.includes(`Approved ${REQ}`) && t.includes('signed receipt'), t)
+    assert.ok(findAll(afterReload, (e) => e.textContent.includes(HASH.slice(0, 8))).length > 0, 'the receipt hash is shown')
+    const link = findAll(afterReload, (e) => e.tag === 'a')[0]
+    assert.equal(link.attrs.href, `#/missions/${MISSION}`)
+    assert.ok(hasClass(afterReload, 'pop') && hasClass(afterReload, 'good'))
+    assert.equal(pass.value, '', 'the passphrase is not kept')
+    // dismiss clears it
+    let rerendered = 0
+    ctx.rerender = () => { rerendered += 1 }
+    const dismiss = findAll(afterReload, (e) => e.tag === 'button' && hasClass(e, 'dismiss'))[0]
+    await fire(dismiss, 'click')
+    assert.equal(ctx.ui.notice, null)
+    assert.equal(rerendered, 1)
+    // a fresh render of the approval screen starts with the box unticked and Approve disabled
+    const again = approvalsScreen(pending(), { ...ctx, ui: {} })
+    await tickOnce()
+    await tickOnce()
+    assert.ok(!findAll(again, (e) => e.attrs.id === 'reviewed')[0].checked, 'unticked after the reload')
+    assert.ok(findAll(again, (e) => e.tag === 'button' && hasClass(e, 'approve'))[0].attrs.disabled !== undefined)
+  })
+
+  it('a notice is shown only for its own mission, and a failure is not a notice', async () => {
+    const { noticeBar, setNotice } = await screens()
+    const ctx = { ui: {}, rerender: () => {} }
+    setNotice(ctx, MISSION, 'bad', { command: 'undo', result: { capture_id: 'cap-20261119120000-abcdef', status: 'FAILED', verification: { status: 'FAIL' } } })
+    assert.equal(noticeBar(ctx.ui.notice, state, ctx, 'another-mission'), null, 'other mission: nothing')
+    const bar = noticeBar(ctx.ui.notice, state, ctx, MISSION)
+    assert.ok(hasClass(bar, 'bad') && !hasClass(bar, 'good'), 'a failed undo is not drawn green')
+    assert.ok(txt(bar).includes('newest in the chain'), 'without a returned hash the newest receipt is labelled as such')
+    assert.equal(noticeBar(null, state, ctx, MISSION), null)
+    const css = readFileSync(path.join(STATIC_DIR, 'style.css'), 'utf8')
+    assert.match(css, /\.notice\.good\s*\{[^}]*box-shadow/)
+    assert.match(readFileSync(path.join(STATIC_DIR, 'app.js'), 'utf8'), /ui\.notice\.mission !== cur\) ui\.notice = null/)
   })
 })
 
@@ -253,8 +336,8 @@ describe('Console model (T28)', () => {
     assert.deepEqual(['SAFE', 'DATA LOSS', 'LOGIC CHANGE', 'pending', 'something-else'].map(toneOf), ['ok', 'bad', 'bad', 'warn', 'warn'])
     // T25 v2 verdicts: denials are red, an untrusted rehearsal is grey.
     assert.deepEqual(['LOGIC BYPASS', 'INVARIANT VIOLATED', 'REQUIREMENT UNMET', 'UNVERIFIABLE'].map(toneOf), ['bad', 'bad', 'bad', 'mute'])
-    assert.deepEqual(headline(state.story.result).map((b) => [b.step, b.tone]), [['Plan proposed', 'info'], ['JustRunMe rehearsed', 'bad'], ['Blocked, then repaired', 'fix'], ['Proven', 'ok']])
-    assert.deepEqual(missionVerdict(state.story.result), { label: 'PROVEN', tone: 'ok' })
+    assert.deepEqual(headline(state.story.result).map((b) => [b.step, b.tone]), [['Plan proposed', 'info'], ['JustRunMe rehearsed', 'bad'], ['Blocked, then repaired', 'fix'], ['COMPLETED · VERIFIED', 'ok']])
+    assert.deepEqual(missionVerdict(state.story.result), { label: 'COMPLETED · VERIFIED', tone: 'ok' })
     const pending = clone(state.story.result)
     pending.requests[0].state = 'pending'
     pending.runs = []
@@ -281,11 +364,22 @@ describe('Console look: contrast, offline, header (T28)', () => {
   it('every text and badge colour pair is at least 4.5:1 (WCAG AA)', () => {
     const pairs = []
     for (const bg of ['bg', 'panel', 'panel2', 'code']) for (const fg of ['text', 'muted', 'green', 'red', 'link']) pairs.push([fg, bg])
-    for (const tone of ['green', 'amber', 'red', 'violet', 'grey']) pairs.push(['ink', tone])
-    pairs.push(['text', 'neutral'], ['amber', 'panel'], ['violet', 'panel'], ['grey', 'bg'], ['ink', 'green'])
+    for (const bg of ['bg', 'panel', 'panel2', 'code']) for (const fg of ['amber', 'violet']) pairs.push([fg, bg])
+    for (const tone of ['green', 'amber', 'red', 'violet', 'grey', 'link']) pairs.push(['ink', tone])
+    pairs.push(['text', 'neutral'], ['grey', 'bg'], ['ink', 'green'])
     for (const [fg, bg] of pairs) assert.ok(ratio(vars[fg], vars[bg]) >= 4.5, `${fg} on ${bg}: ${ratio(vars[fg], vars[bg]).toFixed(2)}`)
-    assert.equal(vars.green.toLowerCase(), '#39ff88')
-    assert.equal(vars.bg.toLowerCase(), '#0d1117')
+    // The Kiro-native palette: obsidian base, violet-tinted surfaces, violet accent; emerald, amber, crimson for status.
+    assert.deepEqual([vars.bg, vars.bg2, vars.panel, vars.accent, vars.accent2, vars.violet], ['#0b0a10', '#13111c', '#1a1726', '#8b5cf6', '#9046ff', '#a78bfa'])
+    assert.deepEqual([vars.green, vars.amber, vars.red], ['#34d399', '#fbbf24', '#fb7185'])
+  })
+
+  it('motion is purposeful and switched off under prefers-reduced-motion', () => {
+    for (const k of ['@keyframes glow', '@keyframes grow', '@keyframes reveal', '@keyframes pop', '@keyframes shake']) assert.ok(css.includes(k), k)
+    assert.match(css, /\.node\.on \.disc \{ animation: glow/)
+    assert.match(css, /\.pill\.warn\.pulse/)
+    assert.match(css, /\.track \.fill \{ animation: grow/)
+    const reduced = /@media \(prefers-reduced-motion: reduce\) \{([^}]*\{[^}]*\})/.exec(css)
+    assert.ok(reduced && /animation: none !important/.test(reduced[1]) && /transition: none !important/.test(reduced[1]), 'all motion off')
   })
 
   it('the page and its scripts load nothing from outside: no URL, import or font file', () => {
