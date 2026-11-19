@@ -10,6 +10,7 @@
  *     cannot submit a form to it.
  * The static page holds no data; a strict Content-Security-Policy allows only our own
  * script and style. Writes are serialised: one approve, deny or undo at a time.
+ * One Console serves every mission of its workspace (GET /api/missions); a call names one.
  */
 
 import http from 'node:http'
@@ -82,9 +83,11 @@ export async function startConsole({ repoDir, mission, port = 0, token = randomB
   const hosts = () => new Set([`127.0.0.1:${actual}`, `localhost:${actual}`])
   const origins = () => new Set([`http://127.0.0.1:${actual}`, `http://localhost:${actual}`])
 
+  // GET routes take the mission from `?mission=<id>`; POST routes from the body. The API checks it.
   const routes = {
-    'GET /api/state': () => api.state(),
-    'GET /api/replay': () => api.replay(),
+    'GET /api/missions': () => api.missions(),
+    'GET /api/state': (q) => api.state(q.get('mission')),
+    'GET /api/replay': (q) => api.replay(q.get('mission')),
     'POST /api/approve': (body) => api.approve(body),
     'POST /api/deny': (body) => api.deny(body),
     'POST /api/undo': (body) => api.undo(body),
@@ -110,10 +113,11 @@ export async function startConsole({ repoDir, mission, port = 0, token = randomB
     }
 
     const one = /^\/api\/(approvals|receipt)\/([^/]+)$/.exec(url.pathname)
-    if (req.method === 'GET' && one) return send(res, 200, one[1] === 'approvals' ? await api.approval(one[2]) : await api.receipt(one[2]))
+    const q = url.searchParams
+    if (req.method === 'GET' && one) return send(res, 200, one[1] === 'approvals' ? await api.approval(one[2], q.get('mission')) : await api.receipt(one[2], q.get('mission')))
     const route = routes[`${req.method} ${url.pathname}`]
     if (!route) return fail(res, 404, 'NOT_FOUND', 'not found')
-    if (req.method === 'GET') return send(res, 200, await route())
+    if (req.method === 'GET') return send(res, 200, await route(q))
 
     let body
     try {
