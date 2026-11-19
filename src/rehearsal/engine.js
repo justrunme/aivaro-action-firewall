@@ -24,7 +24,7 @@ import { STATE_DIR } from '../fidelity/source.js'
 import { createWorkspaceCopy } from './workspace.js'
 import { assertIsolated, down, dump, psql, serverLog, up, writeNoPortsOverride } from './compose.js'
 import { CONFLICT_MESSAGE, checkRequirements, findConflict } from '../mission/requirements.js'
-import { comparableRole, createRoleSql, functionCalls, installObservers, judgeObservations, logMarker, missingKeys, observerState, planRoleOf, readObserverTables, recordsBetween } from './observe.js'
+import { comparableRole, createRoleSql, deletedRows, firedTriggers, functionCalls, installObservers, judgeObservations, logMarker, missingKeys, observerState, planRoleOf, readObserverTables, recordsBetween } from './observe.js'
 import { measureDatabase } from './measure.js'
 import { buildImpact } from './impact.js'
 import { executeSteps } from './steps.js'
@@ -181,15 +181,20 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
     // T25 v2 Step 3: the mission's required changes and invariants, checked on the copy.
     if ((contract.required_changes?.length ?? 0) + (contract.invariants?.length ?? 0) > 0) requirements = await checkRequirements(contract, owner)
     if (installed) {
+      const callsAfter = await functionCalls(owner, installed.watchers)
+      const observed = await readObserverTables(owner)
       const judged = judgeObservations({
         installed,
         after: await observerState(owner),
         callsBefore,
-        callsAfter: await functionCalls(owner, installed.watchers),
-        ...(await readObserverTables(owner)),
+        callsAfter,
+        ...observed,
         records: recordsBetween(await serverLog(rehearsalTarget), start, end),
         planRole: copyRole,
       })
+      // T25 v3: rows the plan deleted (also when inserted again) and the triggers that fired.
+      observation.deleted = await deletedRows(owner, installed.audited)
+      observation.fired = firedTriggers({ installed, expected: observed.expected, callsBefore, callsAfter })
       observation.evidence = judged.evidence
       observation.unverifiable.push(...judged.unverifiable)
       observation.missing = await missingKeys(owner, installed.keyed)
@@ -234,7 +239,7 @@ export async function rehearse({ repoDir, contract, contractHash, target, keys, 
     database: failure ? null : { name: target.dbName, before, after },
     cleanup,
     // T25 v2: what the observers in the copy saw (signed with the rest of the report).
-    observation: { plan_role: observation.plan_role, watched_triggers: observation.watchers, unverifiable: observation.unverifiable, missing_keys: observation.missing ?? {} },
+    observation: { plan_role: observation.plan_role, watched_triggers: observation.watchers, unverifiable: observation.unverifiable, missing_keys: observation.missing ?? {}, deleted_rows: observation.deleted ?? {} },
     ...impact,
     operator_pubkey: publicKeyHex(keys.publicKey),
   })

@@ -41,6 +41,10 @@ function constraintsFor(evidence, failedSteps) {
       out.push({ kind: 'logic_unchanged', object: e.object, measured: {}, text: `The existing ${e.object} must have the same definition, and a trigger must be enabled, after the plan.` })
     } else if (e.kind === 'protected_rows_replaced') {
       out.push({ kind: 'rows_preserved', table: e.table, measured: { missing: e.missing }, text: `Every existing row of ${e.table} must still exist after the plan; ${e.missing} existing row(s) were removed (rows inserted in their place do not count).` })
+    } else if (e.kind === 'protected_rows_deleted') {
+      out.push({ kind: 'rows_not_deleted', table: e.table, measured: { rows: e.rows }, text: `Existing rows of ${e.table} must not be deleted at any point during the plan; ${e.rows} existing row(s) were deleted (rows inserted again later do not undo this).` })
+    } else if (e.kind === 'trigger_fired') {
+      out.push({ kind: 'logic_fired', object: e.trigger, measured: { table: e.table, timing: e.timing, event: e.event, level: e.level, fired: e.fired }, text: `While the plan ran, the existing trigger ${e.trigger} on ${e.table} (${e.timing ?? 'unknown timing'} ${e.event ?? 'unknown event'}, per ${String(e.level).toLowerCase()}) fired ${e.fired} time(s).` })
     } else if (e.kind === 'trigger_not_fired') {
       out.push({ kind: 'logic_must_act', object: e.trigger, measured: { expected: e.expected, fired: e.fired }, text: `The existing trigger ${e.trigger} must act on every row it applies to (it should have fired ${e.expected} time(s) and fired ${e.fired}); do not switch it off, skip it or work around it.` })
     } else if (e.kind === 'bypass_statement' || e.kind === 'bypass_ddl' || e.kind === 'bypass_meta_command') {
