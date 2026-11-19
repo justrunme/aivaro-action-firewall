@@ -180,7 +180,7 @@ function runEvidence(r, s) {
   return h('div', { class: 'kv-list' },
     kv('verdict', badge(r.verdict, toneOf(r.verdict))), kv('capture', h('span', { class: 'mono', text: r.capture_id ?? '—' })),
     kv('as rehearsed', r.matches_rehearsal === true ? badge('real result equals the rehearsal', 'ok', 'bolt') : r.matches_rehearsal === false ? badge(`${r.differences} difference(s)`, 'bad', 'cross') : badge('not recorded', 'mute')),
-    r.undo ? kv('undo', badge(`${r.undo.verdict} · recovery check ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : 'bad')) : null,
+    r.undo ? kv('undo', badge(`${r.undo.verdict} · recovery check ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : r.undo.verification === 'FAIL' ? 'bad' : 'mute')) : null,
     set ? kv('links', h('span', { class: 'col' }, set.links.map((l) => h('span', { class: 'mono' }, ok(l.ok), ` ${l.code}${l.ok ? '' : ` — ${l.why}`}`)))) : null)
 }
 
@@ -631,7 +631,7 @@ function runsTable(runs, ctx) {
       h('td', {}, badge(r.verdict, toneOf(r.verdict))),
       h('td', {}, r.matches_rehearsal === true ? badge('matched', 'ok', 'check') : r.matches_rehearsal === false ? badge(`${r.differences} diff`, 'bad', 'cross') : badge('not recorded', 'mute')),
       h('td', { class: 'mono', text: r.capture_id ?? '—' }),
-      h('td', {}, r.undo ? badge(`${r.undo.verdict} · ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : 'bad') : undoForm(r, ctx))))))
+      h('td', {}, r.undo ? badge(`${r.undo.verdict} · ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : r.undo.verification === 'FAIL' ? 'bad' : 'mute') : undoForm(r, ctx))))))
 }
 
 function undoForm(r, ctx) {

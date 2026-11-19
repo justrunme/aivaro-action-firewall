@@ -34,6 +34,7 @@ export const EXIT = Object.freeze({
   INVARIANT_VIOLATED: 28, // rehearse: an invariant of the mission does not hold after the plan
   REQUIREMENT_UNMET: 29, // rehearse: a required change of the mission was not made
   CONFLICT: 32, // rehearse: the mission's requirements cannot all hold (CONFLICT: requirements unsatisfiable); nothing ran
+  RECOVERY_UNVERIFIED: 33, // undo: restored and nothing failed, but a required check could not be made (RESTORED_UNVERIFIED)
 })
 
 /** Exit code for a rehearsal verdict. */

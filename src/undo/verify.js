@@ -2,8 +2,14 @@
  * Recovery verification (R5.1 to R5.3, R5.5 to R5.7).
  *
  * Every check is computed from the live state and compared with the capture.
- * PASS only if every check passes; a restore tool's exit status is never used
- * as evidence. Each failing check carries expected and actual values.
+ * PASS only if every check passes and every required check could be made; a
+ * restore tool's exit status is never used as evidence. Each failing check
+ * carries expected and actual values.
+ *
+ * Status: FAIL when any check fails; UNVERIFIABLE when none fails but a required
+ * check could not be made (a capture from before the value was recorded); PASS
+ * otherwise. UNVERIFIABLE is never a recovery: the state may be restored, but
+ * nothing shows that it is.
  */
 
 import { measureDatabase } from '../rehearsal/measure.js'
@@ -24,6 +30,16 @@ export async function pollHealth(target, health, maxMs = 30000) {
     await sleep(wait)
     wait = Math.min(wait * 2, 4000)
   }
+}
+
+/** What the privileges check covers; a PASS of it is no claim about anything else. */
+export const PRIVILEGES_SCOPE = 'supported database grants and ownership (database, schemas, tables, views, sequences, columns, functions, default privileges); not RLS policies, role attributes or settings, database settings, types, domains or large objects'
+
+/** @returns {'PASS' | 'FAIL' | 'UNVERIFIABLE'} */
+export function verificationStatus(checks, notChecked) {
+  if (checks.some((c) => !c.ok)) return 'FAIL'
+  if (notChecked.length > 0) return 'UNVERIFIABLE'
+  return 'PASS'
 }
 
 /**
@@ -61,11 +77,11 @@ export async function verifyRecovery({ repoDir, manifest, target, health = null 
       try {
         livePriv = await measurePrivileges((sql) => psql({ ...target, dbName: db.name }, { sql }))
       } catch (err) {
-        checks.push({ check: 'privileges', resource: db.name, expected: db.privileges.hash, actual: String(err.message), ok: false })
+        checks.push({ check: 'privileges', resource: db.name, scope: PRIVILEGES_SCOPE, expected: db.privileges.hash, actual: String(err.message), ok: false })
         continue
       }
       const d = diffPrivileges(db.privileges, livePriv)
-      checks.push({ check: 'privileges', resource: db.name, expected: db.privileges.hash, actual: livePriv.hash, ok: db.privileges.hash === livePriv.hash, missing: d.missing.slice(0, 20), extra: d.extra.slice(0, 20) })
+      checks.push({ check: 'privileges', resource: db.name, scope: PRIVILEGES_SCOPE, expected: db.privileges.hash, actual: livePriv.hash, ok: db.privileges.hash === livePriv.hash, missing: d.missing.slice(0, 20), extra: d.extra.slice(0, 20) })
     } else {
       notChecked.push({ check: 'privileges', resource: db.name, why: 'the capture was made before privileges were recorded' })
     }
@@ -82,5 +98,5 @@ export async function verifyRecovery({ repoDir, manifest, target, health = null 
   }
 
   const failed = checks.filter((c) => !c.ok)
-  return { status: failed.length === 0 ? 'PASS' : 'FAIL', checks, failed, not_checked: notChecked, integration_tests: 'not configured' }
+  return { status: verificationStatus(checks, notChecked), checks, failed, not_checked: notChecked, integration_tests: 'not configured' }
 }

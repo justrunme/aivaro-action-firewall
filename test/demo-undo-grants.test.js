@@ -158,7 +158,7 @@ describe('Undo keeps database privileges and verifies them', { skip: !enabled &&
     await script('DROP TABLE owned_elsewhere;')
   })
 
-  it('control: the old capture (dump without privileges, nothing recorded) loses the grants, and its verification says privileges were not checked', async () => {
+  it('control: the old capture (dump without privileges, nothing recorded) loses the grants, and its verification is UNVERIFIABLE (privileges not checked), never PASS', async () => {
     assert.equal(await sql(ASK), GRANTED)
     const file = path.join(pgDir, 'legacy.sql')
     const old = await dump(target)
@@ -170,7 +170,8 @@ describe('Undo keeps database privileges and verifies them', { skip: !enabled &&
     assert.equal(lost[0], 'f', 'the table grant is gone (the bug this change fixes)')
     assert.equal(lost[10], 't', 'and PUBLIC can connect again')
     const v = await verifyRecovery({ repoDir, manifest: await manifestOf(legacy), target })
-    assert.equal(v.status, 'PASS', 'data and schema match, as before')
+    assert.equal(v.status, 'UNVERIFIABLE', 'data and schema match, but privileges could not be checked: not a PASS')
+    assert.deepEqual(v.failed, [], 'nothing failed')
     assert.deepEqual(v.not_checked, [{ check: 'privileges', resource: 'pumpkin_patch', why: 'the capture was made before privileges were recorded' }])
     assert.ok(!v.checks.some((c) => c.check === 'privileges'), 'no privileges check is claimed')
     // Measured the same way, the privileges after the old restore differ from the granted state.

@@ -62,3 +62,57 @@ describe('privilege measurement', () => {
     }))
   })
 })
+
+describe('a required check that could not be made is never a recovery', () => {
+  it('verification: FAIL beats everything, UNVERIFIABLE when a check could not be made, PASS only when all were made and passed', async () => {
+    const { verificationStatus } = await import('../src/undo/verify.js')
+    const ok = { check: 'row_count', ok: true }
+    const bad = { check: 'privileges', ok: false }
+    const notDone = [{ check: 'privileges', resource: 'db', why: 'old capture' }]
+    assert.equal(verificationStatus([ok], []), 'PASS')
+    assert.equal(verificationStatus([ok], notDone), 'UNVERIFIABLE')
+    assert.equal(verificationStatus([ok, bad], notDone), 'FAIL')
+    assert.equal(verificationStatus([ok, bad], []), 'FAIL')
+  })
+
+  it('undo: RECOVERED only with PASS; UNVERIFIABLE gives RESTORED_UNVERIFIED; any failed restore is NOT_RECOVERED (property)', async () => {
+    const { recoveryStatus } = await import('../src/undo/undo.js')
+    fc.assert(fc.property(fc.constantFrom('PASS', 'FAIL', 'UNVERIFIABLE'), fc.array(fc.constantFrom('succeeded', 'failed'), { minLength: 1, maxLength: 5 }), (v, rs) => {
+      const s = recoveryStatus(v, rs.map((status) => ({ status })))
+      const restored = rs.every((x) => x === 'succeeded')
+      if (s === 'RECOVERED') return restored && v === 'PASS'
+      if (s === 'RESTORED_UNVERIFIED') return restored && v === 'UNVERIFIABLE'
+      return s === 'NOT_RECOVERED' && (!restored || v === 'FAIL')
+    }))
+  })
+
+  it('the CLI has a distinct exit code for it, and every exit code is distinct', async () => {
+    const { EXIT } = await import('../src/cli/codes.js')
+    assert.equal(EXIT.RECOVERY_UNVERIFIED, 33)
+    const values = Object.values(EXIT)
+    assert.equal(new Set(values).size, values.length)
+    const src = (await import('node:fs')).readFileSync(new URL('../src/cli/commands.js', import.meta.url), 'utf8')
+    assert.match(src, /r\.status === 'RESTORED_UNVERIFIED'\) return \{ exit: EXIT\.RECOVERY_UNVERIFIED/)
+  })
+
+  it('the Console shows RESTORED · NOT VERIFIED in grey, never RECOVERED · VERIFIED', async () => {
+    const { runOutcome, missionVerdict, flight } = await import('../src/console/static/model.js')
+    const story = {
+      chain_ok: true, history: { ok: true },
+      versions: [{ seq: 0, verdict: 'SAFE', available: true, plan_id: 'plan-000000000001', report_hash: 'h', files: [] }],
+      requests: [], links: [], timeline: [],
+      runs: [{ seq: 1, verdict: 'completed', matches_rehearsal: true, report_hash: 'h', authorization: 'a', undo: { seq: 2, verdict: 'undo', verification: 'UNVERIFIABLE' } }],
+    }
+    const out = runOutcome(story)
+    assert.equal(out.label, 'RESTORED · NOT VERIFIED')
+    assert.equal(out.tone, 'mute')
+    assert.notEqual(missionVerdict(story, true).label, 'RECOVERED · VERIFIED')
+    assert.equal(flight(story).find((n) => n.name === 'VERIFIED').state, 'mute')
+  })
+
+  it('the privileges check says what it covers, and claims nothing about the rest', async () => {
+    const { PRIVILEGES_SCOPE } = await import('../src/undo/verify.js')
+    assert.match(PRIVILEGES_SCOPE, /^supported database grants and ownership/)
+    for (const not of ['RLS policies', 'role attributes', 'database settings', 'large objects']) assert.ok(PRIVILEGES_SCOPE.includes(not), not)
+  })
+})

@@ -308,7 +308,7 @@ export const TOOLS = [
       if (problem) return refusal('CAPTURE_INVALID', problem)
       const { target, health } = loadTarget(repoDir)
       const v = await verifyRecovery({ repoDir, manifest, target: { ...target, composeFile: path.resolve(repoDir, target.composeFile) }, health })
-      return { status: v.status, capture_id, checks: v.checks.length, failed: v.failed.map((c) => ({ check: c.check, resource: c.resource })) }
+      return { status: v.status, capture_id, checks: v.checks.length, failed: v.failed.map((c) => ({ check: c.check, resource: c.resource })), not_checked: (v.not_checked ?? []).map((c) => ({ check: c.check, resource: c.resource, why: c.why })) }
     }),
   },
 ]
