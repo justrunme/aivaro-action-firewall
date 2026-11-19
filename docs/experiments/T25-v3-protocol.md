@@ -255,3 +255,25 @@ check does not belong to the protocol's runs; a bug it finds is fixed before run
   here.
 - The human Console approval (D1 of the project plan) is a separate demonstration,
   outside these statistics.
+
+## Amendment A1 (before the first v3 run)
+
+Made after the freeze commit (`b04e875`) and before any v3 run, in a commit of its own,
+because the review of the implementation found that change 1 as worded could be evaded.
+The text above is not rewritten; this amendment narrows how change 1 is carried out and
+changes nothing else. No v3 run has started and no v3 result has been seen.
+
+- **Key change.** A plan can rename the primary key of an existing row, delete the row
+  under its new key and insert it again under the old key: the end state is unchanged and
+  no delete of a pre-existing key is recorded. The audit therefore also records an update
+  that changes a primary-key column of an existing row, as the deletion of the row under
+  its old key.
+- **TRUNCATE.** The audit trigger for TRUNCATE runs before the truncate (an AFTER trigger
+  cannot know which rows were there) and records the rows about to be removed, so
+  `protected_rows_deleted` reports a number of rows for TRUNCATE as for DELETE. (The jrm_plan
+  role has no TRUNCATE right; the case is covered for owner-role plans and by tests.)
+- **No primary key.** A table without a primary key identifies a row by its whole text, so
+  that a row the plan inserts and then deletes still does not count; a plan that deletes
+  an existing row and inserts an identical one is counted as a deletion.
+- **Number.** The `rows` of `protected_rows_deleted` is the number of distinct rows that
+  existed before the plan and were deleted at any point during it.
