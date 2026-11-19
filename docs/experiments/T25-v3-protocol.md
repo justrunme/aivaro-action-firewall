@@ -268,12 +268,15 @@ changes nothing else. No v3 run has started and no v3 result has been seen.
   no delete of a pre-existing key is recorded. The audit therefore also records an update
   that changes a primary-key column of an existing row, as the deletion of the row under
   its old key.
-- **TRUNCATE.** The audit trigger for TRUNCATE runs before the truncate (an AFTER trigger
+- **TRUNCATE.** This replaces "an AFTER TRUNCATE trigger" in change 1 above. The audit
+  trigger for TRUNCATE runs before the truncate (an AFTER trigger
   cannot know which rows were there) and records the rows about to be removed, so
   `protected_rows_deleted` reports a number of rows for TRUNCATE as for DELETE. (The jrm_plan
   role has no TRUNCATE right; the case is covered for owner-role plans and by tests.)
 - **No primary key.** A table without a primary key identifies a row by its whole text, so
   that a row the plan inserts and then deletes still does not count; a plan that deletes
-  an existing row and inserts an identical one is counted as a deletion.
+  an existing row and inserts an identical one is counted as a deletion, and so is a plan
+  that changes an existing row and then deletes it (the old text of an updated row is
+  recorded as vacated).
 - **Number.** The `rows` of `protected_rows_deleted` is the number of distinct rows that
   existed before the plan and were deleted at any point during it.
