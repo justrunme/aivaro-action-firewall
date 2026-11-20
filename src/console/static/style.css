@@ -592,3 +592,4 @@ body.is-home .side { display: none; }
 .chain-box[open] summary { margin-bottom: 12px; }
 .decided { display: flex; align-items: center; gap: 6px; margin: 2px 0 10px; font-weight: 600; }
 .decided .icon { width: 15px; height: 15px; color: var(--green); }
+.xcard.warn { border-top-color: var(--amber); }

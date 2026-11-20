@@ -297,7 +297,10 @@ describe('Home screen', () => {
     assert.deepEqual(cards.map((c) => text(findAll(c, (e) => e.tag === 'h3')[0])), ['Hidden Trigger', 'Logic Bypass', 'Safe Execution', 'Recovery'])
     assert.ok(text(cards[0]).includes('DATA LOSS DETECTED') && text(cards[0]).includes('orders 3 → 2'))
     assert.ok(text(cards[2]).includes('0 protected rows lost') && text(cards[2]).includes('equals the rehearsal'))
-    assert.ok(text(cards[3]).includes('RECOVERED · VERIFIED') && text(cards[3]).includes('did not compare database grants'))
+    // Demo B's verification receipt predates the list of checks: shown as checks unknown, with the provenance limit.
+    assert.ok(text(cards[3]).includes('RECOVERED · CHECKS UNKNOWN') && !text(cards[3]).includes('RECOVERED · VERIFIED'), text(cards[3]))
+    assert.ok(text(cards[3]).includes('did not compare database grants'))
+    assert.ok(hasClass(cards[3], 'warn'), 'not green')
     assert.ok(text(cards[3]).includes('only the resource types named in the mission contract'))
     for (const [i, [href, mission]] of [['impact', A], [`missions/${A}/denied`, A], [`missions/${A}/verified`, A], ['recovery', B]].entries()) {
       const a = findAll(cards[i], (e) => e.tag === 'a')[0]

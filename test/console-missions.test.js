@@ -83,7 +83,7 @@ before(async () => {
   const auth = appendReceipt({ repoDir, keys, missionId: C, kind: 'authorization_issued', verdict: 'allow', subject: { plan_id: PLAN_C, report_hash: c.reportHash, plan_files_hash: hashValue(c.files), passphrase_source: 'stdin' }, refs: { rehearsal: c.receipt }, now: T0 + 1000 })
   const run = appendReceipt({ repoDir, keys, missionId: C, kind: 'run_result', verdict: 'completed', subject: { plan_id: PLAN_C, capture_id: CAPTURE, plan_files_hash: hashValue(c.files), report_hash: c.reportHash, matches_rehearsal: true, differences: 0 }, refs: { authorization: auth.hash }, now: T0 + 2000 })
   const undo = appendReceipt({ repoDir, keys, missionId: C, kind: 'undo', verdict: 'undo', subject: { capture_id: CAPTURE }, refs: { run: run.hash }, now: T0 + 3000 })
-  appendReceipt({ repoDir, keys, missionId: C, kind: 'verification', verdict: 'PASS', subject: { capture_id: CAPTURE }, refs: { undo: undo.hash }, now: T0 + 4000 })
+  appendReceipt({ repoDir, keys, missionId: C, kind: 'verification', verdict: 'PASS', subject: { capture_id: CAPTURE, checks: 9, checked: ['container_image', 'file_sha256', 'privileges', 'row_count', 'schema_hash', 'table_checksum'], failed: [] }, refs: { undo: undo.hash }, now: T0 + 4000 })
   api = createApi({ repoDir })
   restoreDom = installFakeDom()
 })

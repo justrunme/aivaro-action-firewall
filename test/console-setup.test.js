@@ -222,11 +222,12 @@ describe('Recorded titles and recovery claims', () => {
     const sa = missionSummary(states[A].story.result, true)
     assert.deepEqual(sa.revisions.map((r) => `#${r.seq} ${r.verdict}`), ['#0 DATA LOSS', '#1 LOGIC BYPASS', '#2 SAFE'])
     const sb = missionSummary(states[B].story.result, true)
-    assert.ok(sb.outcome.includes('recovery verification PASS') && sb.outcome.includes('database grants were not compared'))
+    assert.ok(sb.outcome.includes('recovery verification PASS') && sb.outcome.includes('does not record which checks ran'), sb.outcome)
     const rb = recoverySummary(states[B].story.result, true)
-    assert.equal(rb.label, 'RECOVERED · VERIFIED')
+    assert.equal(rb.label, 'RECOVERED · CHECKS UNKNOWN', 'an older receipt does not say which checks ran')
+    assert.equal(rb.tone, 'warn')
     assert.equal(rb.limit, RECOVERY_LIMIT)
-    assert.ok(RECOVERY_LIMIT.includes('did not compare database grants or ownership'))
+    assert.ok(RECOVERY_LIMIT.includes('completeness of this recovery check is unknown') && RECOVERY_LIMIT.includes('not grants or ownership'))
     const ra = recoverySummary(states[A].story.result, true)
     assert.equal(ra.label, 'EXECUTION VERIFIED')
     assert.deepEqual(ra.lines.map((l) => l.ok), [true, true, true])
@@ -238,9 +239,55 @@ describe('Recorded titles and recovery claims', () => {
     const { recoveryScreen } = await import('../src/console/static/screens.js')
     const root = recoveryScreen(states[B], { ui: {}, route: { screen: 'recovery' }, readOnly: true, api: async () => ({}) })
     const t = text(root)
-    assert.ok(t.indexOf('RECOVERED · VERIFIED') < t.indexOf('Receipt chain'), 'summary before the chain')
-    assert.ok(t.includes('did not compare database grants'), 'the limit is next to the claim')
+    assert.ok(t.indexOf('RECOVERED · CHECKS UNKNOWN') < t.indexOf('Receipt chain'), 'summary before the chain')
+    assert.ok(t.includes('completeness of this recovery check is unknown'), 'the limit is next to the claim')
     assert.ok(t.includes('Authorized at the command line'))
     assert.equal(findAll(root, (e) => e.tag === 'details' && hasClass(e, 'chain-box')).length, 1)
+  })
+})
+
+describe('Four recovery states stay apart (history exposes what the verification checked)', () => {
+  const base = (undo) => ({
+    chain_ok: true, history: { ok: true }, requests: [], links: [], timeline: [],
+    versions: [{ seq: 0, verdict: 'SAFE', available: true, plan_id: 'plan-000000000001', report_hash: 'h', files: [] }],
+    runs: [{ seq: 1, verdict: 'completed', matches_rehearsal: true, report_hash: 'h', authorization: 'a', undo: { seq: 2, verdict: 'undo', ...undo } }],
+  })
+  const CURRENT = { receipt_format: 'current', checked: ['file_sha256', 'privileges', 'row_count', 'schema_hash', 'table_checksum'], not_checked: [] }
+
+  it('PASS with its checks listed is RECOVERED · VERIFIED; PASS from an older receipt is CHECKS UNKNOWN; UNVERIFIABLE is RESTORED · NOT VERIFIED; FAIL is RECOVERY FAILED', async () => {
+    const { runOutcome, recoverySummary, flight } = await import('../src/console/static/model.js')
+    const cases = [
+      [{ verification: 'PASS', ...CURRENT }, 'RECOVERED · VERIFIED', 'ok', 'ok', false],
+      [{ verification: 'PASS', receipt_format: 'legacy', checked: null, not_checked: [] }, 'RECOVERED · CHECKS UNKNOWN', 'warn', 'warn', true],
+      [{ verification: 'UNVERIFIABLE', receipt_format: 'current', checked: ['row_count'], not_checked: [{ check: 'privileges', resource: 'db' }] }, 'RESTORED · NOT VERIFIED', 'mute', 'mute', false],
+      [{ verification: 'FAIL', ...CURRENT }, 'RECOVERY FAILED', 'bad', 'bad', false],
+    ]
+    for (const [undo, label, tone, node, limit] of cases) {
+      const s = base(undo)
+      assert.deepEqual([runOutcome(s).label, runOutcome(s).tone], [label, tone], label)
+      assert.equal(flight(s).find((n) => n.name === 'VERIFIED').state, node, `${label}: VERIFIED node`)
+      assert.equal(Boolean(recoverySummary(s, true).limit), limit, `${label}: limit only where the checks are unknown`)
+    }
+    const full = recoverySummary(base({ verification: 'PASS', ...CURRENT }), true)
+    assert.ok(full.lines.some((l) => l.text.startsWith('Checked: ') && l.text.includes('privileges') && l.ok === true))
+    const partial = recoverySummary(base({ verification: 'UNVERIFIABLE', receipt_format: 'current', checked: ['row_count'], not_checked: [{ check: 'privileges', resource: 'db' }] }), true)
+    assert.ok(partial.lines.some((l) => l.text === 'Not checked: privileges (db)'))
+    assert.ok(runOutcome(base({ verification: 'UNVERIFIABLE', receipt_format: 'current', checked: [], not_checked: [{ check: 'privileges', resource: 'db' }] })).text.includes('privileges'))
+  })
+
+  it('history: the recorded Demo B is a legacy receipt (checks unknown, never assumed complete)', () => {
+    const u = states[B].story.result.runs[0].undo
+    assert.equal(u.verification, 'PASS')
+    assert.equal(u.receipt_format, 'legacy')
+    assert.equal(u.checked, null, 'an absent list is unknown, not empty and not complete')
+    assert.deepEqual(u.not_checked, [])
+  })
+
+  it('history: a current verification receipt lists its checks, and undo writes them', async () => {
+    const { readFileSync } = await import('node:fs')
+    const src = readFileSync(new URL('../src/undo/undo.js', import.meta.url), 'utf8')
+    assert.match(src, /checked: \[\.\.\.new Set\(verification\.checks\.map\(\(c\) => c\.check\)\)\]\.sort\(\)/)
+    const story = readFileSync(new URL('../src/history/story.js', import.meta.url), 'utf8')
+    assert.match(story, /receipt_format: verification \? \(current \? 'current' : 'legacy'\) : null/)
   })
 })
