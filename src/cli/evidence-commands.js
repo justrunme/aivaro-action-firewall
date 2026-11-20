@@ -14,6 +14,7 @@ import { CONTRACT_FILE } from '../hook/run.js'
 import { verifyHistory } from '../history/archive.js'
 import { ProbeError, finishProbe, gateHealth, observeProbe, pendingProbe, startProbe } from '../gate/probe.js'
 import { proofDebt } from '../evidence/proofdebt.js'
+import { planId } from '../rehearsal/engine.js'
 import { EXIT } from './codes.js'
 import { CliError, contractOf, missionOf, operatorKeys, publicSide, verifiedChain } from './commands.js'
 
@@ -40,7 +41,8 @@ export function evidenceCmd({ repoDir, opts }) {
   const contract = contractIfAny(repoDir)
   const history = verifyHistory(repoDir, missionId, chain.receipts)
   const gate = gateHealth({ repoDir, receipts: chain.receipts })
-  const debt = proofDebt({ receipts: chain.receipts, contract: contract?.id === missionId ? contract : null, legacyVersions: history.legacy_versions, gate })
+  const own = contract?.id === missionId ? contract : null
+  const debt = proofDebt({ receipts: chain.receipts, contract: own, legacyVersions: history.legacy_versions, gate, planIdNow: own ? planId(own) : null })
   return { exit: EXIT.OK, result: { mission_id: missionId, receipts: chain.count, gate, ...debt } }
 }
 

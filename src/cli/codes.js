@@ -37,6 +37,7 @@ export const EXIT = Object.freeze({
   RECOVERY_UNVERIFIED: 33, // undo: restored and nothing failed, but a required check could not be made (RESTORED_UNVERIFIED)
   GATE_INACTIVE: 34, // gate-probe: the probe command ran unblocked (INACTIVE)
   GATE_UNKNOWN: 35, // gate-probe: no proof either way yet (UNKNOWN; never means blocked)
+  RECOVERY_NOT_PROVEN: 36, // chaos: the recovery rehearsal did not end RECOVERY PROVEN (see the verdict)
 })
 
 /** Exit code for a rehearsal verdict. */

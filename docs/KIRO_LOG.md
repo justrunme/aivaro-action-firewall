@@ -1170,3 +1170,16 @@ Live (docs/agent-runs/2026-11-20-gate.md, evidence in `docs/agent-runs/2026-11-2
 Incident during this run, fixed before the first commit: a test command from the previous run (killed as hung) continued its shell chain and ran `git checkout kiro/live-ide && git stash pop`, which switched branch and applied the stash `d2x before port` on top of the uncommitted work (conflicts in three Console files and two screenshots). The five files were restored from the commit, the stash is still in the list unchanged, and the work moved back to `kiro/gate-health` (the `kiro/live-ide` tree equals `main`). Lesson: never chain `git checkout` or `git stash pop` after a long command in one shell line.
 
 Review of PR #26 by the owner (P1 fixed): ACTIVE freshness was counted from the `gate_probe` receipt, so a `finish` 30 minutes after the hook denial showed a fresh ACTIVE. Now the age is counted from the hook denial the receipt cites (looked up in the verified chain by its hash); a `finish` after 15 minutes records UNKNOWN with `stale: true`; a recorded ACTIVE whose denial is not in the chain is UNKNOWN; policy rule 8 refuses an ACTIVE recorded more than 15 minutes after its denial. Regression tests in test/gate.test.js (denial, finish at +30 min: UNKNOWN/STALE; recorded at +10 min, read at +20 min: STALE). Documented: one pending probe per workspace; coverage counts what the capture holds, not the whole application.
+
+---
+## Run 37 — Chaos Twin Lite (written, not tested)
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-20 |
+| Branch | `kiro/chaos-twin` from `kiro/gate-health` at `50dfbd8` (stacked on PR #26) |
+
+At the owner's request this run wrote the code only: no test was written or run and no live run was made. Nothing here is claimed to work until a test exercises it end to end (README says "not tested yet").
+
+`justrunme chaos [--fault-after n]` (src/chaos/twin.js, src/cli/chaos-command.js): a disposable twin of the workspace (git worktree) and of the database (isolated Compose project, internal network, pg_dump of the real database; plan role recreated as for rehearsal). The real database is only read. In the twin: the same `captureState` as a real run, signed by a throwaway key in a temporary directory; the plan steps up to the fault point (all by default); SIGKILL of the database container and a restart; the measured divergence from the capture; the same `undoMission` and recovery verification as for real. One `recovery_rehearsal` receipt in the real chain, signed by the operator key (verdict RECOVERY PROVEN, RECOVERY UNVERIFIED, RECOVERY FAILED, NOTHING TO RECOVER or FAILED; subject: plan id, files hash, base hash, fault, steps, divergence, undo and verification with checked and coverage, cleanup). New receipt kind, treated as chain maintenance by the ordering rules. Exit 36 for any verdict but RECOVERY PROVEN. ProofDebt: recovery counts as rehearsed only for a RECOVERY PROVEN receipt of the current plan; otherwise it is an open item.
+
+To do before it can be claimed: a Docker test (twin built, plan applied, crash, undo, PROVEN; a plan that changes nothing gives NOTHING TO RECOVER; a broken capture gives RECOVERY FAILED; nothing written to the real database; cleanup complete) and one live run.

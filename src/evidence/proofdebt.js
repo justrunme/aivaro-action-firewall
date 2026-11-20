@@ -88,7 +88,7 @@ function recoveryLines(receipts, run, out) {
  *   receipts of a verified chain; contract parsed from the mission file, if present;
  *   legacyVersions from verifyHistory; gate from gateHealth
  */
-export function proofDebt({ receipts, contract = null, legacyVersions = 0, gate = null }) {
+export function proofDebt({ receipts, contract = null, legacyVersions = 0, gate = null, planIdNow = null }) {
   const out = { verified: [], not_verified: [] }
 
   if (gate?.status === 'ACTIVE') {
@@ -108,12 +108,17 @@ export function proofDebt({ receipts, contract = null, legacyVersions = 0, gate 
   out.not_verified.push({ id: 'external', text: 'External side effects (network calls, e-mail, payments, remote storage) are not tracked by JustRunMe', why: 'OUT_OF_SCOPE' })
 
   const lastPass = last(receipts, (r) => r.kind === 'verification' && r.verdict === 'PASS' && Array.isArray(r.subject?.checked))
+  const twin = last(receipts, (r) => r.kind === 'recovery_rehearsal' && (!planIdNow || r.subject?.plan_id === planIdNow))
+  if (!twin) out.not_verified.push({ id: 'recovery_rehearsal', text: 'Recovery has not been rehearsed for this plan (justrunme chaos)', why: 'RECOVERY_NOT_REHEARSED' })
+  else if (twin.verdict === 'RECOVERY PROVEN') out.verified.push({ id: 'recovery_rehearsal', text: `Recovery rehearsed on a disposable twin: crash after ${twin.subject?.fault?.after_step ?? '?'} of ${twin.subject?.fault?.of_steps ?? '?'} step(s), undo restored the captured state, verification PASS (${(twin.subject?.undo?.verification?.checked ?? []).join(', ')}); the base it ran on: ${String(twin.subject?.base_hash ?? '').slice(7, 19)}`, receipt: ref(twin) })
+  else out.not_verified.push({ id: 'recovery_rehearsal', text: `Recovery rehearsal: ${twin.verdict}${twin.subject?.failure ? ` (${twin.subject.failure})` : ''}`, why: twin.verdict.replace(/ /g, '_'), receipt: ref(twin) })
   const readiness = {
     last_verified_recovery: lastPass ? { ...ref(lastPass), at: lastPass.timestamp } : null,
     latest_run_recovery: !recovery ? (run ? 'NOT_UNDONE' : null) : !recovery.verification ? 'UNDONE · NOT VERIFIED' : recovery.verification.verdict === 'PASS' && !Array.isArray(recovery.verification.subject?.checked) ? 'PASS · CHECKS UNKNOWN' : recovery.verification.verdict,
     latest_run_recovery_receipt: recovery ? ref(recovery.verification ?? recovery.undo) : null,
-    recovery_rehearsed: null,
-    recovery_rehearsal_note: 'Recovery is not rehearsed in advance: JustRunMe does not implement recovery rehearsal (Chaos Twin) yet',
+    recovery_rehearsed: twin ? twin.verdict === 'RECOVERY PROVEN' : null,
+    recovery_rehearsal_receipt: twin ? { ...ref(twin), at: twin.timestamp, verdict: twin.verdict } : null,
+    recovery_rehearsal_note: !twin ? 'Recovery not rehearsed for this plan: run justrunme chaos' : twin.verdict === 'RECOVERY PROVEN' ? `Recovery rehearsed on a twin: RECOVERY PROVEN (${twin.timestamp})` : `Recovery rehearsal: ${twin.verdict}`,
   }
   return { ...out, recovery_readiness: readiness }
 }

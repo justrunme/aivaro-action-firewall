@@ -30,9 +30,9 @@
 import { receiptHash } from './chain.js'
 import { FRESH_MS } from '../gate/command.js'
 
-// Receipts that are not part of the mission story: parallel hook decisions, gate probes and
-// operator maintenance of the chain itself. They may land between undo and verification.
-const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered', 'gate_probe'])
+// Receipts that are not part of the mission story: parallel hook decisions, gate probes,
+// recovery rehearsals (they run on a twin, never on the real target) and operator maintenance of the chain. They may land between undo and verification.
+const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered', 'gate_probe', 'recovery_rehearsal'])
 // Longest life of an approval request (REQUEST_TTL_SECONDS in src/approval/requests.js; not imported, to keep receipts free of approval code).
 const MAX_REQUEST_SECONDS = 3600
 

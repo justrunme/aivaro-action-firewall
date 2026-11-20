@@ -91,7 +91,7 @@ function publicSide() {
 const missionOf = (repoDir, opts) => opts.mission ?? contractOf(repoDir).contract.id
 
 // Shared with src/cli/evidence-commands.js.
-export { contractOf, operatorKeys, publicSide, missionOf, verifiedChain }
+export { contractOf, operatorKeys, publicSide, missionOf, verifiedChain, targetOf, preflight }
 
 function refused(exit, err) {
   const detail = err.recorded === false ? { ...(err.detail !== undefined ? { reason_detail: err.detail } : {}), recorded: false, record_error: err.record_error } : err.detail
