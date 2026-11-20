@@ -427,6 +427,21 @@ describe('Console round 2: decision first, safe approval, honest labels, SQL pan
     assert.deepEqual(order, [A, C, B])
   })
 
+  it('unknown mission and Flight Recorder view show explicit navigation, while existing mission opens', async () => {
+    const { missionsScreen } = await screens()
+    const list = await all()
+    const ctx = { all: list, route: { screen: 'missions', arg: 'mission-not-recorded', sub: null }, ui: {}, api: async () => ({}) }
+    const missing = missionsScreen(list[0].state, ctx)
+    assert.ok(text(missing).includes('Mission mission-not-recorded is not in this recording'))
+    for (const id of [A, B, C]) assert.ok(findAll(missing, (e) => e.tag === 'a' && e.attrs.href === `#/missions/${id}`).length)
+    assert.ok(findAll(missing, (e) => e.tag === 'a' && e.attrs.href === '#/missions').length)
+    const existing = missionsScreen(list[0].state, { ...ctx, route: { screen: 'missions', arg: A, sub: null } })
+    assert.ok(text(existing).includes('Flight Recorder'))
+    const unknownView = missionsScreen(list[0].state, { ...ctx, route: { screen: 'missions', arg: A, sub: 'nonexistent' } })
+    assert.ok(text(unknownView).includes('Unknown Flight Recorder view: nonexistent'))
+    assert.ok(findAll(unknownView, (e) => e.tag === 'a' && e.attrs.href === `#/missions/${A}`).length)
+  })
+
   it('legacy PASS recovery does not ask for approval and its VERIFIED node says checks unknown', async () => {
     const { missionsScreen } = await screens()
     const st = structuredClone(await api.state(C))

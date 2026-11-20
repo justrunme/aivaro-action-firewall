@@ -65,6 +65,7 @@ export function missionsScreen(state, ctx) {
   // Every mission of the workspace (ctx.all), or just the one loaded.
   const all = ctx.all?.length ? ctx.all : [{ mission_id: state.story?.result?.mission_id ?? state.mission ?? null, state }]
   const open = all.find((m) => m.mission_id && m.mission_id === ctx.route?.arg)
+  if (ctx.route?.arg && !open) return stateBox('empty', `Mission ${ctx.route.arg} is not in this recording`, 'Choose a mission from this recording:', ...all.filter((m) => m.mission_id).map((m) => h('a', { href: `#/missions/${m.mission_id}`, text: m.mission_id })), h('a', { href: '#/missions', text: 'Back to Missions' }))
   if (open) {
     const bad = storyProblem(open.state, 'mission')
     return bad ?? flightRecorder(open.state, ctx)
@@ -138,6 +139,7 @@ function flightRecorder(state, ctx) {
   const nodes = nodesOf(s, state)
   ctx = { ...ctx, story: s }
   const wanted = (ctx.route.sub ?? ctx.ui.node ?? '').toUpperCase()
+  if (ctx.route.sub && !nodes.some((n) => n.name === wanted)) return stateBox('empty', `Unknown Flight Recorder view: ${ctx.route.sub}`, 'Choose a recorded view:', ...nodes.map((n) => h('a', { href: `#/missions/${s.mission_id}/${n.name.toLowerCase()}`, text: n.name })), h('a', { href: `#/missions/${s.mission_id}`, text: 'Back to mission' }))
   const chosen = nodes.find((n) => n.name === wanted) ?? nodes.find((n) => n.state === 'bad' || n.state === 'warn') ?? [...nodes].reverse().find((n) => n.state !== 'missing') ?? nodes[0]
   const v = missionVerdict(s, verifiedOk(state))
   return h('div', {},
