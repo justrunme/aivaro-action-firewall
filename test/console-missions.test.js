@@ -368,6 +368,11 @@ describe('Console round 2: decision first, safe approval, honest labels, SQL pan
     refused.impact.evidence.push({ kind: 'bypass_attempt_refused' })
     assert.ok(heroOf(refused).why.some((w) => w.startsWith('PostgreSQL refused')))
     assert.equal(heroOf(safe).label, 'SAFE · MEASURED')
+    const executed = heroOf(safe, { runs: [{ report_hash: safe.report_hash, verdict: 'completed', undo: { verification: 'PASS' } }], requests: [] })
+    assert.match(executed.execution, /executed, then undone/)
+    assert.doesNotMatch(executed.next, /approve or reject/)
+    const pending = heroOf(safe, { runs: [], requests: [{ report_hash: safe.report_hash, state: 'pending' }] })
+    assert.match(pending.next, /approve or reject the pending request/)
     assert.equal(heroOf({ ...loss, available: false, problem: 'gone' }).label, 'NOT VERIFIED')
     // Rendered: the hero comes before the technical panels of the Flight Recorder node.
     const { missionsScreen } = await screens()
@@ -420,6 +425,21 @@ describe('Console round 2: decision first, safe approval, honest labels, SQL pan
     assert.deepEqual(tiles, ['1need your decision', '0blocked or broken', '1safe, proven or recovered', '1no signed record or not verified'])
     const order = findAll(root, (e) => hasClass(e, 'card')).map((c) => [A, B, C].find((id) => text(c).includes(id)))
     assert.deepEqual(order, [A, C, B])
+  })
+
+  it('legacy PASS recovery does not ask for approval and its VERIFIED node says checks unknown', async () => {
+    const { missionsScreen } = await screens()
+    const st = structuredClone(await api.state(C))
+    st.story.result.runs[0].undo.receipt_format = 'legacy'
+    st.story.result.runs[0].undo.checked = null
+    const ctx = { all: [{ mission_id: C, state: st }], route: { screen: 'missions', arg: null }, ui: {}, api: async () => ({}) }
+    const root = missionsScreen(st, ctx)
+    const tiles = findAll(root, (e) => hasClass(e, 'tri')).map((t) => text(t))
+    assert.equal(tiles[0], '0need your decision')
+    assert.ok(text(root).includes('RECOVERED · CHECKS UNKNOWN'))
+    const fr = missionsScreen(st, { ...ctx, route: { screen: 'missions', arg: C, sub: 'verified' } })
+    assert.ok(text(fr).includes('CHECKS UNKNOWN'), text(fr))
+    assert.ok(!text(fr).includes('NEEDS APPROVAL'), text(fr))
   })
 
   it('SQL panels: line numbers, highlighting as text only, Copy SQL, Full width; compare switches side by side and unified', async () => {

@@ -264,7 +264,7 @@ export function approvalSource(source) {
  * facts; `next` is what the operator can do. Nothing here is inferred from the SQL text.
  * @returns {{ label: string, tone: string, headline: string, why: string[], execution: string, next: string }}
  */
-export function heroOf(v) {
+export function heroOf(v, story = null) {
   if (!v) return { label: 'UNKNOWN', tone: 'mute', headline: 'No rehearsal to show', why: [], execution: 'not authorizable', next: 'Rehearse a plan first.' }
   if (!v.available) return { label: 'NOT VERIFIED', tone: 'mute', headline: 'The signed report of this version is not in the history archive', why: [v.problem ?? 'report missing'], execution: 'not authorizable', next: 'Rehearse the plan again.' }
   const lost = losses(v)
@@ -290,7 +290,14 @@ export function heroOf(v) {
     if (why.length === 0) why.push('the signed report records a bypass of database logic')
     return { label: 'LOGIC BYPASS DETECTED', tone: 'bad', headline: 'The plan tried to switch off or work around database logic', why, execution: 'BLOCKED: JustRunMe denied it; nothing reached the real database', next: 'Revise the plan so that triggers, constraints and functions stay active.' }
   }
-  if (v.verdict === 'SAFE') return { label: 'SAFE · MEASURED', tone: 'ok', headline: `${lost.rows_lost} protected rows lost`, why: changes.length ? changes : ['no protected table in the report'], execution: 'eligible for approval (an operator must approve it)', next: 'Review the SQL and the measured diff, then approve or reject the request.' }
+  if (v.verdict === 'SAFE') {
+    const run = (story?.runs ?? []).find((r) => r.report_hash === v.report_hash)
+    const authorized = run || (story?.timeline ?? []).some((r) => r.kind === 'authorization_issued' && r.report_hash === v.report_hash)
+    const pending = (story?.requests ?? []).some((r) => r.state === 'pending' && r.report_hash === v.report_hash)
+    const execution = run ? (run.undo?.verification === 'PASS' ? 'executed, then undone; recovery verification PASS' : `executed (${run.verdict})`) : authorized ? 'authorized; execution is not recorded here' : pending ? 'awaiting an operator decision on the pending request' : 'rehearsed SAFE; no authorization or run recorded'
+    const next = run ? 'Review the run and recovery evidence; this plan has already executed.' : authorized ? 'Review the authorization and execution evidence.' : pending ? 'Review the SQL and measured diff, then approve or reject the pending request.' : 'Review the measured diff; no approval request is pending.'
+    return { label: 'SAFE · MEASURED', tone: 'ok', headline: `${lost.rows_lost} protected rows lost`, why: changes.length ? changes : ['no protected table in the report'], execution, next }
+  }
   if (v.verdict === 'UNVERIFIABLE') return { label: 'UNVERIFIABLE', tone: 'mute', headline: 'The rehearsal observers or the plan role cannot be trusted for this run', why: changes, execution: 'BLOCKED', next: 'Ask the operator; do not approve.' }
   return { label: v.verdict, tone: toneOf(v.verdict), headline: v.verdict === 'FAILED' ? 'A step of the plan did not complete in rehearsal' : `Rehearsal verdict ${v.verdict}`, why: [...changes, ...(v.impact?.failed_steps ?? []).map((s) => `step ${s} failed`)], execution: 'BLOCKED: only a SAFE rehearsal can be approved', next: 'Fix the plan and rehearse again.' }
 }

@@ -62,7 +62,7 @@ describe('ProofDebt: nothing is claimed without a receipt', () => {
     assert.equal(proofDebt({ receipts: story({ source: 'env' }) }).not_verified.find((n) => n.id === 'authorization').why, 'SCRIPTED_APPROVAL')
     assert.equal(proofDebt({ receipts: story({ source: null }) }).not_verified.find((n) => n.id === 'authorization').why, 'CHANNEL_NOT_RECORDED')
     const ok = proofDebt({ receipts: story({ source: 'tty' }) })
-    assert.match(ok.verified.find((v) => v.id === 'authorization').text, /the channel, not who typed it/)
+    assert.match(ok.verified.find((v) => v.id === 'authorization').text, /records the passphrase channel .*not who entered it/)
     assert.deepEqual(ids(ok.verified), ['authorization', 'rehearsal', 'execution'])
   })
 
