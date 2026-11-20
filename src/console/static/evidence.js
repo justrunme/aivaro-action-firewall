@@ -34,9 +34,9 @@ export function gateText(g) {
   if (!g) return 'Gate Health is not available.'
   if (g.status === 'ACTIVE') {
     const r = g.observed?.hook_receipt ?? g.recorded
-    return `The hook blocked the probe command in the probed session ${r?.at ? ago(r.at) : ''} (${seqText(r)}). This covers that session, not every session of this workspace.`
+    return `A hook in this workspace denied the probe command ${r?.at ? ago(r.at) : ''} (${seqText(r)}). This covers the session that ran it, not every session, and not an agent that can read the key directory.`
   }
-  if (g.status === 'INACTIVE') return 'The probe command ran without being blocked: the probed session is not protected by the gate. Trust the workspace (Kiro IDE), set JUSTRUNME_GATE=on, and check the hook file.'
+  if (g.status === 'INACTIVE') return 'The probe command ran without being blocked: the session that ran it is not protected by the gate. Check that the workspace is trusted, that JUSTRUNME_GATE=on reaches the hook, and the hook file.'
   return `${WHY[g.why] ?? 'no proof either way'}. UNKNOWN does not mean that commands are blocked.`
 }
 
@@ -100,6 +100,6 @@ export function evidenceScreen(state, ctx) {
         h('h3', { text: 'Recovery readiness' }),
         h('div', { class: 'links' },
           rr.last_verified_recovery ? line(true, `Last verified recovery ${ago(rr.last_verified_recovery.at)}`, rr.last_verified_recovery) : line(false, 'No recovery with a recorded list of checks has passed in this mission'),
-          line(rr.latest_run_recovery === 'PASS', rr.latest_run_recovery === 'NOT_UNDONE' ? 'The latest run has not been undone' : rr.latest_run_recovery ? `Latest run recovery: ${rr.latest_run_recovery}` : 'No run yet'),
+          line(rr.latest_run_recovery === 'PASS' && Boolean(rr.latest_run_recovery_receipt), rr.latest_run_recovery === 'NOT_UNDONE' ? 'The latest run has not been undone' : rr.latest_run_recovery ? `Latest run recovery: ${rr.latest_run_recovery}` : 'No run yet', rr.latest_run_recovery_receipt),
           line(rr.recovery_rehearsed === true, rr.recovery_rehearsal_note ?? 'Recovery rehearsal not recorded')))))
 }

@@ -44,8 +44,8 @@ const COVER_TEXT = {
   file_sha256: (n, c) => `${n} file checksum(s); ${c.files} file(s) captured`,
   file_absent: (n) => `${n} file(s) present that the capture did not have`,
   schema_hash: (n, c) => `schema hash of ${n} database(s); ${c.databases} captured`,
-  row_count: (n, c) => `row counts of ${n} table(s); ${c.tables} captured`,
-  table_checksum: (n, c) => `checksums of ${n} table(s); ${c.tables} captured`,
+  row_count: (n, c) => `row counts of ${n} table(s); ${c.tables} captured${n !== c.tables ? ' (counted over the captured and the restored tables)' : ''}`,
+  table_checksum: (n, c) => `checksums of ${n} table(s); ${c.tables} captured${n !== c.tables ? ' (counted over the captured and the restored tables)' : ''}`,
   privileges: (n, c) => `grants and ownership of ${n} database(s); ${c.databases} captured`,
   container_image: (n, c) => `image of ${n} container(s); ${c.container_images} captured`,
   health: (n) => `${n} health endpoint check(s)`,
@@ -53,13 +53,12 @@ const COVER_TEXT = {
 
 /** Lines about the undo of the latest run and its verification receipt. */
 function recoveryLines(receipts, run, out) {
-  const index = byHash(receipts)
   const undo = run ? last(receipts, (r) => r.kind === 'undo' && r.refs?.run === receiptHash(run)) : null
   if (!undo) return null
   const v = last(receipts, (r) => r.kind === 'verification' && r.refs?.undo === receiptHash(undo))
   if (!v) {
     out.not_verified.push({ id: 'recovery', text: 'The run was undone, but no recovery verification is recorded', why: 'NO_VERIFICATION', receipt: ref(undo) })
-    return null
+    return { verification: null, undo }
   }
   const s = v.subject ?? {}
   if (v.verdict !== 'PASS') {
@@ -77,11 +76,11 @@ function recoveryLines(receipts, run, out) {
   }
   for (const c of s.not_checked ?? []) out.not_verified.push({ id: `recovery.${c.check}`, text: `Recovery not checked: ${c.check} (${c.resource})`, why: 'NOT_CHECKED', receipt: ref(v) })
   if (s.coverage?.health === 'not configured' || (Array.isArray(s.checked) && !s.coverage && !s.checked.includes('health'))) {
-    out.not_verified.push({ id: 'recovery.health', text: 'Application health after recovery not checked (no health target configured)', why: 'HEALTH_NOT_CONFIGURED', receipt: ref(v) })
+    out.not_verified.push({ id: 'recovery.health', text: s.coverage ? 'Application health after recovery not checked (no health target configured)' : 'Application health after recovery not checked', why: 'HEALTH_NOT_CONFIGURED', receipt: ref(v) })
   }
   if (s.integration_tests !== undefined && s.integration_tests !== 'passed') out.not_verified.push({ id: 'recovery.integration_tests', text: `Integration tests after recovery: ${s.integration_tests ?? 'not run'}`, why: 'INTEGRATION_TESTS_NOT_RUN', receipt: ref(v) })
   if ((s.checked ?? []).includes('container_image')) out.not_verified.push({ id: 'recovery.containers', text: 'Containers are compared by image only; they are not rebuilt or restarted by undo', why: 'CONTAINERS_COMPARED_ONLY', receipt: ref(v) })
-  return { verification: v, undo: index.get(v.refs?.undo) ?? undo }
+  return { verification: v, undo }
 }
 
 /**
@@ -94,9 +93,9 @@ export function proofDebt({ receipts, contract = null, legacyVersions = 0, gate 
 
   if (gate?.status === 'ACTIVE') {
     const r = gate.observed?.hook_receipt ?? gate.recorded
-    out.verified.push({ id: 'gate', text: `The PreToolUse gate blocked the probe command in the probed session at ${r?.at ?? '?'}`, receipt: r ? { seq: r.seq, hash: r.hash } : null })
+    out.verified.push({ id: 'gate', text: `A PreToolUse hook in this workspace denied the gate probe command at ${r?.at ?? '?'} (the receipt names the workspace, not a session)`, receipt: r ? { seq: r.seq, hash: r.hash } : null })
   } else if (gate?.status === 'INACTIVE') {
-    out.not_verified.push({ id: 'gate', text: 'The gate probe command ran unblocked: the probed session is not gated', why: 'GATE_INACTIVE', receipt: gate.recorded ? { seq: gate.recorded.seq, hash: gate.recorded.hash } : null })
+    out.not_verified.push({ id: 'gate', text: 'The gate probe command ran unblocked: the session that ran it is not gated', why: 'GATE_INACTIVE', receipt: gate.recorded ? { seq: gate.recorded.seq, hash: gate.recorded.hash } : null })
   } else {
     out.not_verified.push({ id: 'gate', text: gate?.why === 'STALE' ? 'The last gate probe is older than 15 minutes' : gate?.why === 'WAITING_FOR_PROBE' ? 'Waiting for the agent to run the gate probe command' : 'No gate probe has shown that the current session is gated', why: gate?.why ?? 'NEVER_PROBED' })
   }
@@ -111,9 +110,10 @@ export function proofDebt({ receipts, contract = null, legacyVersions = 0, gate 
   const lastPass = last(receipts, (r) => r.kind === 'verification' && r.verdict === 'PASS' && Array.isArray(r.subject?.checked))
   const readiness = {
     last_verified_recovery: lastPass ? { ...ref(lastPass), at: lastPass.timestamp } : null,
-    latest_run_recovery: recovery ? (recovery.verification.verdict === 'PASS' && !Array.isArray(recovery.verification.subject?.checked) ? 'PASS · CHECKS UNKNOWN' : recovery.verification.verdict) : run ? 'NOT_UNDONE' : null,
+    latest_run_recovery: !recovery ? (run ? 'NOT_UNDONE' : null) : !recovery.verification ? 'UNDONE · NOT VERIFIED' : recovery.verification.verdict === 'PASS' && !Array.isArray(recovery.verification.subject?.checked) ? 'PASS · CHECKS UNKNOWN' : recovery.verification.verdict,
+    latest_run_recovery_receipt: recovery ? ref(recovery.verification ?? recovery.undo) : null,
     recovery_rehearsed: null,
-    recovery_rehearsal_note: 'Recovery is not rehearsed in advance: no Chaos Twin run exists for this mission',
+    recovery_rehearsal_note: 'Recovery is not rehearsed in advance: JustRunMe does not implement recovery rehearsal (Chaos Twin) yet',
   }
   return { ...out, recovery_readiness: readiness }
 }

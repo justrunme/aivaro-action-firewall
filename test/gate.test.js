@@ -5,7 +5,7 @@
 import { describe, it, after } from 'node:test'
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import fc from 'fast-check'
@@ -142,6 +142,18 @@ describe('gate probe: end to end with the real hook and CLI', () => {
     assert.equal(s.cli('evidence').out.result.gate.status, 'INACTIVE')
   })
 
+  it('a canary the agent turned into a directory does not hide the recorded INACTIVE', () => {
+    const s = setup()
+    const p = s.cli('gate-probe', 'start').out.result
+    mkdirSync(path.join(s.ws, canaryName(p.nonce), 'x'), { recursive: true })
+    writeFileSync(path.join(s.ws, canaryName(p.nonce), 'x', 'y'), '')
+    const fin = s.cli('gate-probe', 'finish')
+    assert.equal(fin.exit, 34)
+    assert.equal(fin.out.result.status, 'INACTIVE')
+    assert.equal(fin.out.result.canary_removed, false)
+    assert.equal(s.chain().receipts.at(-1).verdict, 'INACTIVE')
+  })
+
   it('UNKNOWN is recorded as UNKNOWN when the agent never ran the command', () => {
     const s = setup()
     s.cli('gate-probe', 'start')
@@ -185,6 +197,21 @@ describe('gate probe: end to end with the real hook and CLI', () => {
     const g = gateHealth({ repoDir: s2.ws, receipts: s2.chain().receipts })
     assert.deepEqual([g.status, g.why], ['UNKNOWN', 'NEVER_PROBED'])
     assert.equal(g.last_hook_decision.verdict, 'deny')
+  })
+
+  it('the ordering policy refuses an ACTIVE gate_probe that does not rest on the hook denial of its own probe', () => {
+    const s = setup()
+    const p = s.cli('gate-probe', 'start').out.result
+    s.agentRuns(p.command)
+    s.cli('gate-probe', 'finish')
+    const rs = s.chain().receipts
+    assert.deepEqual(checkPolicy(rs).findings, [])
+    const probe = rs.at(-1)
+    const forged = (over) => checkPolicy([...rs.slice(0, -1), { ...probe, ...over, subject: { ...probe.subject, ...(over.subject ?? {}) } }]).findings.map((f) => f.rule)
+    assert.deepEqual(forged({ refs: {} }), ['ACTIVE must refer to an earlier hook denial of the probe command'])
+    assert.deepEqual(forged({ subject: { nonce: 'ffffffffffffffff' } }), ['ACTIVE refers to a hook denial of another probe'])
+    assert.deepEqual(forged({ subject: { started_at: new Date(Date.now() + 60_000).toISOString() } }), ['ACTIVE refers to a hook denial from before the probe started'])
+    assert.deepEqual(forged({ verdict: 'INACTIVE' }), ['INACTIVE without the canary file'])
   })
 
   it('gate-probe refuses another mission and unknown actions', () => {

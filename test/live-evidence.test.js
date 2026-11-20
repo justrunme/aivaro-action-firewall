@@ -41,7 +41,7 @@ const kinds = (rs) => rs.reduce((m, r) => ({ ...m, [r.kind]: (m[r.kind] ?? 0) + 
 const db = (run) => JSON.parse(readFileSync(path.join(EVIDENCE, run, 'db-after.json'), 'utf8')).queries
 
 describe('live evidence: every committed chain verifies offline', () => {
-  for (const [run, count] of [['live1', 17], ['live2', 28], ['probe', 9], ['ide', 20]]) {
+  for (const [run, count] of [['live1', 17], ['live2', 28], ['probe', 9], ['ide', 20], ['gate', 3]]) {
     it(`${run}: ${count} receipts, signatures, links and head anchor`, () => {
       const r = load(run)
       assert.deepEqual(r.findings, [])
@@ -57,6 +57,16 @@ describe('live evidence: every committed chain verifies offline', () => {
 })
 
 describe('live evidence: what the reports cite', () => {
+  it('gate: Gate Health live with Kiro CLI, gate on ACTIVE (the hook denied the probe), gate off INACTIVE (the canary was made)', () => {
+    const { receipts: rs } = load('gate')
+    assert.deepEqual(rs.map((r) => [r.kind, r.verdict]), [['hook_decision', 'deny'], ['gate_probe', 'ACTIVE'], ['gate_probe', 'INACTIVE']])
+    assert.equal(rs[0].subject.category, 'GATE_PROBE')
+    assert.equal(rs[0].subject.reason, `gate probe ${rs[1].subject.nonce}`)
+    assert.equal(rs[1].subject.hook_receipt_seq, 0)
+    assert.ok(rs[1].refs.hook_decision)
+    assert.deepEqual([rs[2].subject.canary_present, rs[2].subject.hook_receipt_seq], [true, null])
+    assert.notEqual(rs[2].subject.nonce, rs[1].subject.nonce)
+  })
   it('ide: the live1 chain continued by three Kiro IDE calls in a trusted workspace (echo denied, read allowed, rm -rf denied)', () => {
     const live1 = readFileSync(path.join(EVIDENCE, 'live1', 'receipts.jsonl'), 'utf8')
     assert.ok(readFileSync(path.join(EVIDENCE, 'ide', 'receipts.jsonl'), 'utf8').startsWith(live1), 'receipts 0 to 16 are the committed live1 chain, unchanged')

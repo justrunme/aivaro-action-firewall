@@ -86,7 +86,7 @@ describe('Console Safety Evidence', () => {
     assert.equal(r.verified[0].id, 'gate')
     const view = evidenceScreen(s, { api: async () => ({}), readOnly: false })
     assert.match(text(findAll(view, (e) => hasClass(e, 'hero-label'))[0]), /ACTIVE/)
-    assert.match(text(view), /not every session of this workspace/)
+    assert.match(text(view), /not every session, and not an agent that can read the key directory/)
     // Every line under "not verified" is grey, never green.
     const open = findAll(view, (e) => hasClass(e, 'unverified'))[0]
     assert.ok(open.children.length >= 3)

@@ -72,6 +72,18 @@ describe('ProofDebt: nothing is claimed without a receipt', () => {
     assert.equal(d.recovery_readiness.latest_run_recovery, 'NOT_UNDONE')
   })
 
+  it('an undo without a verification receipt is not reported as "not undone", and claims no recovery', () => {
+    const c = chain()
+    const reh = c.add('rehearsal', 'SAFE', { plan_id: 'plan-1' })
+    const auth = c.add('authorization_issued', 'allow', { passphrase_source: 'stdin' }, { rehearsal: reh })
+    const run = c.add('run_result', 'completed', { matches_rehearsal: true }, { authorization: auth })
+    c.add('undo', 'undo', {}, { run })
+    const d = proofDebt({ receipts: c.receipts })
+    assert.equal(d.recovery_readiness.latest_run_recovery, 'UNDONE · NOT VERIFIED')
+    assert.equal(d.recovery_readiness.latest_run_recovery_receipt.seq, 3)
+    assert.equal(d.not_verified.find((n) => n.id === 'recovery').why, 'NO_VERIFICATION')
+  })
+
   it('a legacy PASS (no list of checks) claims no check', () => {
     const d = proofDebt({ receipts: story({ undo: { verdict: 'PASS', subject: { checks: 7, integration_tests: 'not configured' } } }) })
     assert.ok(!d.verified.some((v) => v.id.startsWith('recovery')))

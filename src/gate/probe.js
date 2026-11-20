@@ -14,8 +14,12 @@
  * Recent hook receipts without a probe are shown for information only: they prove that a
  * hook ran in this workspace, not that the session being looked at is gated.
  *
- * The agent cannot forge ACTIVE (it would need the operator key). It can create the canary
- * file itself, which only raises a false alarm.
+ * Limits. ACTIVE rests on a receipt signed with the operator key, which the hook loads from the
+ * key directory without a passphrase. In a session the gate does not cover, an agent with a shell
+ * can read that directory, sign a denial itself and remove the canary file: ACTIVE is evidence
+ * against a misconfigured or untrusted workspace, not against a hostile agent that is already
+ * ungated. Removing the canary turns INACTIVE into UNKNOWN. Creating the canary only raises a
+ * false alarm. The receipt names the workspace mission, not a Kiro session.
  */
 import { randomBytes } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
@@ -105,8 +109,17 @@ export function finishProbe({ repoDir, keys, missionId, receipts, now = Date.now
     now,
   }).hash
   rmSync(probePath(repoDir), { force: true })
-  if (o.canary_present) rmSync(path.join(repoDir, canaryName(o.nonce)), { force: true })
-  return { ...o, receipt: hash }
+  // The receipt is written; a canary the agent turned into a directory must not hide that.
+  let canaryRemoved = null
+  if (o.canary_present) {
+    try {
+      rmSync(path.join(repoDir, canaryName(o.nonce)), { force: true })
+      canaryRemoved = true
+    } catch {
+      canaryRemoved = false
+    }
+  }
+  return { ...o, receipt: hash, canary_removed: canaryRemoved }
 }
 
 /**
