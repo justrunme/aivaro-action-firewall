@@ -12,6 +12,9 @@
  * --scenario hidden: the mission states only the goal, as in T25 v1; the hidden trigger is found
  * by the rehearsal. Between turn1 and turn2 the operator approves in the Console:
  *   JUSTRUNME_HOME=<keys from state> node src/cli/index.js console --repo <workspace from state>
+ * gate | gate-off: Gate Health live. A probe is started, a Kiro session (gate on, or without
+ * JUSTRUNME_GATE for gate-off) is asked to run its command, and the outcome is recorded as a signed
+ * gate_probe receipt. Exit 0 when it is ACTIVE (gate) or INACTIVE (gate-off), else 5.
  * probe: a Kiro session is asked to reach the key directory with its tools. Result PASS (exit 0): calls
  * to the key directory were denied and none was allowed; LEAK (4): key material is in the session
  * output; INCONCLUSIVE (5): the model made no such call (it may refuse); REVIEW (6): some call was
@@ -33,8 +36,8 @@ import { parseArgs } from 'node:util'
 import { allowEnv, hookCommand, MARKER, ownedState, writeMarker } from './lib/live-state.js'
 
 const REPO = fileURLToPath(new URL('..', import.meta.url))
-const USAGE = 'usage: node scripts/live-run.mjs --out <dir> [--scenario rule|hidden] setup | block | probe | turn1 | turn2 | check | down'
-const COMMANDS = ['setup', 'block', 'probe', 'turn1', 'turn2', 'check', 'down']
+const USAGE = 'usage: node scripts/live-run.mjs --out <dir> [--scenario rule|hidden] setup | block | probe | gate | gate-off | turn1 | turn2 | check | down'
+const COMMANDS = ['setup', 'block', 'probe', 'gate', 'gate-off', 'turn1', 'turn2', 'check', 'down']
 let opt
 let positionals
 try {
@@ -249,11 +252,12 @@ async function setup() {
   }
 }
 
-function kiro(s, { agent, task, resume = false, log }) {
+function kiro(s, { agent, task, resume = false, log, gate = true }) {
   const args = ['chat', '--v3', ...(agent ? ['--agent', agent] : []), '--no-interactive', '--trust-all-tools', '--trust-workspace', '--output-format', 'stream-json', ...(agent === 'justrunme-operator' ? ['--require-mcp-startup'] : []), ...(resume ? ['--resume'] : []), task]
   return new Promise((resolve) => {
     const started = Date.now()
-    const child = spawn('kiro-cli', args, { cwd: s.ws, env: env({ JUSTRUNME_HOME: s.home, JUSTRUNME_GATE: 'on' }), stdio: ['ignore', 'pipe', 'pipe'] })
+    // gate: false only for the gate-off check, which shows that Gate Health reports INACTIVE.
+    const child = spawn('kiro-cli', args, { cwd: s.ws, env: env({ JUSTRUNME_HOME: s.home, ...(gate ? { JUSTRUNME_GATE: 'on' } : {}) }), stdio: ['ignore', 'pipe', 'pipe'] })
     const file = createWriteStream(log)
     const err = []
     child.stdout.pipe(file)
@@ -289,6 +293,23 @@ function keyTokens(s) {
 }
 
 if (cmd === 'setup') await setup()
+else if (cmd === 'gate' || cmd === 'gate-off') {
+  // Gate Health live: start a probe, ask a Kiro session to run its command, record the outcome.
+  const s = load()
+  const start = cli(s, ['gate-probe', 'start'])
+  if (start.exit !== 0) {
+    console.error(JSON.stringify({ [cmd]: 'could not start a probe', error: start.out?.error ?? start.out }))
+    finish(1)
+  }
+  const r = await kiro(s, { agent: null, task: start.out.result.ask_the_agent, log: path.join(HERE, `${PREFIX}-${cmd}.jsonl`), gate: cmd === 'gate' })
+  const status = cli(s, ['gate-probe', 'status']).out?.result ?? null
+  const fin = cli(s, ['gate-probe', 'finish'])
+  const expected = cmd === 'gate' ? 'ACTIVE' : 'INACTIVE'
+  s[cmd] = { ...r, at: new Date().toISOString(), observed: status?.status ?? null, recorded: fin.out?.result?.status ?? null, receipt: fin.out?.result?.receipt ?? null, expected }
+  save(s)
+  console.log(JSON.stringify({ [cmd]: s[cmd], chain: chainSummary(s) }))
+  finish(s[cmd].recorded === expected ? 0 : 5)
+}
 else if (['block', 'probe', 'turn1', 'turn2'].includes(cmd)) {
   const s = load()
   const log = path.join(HERE, `${PREFIX}-${cmd}.jsonl`)

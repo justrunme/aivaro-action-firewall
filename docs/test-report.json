@@ -1,13 +1,13 @@
 {
   "schema": 1,
-  "passed": 513,
-  "failed": 0,
+  "passed": 542,
+  "failed": 1,
   "skipped": 0,
-  "total": 513,
-  "commit": "fafe90e044225e93003362c0e172b1c556d881dd",
+  "total": 543,
+  "commit": "ec1d6fc145efb6c452cb443902e93f4ed3b2e702",
   "dirty": true,
-  "finished_at": "2026-11-20T13:07:38.961Z",
+  "finished_at": "2026-11-20T14:28:14.788Z",
   "node": "v24.22.3",
-  "exit_code": 0,
+  "exit_code": 1,
   "ci": null
 }

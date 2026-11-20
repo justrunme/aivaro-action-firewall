@@ -21,14 +21,18 @@
  *      authorization that answers a request (refs.approval) answers a request of
  *      the same plan, rehearsal and report, only once, never after a denial, and
  *      not after the request expired.
+ *   8. gate_probe ACTIVE refers to an earlier hook denial (GATE_PROBE) of the same nonce,
+ *      made after the probe started and at most FRESH_MS before the gate_probe itself, with no
+ *      canary file; INACTIVE has the canary file.
  * Each break is a POLICY_VIOLATION finding naming the receipt and the rule.
  */
 
 import { receiptHash } from './chain.js'
+import { FRESH_MS } from '../gate/command.js'
 
-// Receipts that are not part of the mission story: parallel hook decisions and
+// Receipts that are not part of the mission story: parallel hook decisions, gate probes and
 // operator maintenance of the chain itself. They may land between undo and verification.
-const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered'])
+const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered', 'gate_probe'])
 // Longest life of an approval request (REQUEST_TTL_SECONDS in src/approval/requests.js; not imported, to keep receipts free of approval code).
 const MAX_REQUEST_SECONDS = 3600
 
@@ -126,6 +130,18 @@ export function checkPolicy(receipts) {
       if (!undo || undo.kind !== 'undo') violation(r, 'must refer to an undo receipt')
       // Hook decisions and chain maintenance may land in between; nothing else may.
       else if (undo !== lastOperatorReceipt) violation(r, 'must directly follow the undo it verifies')
+    }
+    if (r.kind === 'gate_probe') {
+      // ACTIVE rests on the hook's own signed denial of this probe's command; nothing else may be cited.
+      const hit = earlier(r.refs?.hook_decision)
+      if (r.verdict === 'ACTIVE') {
+        if (!hit || hit.kind !== 'hook_decision' || hit.verdict !== 'deny' || hit.subject?.category !== 'GATE_PROBE') violation(r, 'ACTIVE must refer to an earlier hook denial of the probe command')
+        else if (hit.subject?.reason !== `gate probe ${r.subject?.nonce}`) violation(r, 'ACTIVE refers to a hook denial of another probe')
+        else if (Date.parse(hit.timestamp) < Date.parse(r.subject?.started_at)) violation(r, 'ACTIVE refers to a hook denial from before the probe started')
+        else if (Date.parse(r.timestamp) - Date.parse(hit.timestamp) > FRESH_MS) violation(r, 'ACTIVE recorded after its hook denial went stale')
+        if (r.subject?.canary_present === true) violation(r, 'ACTIVE with the canary file present')
+      } else if (r.verdict === 'INACTIVE' && r.subject?.canary_present !== true) violation(r, 'INACTIVE without the canary file')
+      else if (!['INACTIVE', 'UNKNOWN'].includes(r.verdict)) violation(r, `unknown gate probe verdict ${r.verdict}`)
     }
     bySeqHash.set(receiptHash(r), r)
     if (r.kind === 'rehearsal' && typeof r.subject?.plan_id === 'string') latestRehearsal.set(r.subject.plan_id, r)

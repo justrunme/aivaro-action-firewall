@@ -32,6 +32,7 @@ const STATIC = {
   '/screens.js': ['screens.js', 'text/javascript; charset=utf-8'],
   '/home.js': ['home.js', 'text/javascript; charset=utf-8'],
   '/onboarding.js': ['onboarding.js', 'text/javascript; charset=utf-8'],
+  '/evidence.js': ['evidence.js', 'text/javascript; charset=utf-8'],
   '/style.css': ['style.css', 'text/css; charset=utf-8'],
 }
 const STATIC_DIR = new URL('./static/', import.meta.url)
@@ -130,6 +131,7 @@ export async function startConsole({ repoDir, mission, port = 0, token = randomB
     'POST /api/approve': (body) => api.approve(body),
     'POST /api/deny': (body) => api.deny(body),
     'POST /api/undo': (body) => api.undo(body),
+    'POST /api/gate-probe': (body) => api.gateProbe(body),
   }
 
   async function handle(req, res) {

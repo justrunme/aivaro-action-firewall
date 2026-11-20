@@ -13,6 +13,7 @@ import { fileURLToPath } from 'node:url'
 import { AGENT_TOOL_HOOK_NAMES } from '../mcp/names.js'
 import { analyzeShell } from './bypass.js'
 import { authorizationProblem, checkWindow, matchEntry } from './allowlist.js'
+import { probeNonce, probeReason } from '../gate/command.js'
 
 // Root of the JustRunMe installation that is running this hook. If it lies inside
 // the workspace, its code and dependencies are protected like the gate itself:
@@ -165,6 +166,12 @@ export function evaluate(event, ctx) {
 
   const name = event.tool_name.toLowerCase()
   const kind = classify(name)
+  // Gate Health: the probe command is always denied, before anything else could allow it.
+  // The signed receipt with this reason is the proof that the hook ran for the call.
+  if (kind === 'shell') {
+    const nonce = probeNonce(input.command)
+    if (nonce) return deny('GATE_PROBE', probeReason(nonce))
+  }
   if (touchesKeyHome(input, ctx)) return deny('PROTECTED_PATH', 'access to the operator key directory')
   if (kind === 'read') {
     const problem = readOutsideWorkspace(input, ctx)

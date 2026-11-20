@@ -16,6 +16,8 @@
  *   justrunme approve <request_id> --confirm <plan_id> [--passphrase-stdin]
  *   justrunme deny <request_id> --reason "<text>"
  *   justrunme history                       # versions, approvals, runs and the links between them
+ *   justrunme evidence                      # Gate Health, ProofDebt, recovery readiness (read only)
+ *   justrunme gate-probe start|status|finish  # is the agent's session gated? (exit 0 ACTIVE, 34 INACTIVE, 35 UNKNOWN)
  *   justrunme console [--port n]            # local Console on 127.0.0.1; keeps running
  * Common options: --repo <dir> (default: current directory), --mission <id>, --text.
  */
@@ -29,6 +31,7 @@ import { redactDeep } from '../privacy/redact.js'
 import { keyHome } from '../receipts/keys.js'
 import { EXIT } from './codes.js'
 import * as cmd from './commands.js'
+import { evidenceCmd, gateProbeCmd } from './evidence-commands.js'
 
 const MISSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/
 const OPTIONS = {
@@ -47,7 +50,7 @@ const OPTIONS = {
   help: { type: 'boolean', short: 'h', default: false },
 }
 
-const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny|history|console> [options]'
+const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny|history|evidence|gate-probe|console> [options]'
 
 async function dispatch(command, rest, repoDir, opts) {
   const ctx = { repoDir, opts }
@@ -90,6 +93,10 @@ async function dispatch(command, rest, repoDir, opts) {
       return cmd.denyCmd({ ...ctx, id: rest[0] })
     case 'history':
       return cmd.historyCmd(ctx)
+    case 'evidence':
+      return evidenceCmd(ctx)
+    case 'gate-probe':
+      return gateProbeCmd({ ...ctx, action: rest[0] })
     case 'console':
       throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'console is a long-running server; start it from the command line: justrunme console [--port n]')
   }

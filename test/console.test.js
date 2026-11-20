@@ -258,7 +258,7 @@ describe('Console writes go through the CLI (T27)', () => {
   })
 
   it('in-process the Console can run only read commands, and its source never touches the approver key', async () => {
-    assert.deepEqual([...READ_COMMANDS].sort(), ['approvals', 'history', 'receipt', 'replay', 'status', 'verify'])
+    assert.deepEqual([...READ_COMMANDS].sort(), ['approvals', 'evidence', 'history', 'receipt', 'replay', 'status', 'verify'])
     const files = []
     const walk = (d) => {
       for (const e of readdirSync(d, { withFileTypes: true })) {
@@ -273,7 +273,7 @@ describe('Console writes go through the CLI (T27)', () => {
       assert.doesNotMatch(src, /approver\.js|approveCmd|authorizeCmd|authorizeMission|loadApproverKey|createApproverKey|commands\.js/, path.basename(f))
     }
     // The CLI code loaded in this process includes approve; the read path refuses it and every other write.
-    for (const w of ['approve', 'authorize', 'deny', 'undo', 'run', 'approver', 'keys', 'reanchor', 'lock']) assert.throws(() => readArgv(w, [], []), /not a read command/)
+    for (const w of ['approve', 'authorize', 'deny', 'undo', 'run', 'approver', 'keys', 'reanchor', 'lock', 'gate-probe']) assert.throws(() => readArgv(w, [], []), /not a read command/)
     assert.deepEqual(readArgv('history', [], ['--repo', 'x']), ['history', '--repo', 'x'])
     // Every in-process call the API makes is a read command.
     const seen = []
@@ -282,7 +282,7 @@ describe('Console writes go through the CLI (T27)', () => {
     await api.replay()
     await api.receipt('0')
     await api.approval('apr-00000000000000aa')
-    assert.ok(seen.length === 7 && seen.every((c) => READ_COMMANDS.includes(c)), seen.join())
+    assert.ok(seen.length === 8 && seen.every((c) => READ_COMMANDS.includes(c)), seen.join())
     assert.equal(Object.keys(api).includes('read'), false)
   })
 })
