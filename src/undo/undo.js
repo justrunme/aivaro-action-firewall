@@ -167,6 +167,8 @@ export async function undoMission({ repoDir, missionId, captureId, target, keys,
         failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource, expected: c.expected, actual: c.actual })),
         ...(verification.not_checked?.length ? { not_checked: verification.not_checked.map((c) => ({ check: c.check, resource: c.resource })) } : {}),
         integration_tests: verification.integration_tests,
+        // What the checks covered next to what the capture holds (new receipts only; older ones lack it).
+        ...(verification.coverage ? { coverage: verification.coverage } : {}),
       },
       refs: { undo: outcome.receipts.undo },
     }).hash

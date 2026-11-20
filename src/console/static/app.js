@@ -9,6 +9,7 @@ import { badge, h, stateBox } from './ui.js'
 import { approvalsScreen, impactScreen, missionsScreen, noticeBar, recoveryScreen } from './screens.js'
 import { homeScreen } from './home.js'
 import { setupScreen } from './onboarding.js'
+import { evidenceScreen } from './evidence.js'
 
 const SCREENS = {
   home: (state, ctx) => homeScreen(ctx),
@@ -17,6 +18,7 @@ const SCREENS = {
   impact: impactScreen,
   approvals: approvalsScreen,
   recovery: recoveryScreen,
+  evidence: evidenceScreen,
 }
 const KEY = 'justrunme-console-token'
 
@@ -302,8 +304,8 @@ async function poll() {
   }
 }
 
-// Keys 1 to 6 open the six screens; Escape closes a SQL panel shown over the full width.
-const ORDER = ['home', 'missions', 'impact', 'approvals', 'recovery', 'setup']
+// Keys 1 to 7 open the seven screens; Escape closes a SQL panel shown over the full width.
+const ORDER = ['home', 'missions', 'impact', 'approvals', 'recovery', 'evidence', 'setup']
 document.addEventListener('keydown', (e) => {
   const t = e.target
   if (e.key === 'Escape') {
@@ -315,7 +317,7 @@ document.addEventListener('keydown', (e) => {
   }
   if (e.altKey || e.ctrlKey || e.metaKey || /^(INPUT|TEXTAREA|SELECT)$/.test(t?.tagName ?? '') || t?.isContentEditable) return
   const n = Number(e.key)
-  if (n >= 1 && n <= 6) location.hash = `#/${ORDER[n - 1]}`
+  if (n >= 1 && n <= ORDER.length) location.hash = `#/${ORDER[n - 1]}`
 })
 
 picker?.addEventListener('change', (e) => {

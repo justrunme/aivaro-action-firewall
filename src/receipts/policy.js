@@ -26,9 +26,9 @@
 
 import { receiptHash } from './chain.js'
 
-// Receipts that are not part of the mission story: parallel hook decisions and
+// Receipts that are not part of the mission story: parallel hook decisions, gate probes and
 // operator maintenance of the chain itself. They may land between undo and verification.
-const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered'])
+const CHAIN_MAINTENANCE = new Set(['hook_decision', 'chain_reanchored', 'lock_recovered', 'gate_probe'])
 // Longest life of an approval request (REQUEST_TTL_SECONDS in src/approval/requests.js; not imported, to keep receipts free of approval code).
 const MAX_REQUEST_SECONDS = 3600
 

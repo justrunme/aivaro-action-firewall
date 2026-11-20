@@ -25,7 +25,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { main } from '../cli/index.js'
 
-export const READ_COMMANDS = Object.freeze(['history', 'verify', 'approvals', 'status', 'receipt', 'replay'])
+export const READ_COMMANDS = Object.freeze(['history', 'verify', 'approvals', 'status', 'receipt', 'replay', 'evidence'])
 const CLI = fileURLToPath(new URL('../cli/index.js', import.meta.url))
 
 const REQUEST_ID_RE = /^apr-[0-9a-f]{16}$/
@@ -131,8 +131,8 @@ export function createApi({ repoDir, mission, cliPath = CLI, env = process.env, 
     /** Everything the Missions, Impact Diff and Recovery screens show, for one mission. */
     async state(asked) {
       const m = missionOf(asked)
-      const [story, verify, approvals, status] = await Promise.all([read(m, 'history'), read(m, 'verify'), read(m, 'approvals'), read(m, 'status')])
-      return { mission: m, story, verify, approvals, status }
+      const [story, verify, approvals, status, evidence] = await Promise.all([read(m, 'history'), read(m, 'verify'), read(m, 'approvals'), read(m, 'status'), read(m, 'evidence')])
+      return { mission: m, story, verify, approvals, status, evidence }
     },
 
     async approval(id, asked) {
@@ -168,6 +168,15 @@ export function createApi({ repoDir, mission, cliPath = CLI, env = process.env, 
       if (typeof reason !== 'string' || reason.trim().length < 3 || reason.length > MAX_REASON) throw new InputError('REASON_REQUIRED', `a reason of 3 to ${MAX_REASON} characters is required`)
       // `--reason=<text>`: a reason that starts with "-" stays the reason, never an option.
       return runChild(missionOf(asked), ['deny', request_id, `--reason=${reason.trim()}`], { timeoutMs: 60_000 })
+    },
+
+    /**
+     * Gate Health probe of the workspace: start (a new nonce and the command for the agent) or
+     * finish (the outcome as a signed gate_probe receipt). Always the mission of the active contract.
+     */
+    async gateProbe({ action } = {}) {
+      if (action !== 'start' && action !== 'finish') throw new InputError('ACTION_INVALID', 'action must be start or finish')
+      return runChild(null, ['gate-probe', action], { timeoutMs: 60_000 })
     },
 
     async undo({ capture_id, confirm, mission: asked } = {}) {

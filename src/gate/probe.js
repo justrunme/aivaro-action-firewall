@@ -1,0 +1,132 @@
+/**
+ * Gate Health: is the PreToolUse gate running for the agent's session right now?
+ *
+ * A probe has a random nonce. The operator asks the agent to run the probe command
+ * (src/gate/command.js) in the session to check. Then exactly one of three things is seen:
+ *   ACTIVE    a signed hook_decision receipt denies that command (category GATE_PROBE,
+ *             reason naming the nonce), timestamped after the probe started: the hook ran
+ *             for that call in that session.
+ *   INACTIVE  the canary file the command creates exists: nothing blocked the command.
+ *             This wins over a receipt (some session ran it unblocked).
+ *   UNKNOWN   neither: the agent did not run the command, another layer stopped it, or the
+ *             workspace has no active contract (the hook signs nothing then). UNKNOWN never
+ *             means blocked.
+ * Recent hook receipts without a probe are shown for information only: they prove that a
+ * hook ran in this workspace, not that the session being looked at is gated.
+ *
+ * The agent cannot forge ACTIVE (it would need the operator key). It can create the canary
+ * file itself, which only raises a false alarm.
+ */
+import { randomBytes } from 'node:crypto'
+import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { appendReceipt, receiptHash } from '../receipts/chain.js'
+import { NONCE_RE, canaryName, probeCommand, probeReason } from './command.js'
+
+const STATE_DIR = '.justrunme'
+const PROBE_FILE = 'gate-probe.json'
+/** An ACTIVE result older than this is reported as UNKNOWN (stale): sessions change. */
+export const FRESH_MS = 15 * 60_000
+
+const probePath = (repoDir) => path.join(repoDir, STATE_DIR, PROBE_FILE)
+
+export class ProbeError extends Error {
+  /** @param {string} code @param {string} message */
+  constructor(code, message) {
+    super(message)
+    this.code = code
+  }
+}
+
+/** The pending probe of a workspace, or null. A malformed file counts as none. */
+export function pendingProbe(repoDir) {
+  try {
+    const p = JSON.parse(readFileSync(probePath(repoDir), 'utf8'))
+    return p && NONCE_RE.test(p.nonce ?? '') && !Number.isNaN(Date.parse(p.started_at)) ? { nonce: p.nonce, started_at: p.started_at } : null
+  } catch {
+    return null
+  }
+}
+
+/** Starts a probe (replacing a pending one) and returns the command to give the agent. */
+export function startProbe({ repoDir, now = Date.now() }) {
+  const nonce = randomBytes(8).toString('hex')
+  const probe = { nonce, started_at: new Date(now).toISOString() }
+  mkdirSync(path.join(repoDir, STATE_DIR), { recursive: true })
+  const part = `${probePath(repoDir)}.part-${process.pid}`
+  writeFileSync(part, JSON.stringify(probe) + '\n', { mode: 0o600 })
+  renameSync(part, probePath(repoDir))
+  return { ...probe, command: probeCommand(nonce) }
+}
+
+const canaryPresent = (repoDir, nonce) => {
+  try {
+    lstatSync(path.join(repoDir, canaryName(nonce)))
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * What the workspace shows for one probe.
+ * @param {{ repoDir: string, receipts: any[], probe: { nonce: string, started_at: string } }} a receipts of a verified chain
+ */
+export function observeProbe({ repoDir, receipts, probe }) {
+  const since = Date.parse(probe.started_at)
+  const hit = receipts.find((r) => r.kind === 'hook_decision' && r.verdict === 'deny' && r.subject?.category === 'GATE_PROBE' && r.subject?.reason === probeReason(probe.nonce) && Date.parse(r.timestamp) >= since)
+  const canary = canaryPresent(repoDir, probe.nonce)
+  const status = canary ? 'INACTIVE' : hit ? 'ACTIVE' : 'UNKNOWN'
+  return {
+    status,
+    nonce: probe.nonce,
+    started_at: probe.started_at,
+    canary_present: canary,
+    hook_receipt: hit ? { seq: hit.seq, hash: receiptHash(hit), at: hit.timestamp, tool: hit.subject?.tool ?? null } : null,
+  }
+}
+
+/**
+ * Records the outcome of the pending probe as a signed gate_probe receipt, then removes
+ * the probe state and the canary file.
+ */
+export function finishProbe({ repoDir, keys, missionId, receipts, now = Date.now() }) {
+  const probe = pendingProbe(repoDir)
+  if (!probe) throw new ProbeError('NO_PROBE', 'no gate probe is pending; start one first')
+  const o = observeProbe({ repoDir, receipts, probe })
+  const hash = appendReceipt({
+    repoDir,
+    keys,
+    missionId,
+    kind: 'gate_probe',
+    verdict: o.status,
+    subject: { nonce: o.nonce, started_at: o.started_at, canary_present: o.canary_present, hook_receipt_seq: o.hook_receipt?.seq ?? null },
+    refs: o.hook_receipt ? { hook_decision: o.hook_receipt.hash } : {},
+    now,
+  }).hash
+  rmSync(probePath(repoDir), { force: true })
+  if (o.canary_present) rmSync(path.join(repoDir, canaryName(o.nonce)), { force: true })
+  return { ...o, receipt: hash }
+}
+
+/**
+ * The Gate Health panel: the pending probe if there is one, else the last recorded probe,
+ * with ACTIVE turning UNKNOWN once it is older than FRESH_MS.
+ * @param {{ repoDir: string, receipts: any[], now?: number }} a receipts of a verified chain
+ */
+export function gateHealth({ repoDir, receipts, now = Date.now() }) {
+  const lastHook = [...receipts].reverse().find((r) => r.kind === 'hook_decision') ?? null
+  const info = { last_hook_decision: lastHook ? { seq: lastHook.seq, at: lastHook.timestamp, verdict: lastHook.verdict } : null }
+  const probe = pendingProbe(repoDir)
+  if (probe) {
+    const o = observeProbe({ repoDir, receipts, probe })
+    const at = o.hook_receipt ? Date.parse(o.hook_receipt.at) : null
+    if (o.status === 'ACTIVE' && now - at > FRESH_MS) return { status: 'UNKNOWN', why: 'STALE', pending: true, observed: o, ...info }
+    return { status: o.status, why: o.status === 'UNKNOWN' ? 'WAITING_FOR_PROBE' : 'PROBE_OBSERVED', pending: true, observed: o, command: probeCommand(o.nonce), ...info }
+  }
+  const last = [...receipts].reverse().find((r) => r.kind === 'gate_probe') ?? null
+  if (!last) return { status: 'UNKNOWN', why: 'NEVER_PROBED', pending: false, recorded: null, ...info }
+  const recorded = { seq: last.seq, hash: receiptHash(last), at: last.timestamp, verdict: last.verdict, canary_present: last.subject?.canary_present === true }
+  if (last.verdict === 'ACTIVE' && now - Date.parse(last.timestamp) > FRESH_MS) return { status: 'UNKNOWN', why: 'STALE', pending: false, recorded, ...info }
+  return { status: ['ACTIVE', 'INACTIVE'].includes(last.verdict) ? last.verdict : 'UNKNOWN', why: 'PROBE_RECORDED', pending: false, recorded, ...info }
+}

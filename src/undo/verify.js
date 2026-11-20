@@ -35,6 +35,26 @@ export async function pollHealth(target, health, maxMs = 30000) {
 /** What the privileges check covers; a PASS of it is no claim about anything else. */
 export const PRIVILEGES_SCOPE = 'supported database grants and ownership (database, schemas, tables, views, sequences, columns, functions, default privileges); not RLS policies, role attributes or settings, database settings, types, domains or large objects'
 
+/**
+ * How much each check covered, next to what the capture holds, so that a reader can tell
+ * "row counts of 3 of 3 captured tables" from "row counts of one table". Counts only; the
+ * resources themselves stay in the capture manifest.
+ */
+export function coverageOf(checks, manifest, health) {
+  const byCheck = {}
+  for (const c of checks) byCheck[c.check] = (byCheck[c.check] ?? 0) + 1
+  return {
+    by_check: byCheck,
+    captured: {
+      files: manifest.files?.files?.length ?? 0,
+      databases: manifest.postgres?.length ?? 0,
+      tables: (manifest.postgres ?? []).reduce((n, db) => n + Object.keys(db.measurement?.tables ?? {}).length, 0),
+      container_images: Object.keys(manifest.containers?.images ?? {}).length,
+    },
+    health: health ? 'checked' : 'not configured',
+  }
+}
+
 /** @returns {'PASS' | 'FAIL' | 'UNVERIFIABLE'} */
 export function verificationStatus(checks, notChecked) {
   if (checks.some((c) => !c.ok)) return 'FAIL'
@@ -98,5 +118,5 @@ export async function verifyRecovery({ repoDir, manifest, target, health = null 
   }
 
   const failed = checks.filter((c) => !c.ok)
-  return { status: verificationStatus(checks, notChecked), checks, failed, not_checked: notChecked, integration_tests: 'not configured' }
+  return { status: verificationStatus(checks, notChecked), checks, failed, not_checked: notChecked, integration_tests: 'not configured', coverage: coverageOf(checks, manifest, health) }
 }
