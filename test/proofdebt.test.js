@@ -38,7 +38,7 @@ describe('ProofDebt: nothing is claimed without a receipt', () => {
   it('an empty chain claims nothing and lists what is missing', () => {
     const d = proofDebt({ receipts: [] })
     assert.deepEqual(d.verified, [])
-    assert.deepEqual(ids(d.not_verified), ['gate', 'authorization', 'execution', 'external'])
+    assert.deepEqual(ids(d.not_verified), ['gate', 'authorization', 'execution', 'external', 'recovery_rehearsal'])
     assert.equal(d.recovery_readiness.last_verified_recovery, null)
     assert.equal(d.recovery_readiness.recovery_rehearsed, null)
   })

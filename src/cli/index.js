@@ -18,6 +18,7 @@
  *   justrunme history                       # versions, approvals, runs and the links between them
  *   justrunme evidence                      # Gate Health, ProofDebt, recovery readiness (read only)
  *   justrunme gate-probe start|status|finish  # is the agent's session gated? (exit 0 ACTIVE, 34 INACTIVE, 35 UNKNOWN)
+ *   justrunme chaos [--fault-after <n>]     # rehearse the recovery on a disposable twin (exit 0 RECOVERY PROVEN, else 36)
  *   justrunme console [--port n]            # local Console on 127.0.0.1; keeps running
  * Common options: --repo <dir> (default: current directory), --mission <id>, --text.
  */
@@ -32,6 +33,7 @@ import { keyHome } from '../receipts/keys.js'
 import { EXIT } from './codes.js'
 import * as cmd from './commands.js'
 import { evidenceCmd, gateProbeCmd } from './evidence-commands.js'
+import { chaosCmd } from './chaos-command.js'
 
 const MISSION_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{2,63}$/
 const OPTIONS = {
@@ -47,10 +49,11 @@ const OPTIONS = {
   'passphrase-stdin': { type: 'boolean', default: false },
   'emergency-recovery': { type: 'boolean', default: false },
   confirm: { type: 'string' },
+  'fault-after': { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 }
 
-const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny|history|evidence|gate-probe|console> [options]'
+const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny|history|evidence|gate-probe|chaos|console> [options]'
 
 async function dispatch(command, rest, repoDir, opts) {
   const ctx = { repoDir, opts }
@@ -97,6 +100,8 @@ async function dispatch(command, rest, repoDir, opts) {
       return evidenceCmd(ctx)
     case 'gate-probe':
       return gateProbeCmd({ ...ctx, action: rest[0] })
+    case 'chaos':
+      return chaosCmd(ctx)
     case 'console':
       throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'console is a long-running server; start it from the command line: justrunme console [--port n]')
   }
@@ -140,6 +145,7 @@ export async function main(argv) {
     if (!command) throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
     if (opts.mission !== undefined && !MISSION_RE.test(opts.mission)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'invalid --mission')
     if (opts.plan !== undefined && !['rehearse', 'authorize', 'run'].includes(command)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--plan exists only for rehearse, authorize and run')
+    if (opts['fault-after'] !== undefined && command !== 'chaos') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--fault-after exists only for chaos')
     if (opts['emergency-recovery'] && command !== 'undo') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--emergency-recovery exists only for undo')
     if (opts.confirm !== undefined && command !== 'undo' && command !== 'approve') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--confirm exists only for undo and approve')
     if (opts['passphrase-stdin'] && !['approver', 'approve', 'authorize'].includes(command)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--passphrase-stdin exists only for approver init, approve and authorize')
