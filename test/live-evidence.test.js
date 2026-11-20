@@ -69,6 +69,15 @@ describe('live evidence: what the reports cite', () => {
     // The excerpt of the IDE's own log: hooks were skipped while the workspace was untrusted.
     const log = readFileSync(path.join(EVIDENCE, 'ide', 'kiro-ide-log-excerpt.txt'), 'utf8')
     assert.match(log, /isTrusted=false\)[\s\S]*hooks\.v2\.executionDisabledUntrustedWorkspace[\s\S]*isTrusted=true\)/)
+    assert.doesNotMatch(log.split('isTrusted=true')[1], /executionDisabled/, 'after trust the hooks are not disabled')
+    // The temporary invocation log of the hook: three calls, one per receipt, each with the gate on, the key directory set, in the workspace.
+    const calls = readFileSync(path.join(EVIDENCE, 'ide', 'hook-invocations.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+    assert.equal(calls.length, 3)
+    assert.ok(calls.every((c) => c.gate === 'on' && c.home_set === true && c.cwd_is_ws === true))
+    calls.forEach((c, i) => {
+      const lag = Date.parse(rs[17 + i].timestamp) - Date.parse(c.ts)
+      assert.ok(lag >= 0 && lag < 5000, `receipt ${17 + i} follows hook call ${i} (${lag} ms)`)
+    })
   })
 
   it('live1: block denied, first rehearsal SAFE, approval through stdin, run equal to the rehearsal', () => {
