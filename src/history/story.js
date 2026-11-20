@@ -46,6 +46,23 @@ const link = (code, ok, why) => ({ code, ok, ...(ok ? {} : { why }) })
 /**
  * @param {{ repoDir: string, missionId: string, chain: { ok: boolean, receipts: any[], findings: any[] }, now?: number }} a
  */
+/**
+ * The undo of a run and what its verification receipt says it checked. Receipts written before
+ * the list of checks existed are 'legacy': which checks ran is unknown, never assumed complete.
+ */
+function undoOf(undo, verification) {
+  const subject = verification?.subject ?? {}
+  const current = Array.isArray(subject.checked)
+  return {
+    seq: undo.seq,
+    verdict: undo.verdict,
+    verification: verification?.verdict ?? null,
+    receipt_format: verification ? (current ? 'current' : 'legacy') : null,
+    checked: current ? subject.checked : null,
+    not_checked: Array.isArray(subject.not_checked) ? subject.not_checked.map((c) => ({ check: c.check, resource: c.resource })) : [],
+  }
+}
+
 export function buildStory({ repoDir, missionId, chain, now = Date.now() }) {
   if (!chain.ok) return { mission_id: missionId, chain_ok: false, chain_findings: chain.findings, versions: [], requests: [], runs: [], links: [], timeline: [], history: null }
   const receipts = chain.receipts
@@ -96,7 +113,7 @@ export function buildStory({ repoDir, missionId, chain, now = Date.now() }) {
         differences: r.subject?.differences ?? null,
         authorization: auth ? receiptHash(auth) : null,
         request_id: request?.request_id ?? null,
-        undo: undo ? { seq: undo.seq, verdict: undo.verdict, verification: verification?.verdict ?? null } : null,
+        undo: undo ? undoOf(undo, verification) : null,
       }
     })
 

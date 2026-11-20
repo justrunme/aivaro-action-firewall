@@ -188,7 +188,7 @@ function runEvidence(r, s) {
   return h('div', { class: 'kv-list' },
     kv('verdict', badge(r.verdict, toneOf(r.verdict))), kv('capture', h('span', { class: 'mono', text: r.capture_id ?? '—' })),
     kv('as rehearsed', r.matches_rehearsal === true ? badge('real result equals the rehearsal', 'ok', 'bolt') : r.matches_rehearsal === false ? badge(`${r.differences} difference(s)`, 'bad', 'cross') : badge('not recorded', 'mute')),
-    r.undo ? kv('undo', badge(`${r.undo.verdict} · recovery check ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : r.undo.verification === 'FAIL' ? 'bad' : 'mute')) : null,
+    r.undo ? kv('undo', badge(`${r.undo.verdict} · recovery check ${r.undo.verification ?? '—'}`, undoTone(r.undo))) : null,
     set ? kv('links', h('span', { class: 'col' }, set.links.map((l) => h('span', { class: 'mono' }, ok(l.ok), ` ${l.code}${l.ok ? '' : ` — ${l.why}`}`)))) : null)
 }
 
@@ -214,6 +214,9 @@ function receiptBlock(r, s, ctx) {
   return h('div', { class: 'receipt' }, h('h3', { text: 'Receipt' }),
     h('div', { class: 'kv-list' }, kv('receipt', h('span', { class: 'mono', text: `#${r.seq}${t ? ` ${t.kind}` : ''}` })), kv('hash', hashChip(r.hash, 22)), kv('signature', sigBadge(s, r.seq))), detail, more)
 }
+
+/** One colour per recovery state: PASS with its checks listed, PASS from an older receipt, FAIL, anything else. */
+const undoTone = (u) => (u.verification === 'PASS' ? (u.receipt_format === 'current' ? 'ok' : 'warn') : u.verification === 'FAIL' ? 'bad' : 'mute')
 
 const sigBadge = (s, seq) => (s.chain_ok && !(s.chain_findings ?? []).some((f) => f.seq === seq) ? badge('verified by the chain check', 'ok', 'check') : badge('does not verify', 'bad', 'cross'))
 
@@ -645,7 +648,7 @@ function runsTable(runs, ctx) {
       h('td', {}, badge(r.verdict, toneOf(r.verdict))),
       h('td', {}, r.matches_rehearsal === true ? badge('matched', 'ok', 'check') : r.matches_rehearsal === false ? badge(`${r.differences} diff`, 'bad', 'cross') : badge('not recorded', 'mute')),
       h('td', { class: 'mono', text: r.capture_id ?? '—' }),
-      h('td', {}, r.undo ? badge(`${r.undo.verdict} · ${r.undo.verification ?? '—'}`, r.undo.verification === 'PASS' ? 'ok' : r.undo.verification === 'FAIL' ? 'bad' : 'mute') : ctx.readOnly ? h('span', { class: 'muted', text: 'read only' }) : undoForm(r, ctx))))))
+      h('td', {}, r.undo ? badge(`${r.undo.verdict} · ${r.undo.verification ?? '—'}`, undoTone(r.undo)) : ctx.readOnly ? h('span', { class: 'muted', text: 'read only' }) : undoForm(r, ctx))))))
 }
 
 function undoForm(r, ctx) {

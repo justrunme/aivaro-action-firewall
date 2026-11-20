@@ -154,6 +154,10 @@ describe('Demo B: a failed run is undone and the recovery is verified', { skip: 
     assert.equal(kinds('file_absent').length, 0)
     assert.deepEqual(kinds('health').map((c) => c.actual), [200])
     assert.ok(kinds('container_image').length >= 2)
+    assert.equal(kinds('privileges').length, 1, 'the capture recorded privileges, so they are checked')
+    // The signed verification receipt names the kinds of check that ran (history reads them).
+    const vr = verifyChain({ repoDir, home: keys.home, publicKey: keys.publicKey, missionId: 'mission-demo-b' }).receipts.findLast((x) => x.kind === 'verification')
+    assert.deepEqual(vr.subject.checked, ['container_image', 'file_sha256', 'health', 'privileges', 'row_count', 'schema_hash', 'table_checksum'])
 
     // Independently of the verifier: the live state equals the state before the run.
     const now = await measureReal()

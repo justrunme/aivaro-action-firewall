@@ -50,10 +50,15 @@ export function runOutcome(story) {
   if (!r) return null
   // RECOVERED only with a verification receipt that says PASS; an undo without one is not a recovery claim.
   if (r.undo) {
-    if (r.undo.verification === 'PASS') return { label: 'RECOVERED · VERIFIED', tone: 'ok', text: `run ${r.verdict}, then undone; recovery verification PASS` }
+    if (r.undo.verification === 'PASS') {
+      // A PASS counts as a full recovery claim only when the receipt says which checks ran.
+      if (r.undo.receipt_format !== 'current') return { label: 'RECOVERED · CHECKS UNKNOWN', tone: 'warn', text: `run ${r.verdict}, then undone; recovery verification PASS, but this older receipt does not record which checks ran` }
+      const grants = (r.undo.checked ?? []).includes('privileges')
+      return { label: 'RECOVERED · VERIFIED', tone: 'ok', text: `run ${r.verdict}, then undone; recovery verification PASS${grants ? ' (data, schema, files and supported database grants and ownership)' : ''}` }
+    }
     if (r.undo.verification == null) return { label: 'UNDONE · NOT VERIFIED', tone: 'mute', text: `run ${r.verdict}, then undone; no recovery verification is recorded` }
     // A required check could not be made (a capture older than the check): restored, not verified.
-    if (r.undo.verification === 'UNVERIFIABLE') return { label: 'RESTORED · NOT VERIFIED', tone: 'mute', text: `run ${r.verdict}, then undone; a required recovery check could not be made (UNVERIFIABLE)` }
+    if (r.undo.verification === 'UNVERIFIABLE') return { label: 'RESTORED · NOT VERIFIED', tone: 'mute', text: `run ${r.verdict}, then undone; a required recovery check could not be made: ${(r.undo.not_checked ?? []).map((c) => c.check).join(', ') || 'UNVERIFIABLE'}` }
     return { label: 'RECOVERY FAILED', tone: 'bad', text: `run ${r.verdict}, then undone; recovery verification ${r.undo.verification}` }
   }
   if (runVerified(f)) return { label: 'COMPLETED · VERIFIED', tone: 'ok', text: f.links ? 'approved, executed, and the real result equals the rehearsal' : 'executed, and the real result equals the rehearsal' }
@@ -187,7 +192,7 @@ export function flight(story) {
           : missing('no approval requested'),
     EXECUTED: f.run ? { state: f.run.verdict === 'completed' && (f.links ? linkOk('EXECUTED_AS_AUTHORIZED') : true) ? 'ok' : 'bad', note: `run ${f.run.verdict}`, receipt: rec(f.run), run: f.run } : missing('not run'),
     VERIFIED: f.run
-      ? { state: !((f.links ? linkOk('RESULT_AS_REHEARSED') : f.run.matches_rehearsal === true)) ? 'bad' : !f.run.undo || f.run.undo.verification === 'PASS' ? 'ok' : f.run.undo.verification === 'FAIL' ? 'bad' : 'mute', note: `${f.run.matches_rehearsal ? 'result equals the rehearsal' : `${f.run.differences ?? '?'} difference(s) from the rehearsal`}${f.run.undo ? `; undone, recovery check ${f.run.undo.verification ?? '—'}` : ''}`, receipt: rec(f.run), run: f.run }
+      ? { state: !((f.links ? linkOk('RESULT_AS_REHEARSED') : f.run.matches_rehearsal === true)) ? 'bad' : !f.run.undo ? 'ok' : f.run.undo.verification === 'PASS' ? (f.run.undo.receipt_format === 'current' ? 'ok' : 'warn') : f.run.undo.verification === 'FAIL' ? 'bad' : 'mute', note: `${f.run.matches_rehearsal ? 'result equals the rehearsal' : `${f.run.differences ?? '?'} difference(s) from the rehearsal`}${f.run.undo ? `; undone, recovery check ${f.run.undo.verification ?? '—'}` : ''}`, receipt: rec(f.run), run: f.run }
       : missing('nothing to verify yet'),
   }
   return FLIGHT.map((name) => ({ name, ...node[name] }))
@@ -313,7 +318,7 @@ export function eligibility(detail, { now = Date.now(), storyState = null, verif
 /** Triage: what needs a person first. Lower is more urgent. */
 export function urgency(story, verifyOk = true) {
   const v = missionVerdict(story, verifyOk)
-  return { 'NEEDS APPROVAL': 0, 'NOT AS REHEARSED': 1, 'RECOVERY FAILED': 1, 'RUN FAILED': 1, 'NOT VERIFIED': 1, UNVERIFIABLE: 2, DENIED: 2, 'NOT SAFE': 2, REPAIRED: 3, APPROVED: 3, SAFE: 4 }[v.label] ?? 5
+  return { 'NEEDS APPROVAL': 0, 'NOT AS REHEARSED': 1, 'RECOVERY FAILED': 1, 'RESTORED · NOT VERIFIED': 1, 'RECOVERED · CHECKS UNKNOWN': 3, 'RUN FAILED': 1, 'NOT VERIFIED': 1, UNVERIFIABLE: 2, DENIED: 2, 'NOT SAFE': 2, REPAIRED: 3, APPROVED: 3, SAFE: 4 }[v.label] ?? 5
 }
 
 // ---- Home: the recorded run as an evidence trail and four experiment cards ---------------------
@@ -378,10 +383,12 @@ export function experimentCards(states, provenance = null) {
     ? { id: 'safe-execution', title: 'Safe Execution', tone: 'ok', label: 'SAFE · RUN VERIFIED', headline: `${losses(safe).rows_lost} protected rows lost`, lines: [...tableLines(safe).map((t) => `${t.name} ${t.before ?? '?'} → ${t.after ?? '?'}`), runOutcome(safeE[1]).text], seq: safe.seq, receipt: rcpt(safe), mission: safeE[0], href: `missions/${safeE[0]}/verified`, cta: 'View Verified Run', note: 'An operator approved this exact version; the real result was compared with the rehearsal.' }
     : miss('safe-execution', 'Safe Execution', safe && !safeE[2] ? 'The chain of this run does not pass `justrunme verify`, so no result is claimed.' : 'This recording has no verified run of a SAFE plan.')
 
-  const recE = find((s) => runOutcome(s)?.label === 'RECOVERED · VERIFIED')
+  // The card shows the recovery as the receipt states it: verified, or with checks unknown (older receipt).
+  const recE = find((s) => ['RECOVERED · VERIFIED', 'RECOVERED · CHECKS UNKNOWN'].includes(runOutcome(s)?.label))
   const limit = recE ? provenance?.missions?.[recE[0]]?.limit ?? null : null
+  const recOut = recE ? runOutcome(recE[1]) : null
   const c4 = recE && recE[2]
-    ? { id: 'recovery', title: 'Recovery', tone: 'ok', label: 'RECOVERED · VERIFIED', headline: 'Run, undo, then a recovery check', lines: [runOutcome(recE[1]).text, ...(limit ? [limit] : [])], mission: recE[0], href: 'recovery', cta: 'Open Recovery', note: 'Undo covers only the resource types named in the mission contract.' }
+    ? { id: 'recovery', title: 'Recovery', tone: recOut.tone, label: recOut.label, headline: 'Run, undo, then a recovery check', lines: [runOutcome(recE[1]).text, ...(limit ? [limit] : [])], mission: recE[0], href: 'recovery', cta: 'Open Recovery', note: 'Undo covers only the resource types named in the mission contract.' }
     : miss('recovery', 'Recovery', recE ? 'The chain of this run does not pass `justrunme verify`, so no recovery is claimed.' : 'This recording has no undo with a passing recovery check.')
   return [c1, c2, c3, c4]
 }
@@ -401,12 +408,11 @@ export function missionSummary(story, verifyOk = true) {
       : f.pending ? 'waiting for the operator\'s approval'
         : f.approved ? 'approved, not run yet'
           : revisions.length ? 'not run' : 'no rehearsal yet'
-  // A recovery claim carries its limit wherever it is shown.
-  return { revisions, outcome: out?.label === 'RECOVERED · VERIFIED' ? `${outcome} (database grants were not compared)` : outcome, tone: v.tone }
+  return { revisions, outcome, tone: v.tone }
 }
 
-/** What the recovery verification does not cover today (engine issue, tracked separately). */
-export const RECOVERY_LIMIT = 'This recovery check compared the schema, row counts, checksums and files; it did not compare database grants or ownership (its capture was made before privileges were recorded). Captures made since then record them, and their recovery check compares supported database grants and ownership.'
+/** Shown next to a recovery whose verification receipt does not list its checks (an older receipt format). */
+export const RECOVERY_LIMIT = 'This verification receipt is in an older format: it does not record which checks ran, so the completeness of this recovery check is unknown. Recoveries verified before database privileges were recorded compared the schema, row counts, checksums and files, not grants or ownership. Current receipts list every check, and their check compares supported database grants and ownership.'
 
 /**
  * The top of Recovery & Replay: what the run and the undo showed, from the verified story only.
@@ -424,7 +430,13 @@ export function recoverySummary(story, verifyOk = true) {
     { ok: r.verdict === 'completed', text: `Run #${r.seq}: ${r.verdict}` },
     { ok: r.matches_rehearsal === true, text: r.matches_rehearsal === true ? 'The real result matched the rehearsal' : `${r.differences ?? '?'} difference(s) from the rehearsal` },
   ]
-  if (r.undo) lines.push({ ok: r.undo.verification === 'PASS', text: `Undone; recovery verification ${r.undo.verification ?? 'not recorded'}` })
+  if (r.undo) {
+    const v = r.undo.verification
+    lines.push({ ok: v === 'PASS' ? true : v === 'FAIL' ? false : null, text: `Undone; recovery verification ${v ?? 'not recorded'}` })
+    if (r.undo.receipt_format === 'current' && v === 'PASS') lines.push({ ok: (r.undo.checked ?? []).includes('privileges') ? true : null, text: `Checked: ${(r.undo.checked ?? []).join(', ')}` })
+    for (const c of r.undo.not_checked ?? []) lines.push({ ok: null, text: `Not checked: ${c.check} (${c.resource})` })
+  }
   const label = out?.label === 'COMPLETED · VERIFIED' ? 'EXECUTION VERIFIED' : out?.label ?? 'RUN RECORDED'
-  return { label, tone: out?.tone ?? 'mute', lines, limit: r.undo ? RECOVERY_LIMIT : null }
+  // The limit is shown only where the receipt cannot say which checks ran.
+  return { label, tone: out?.tone ?? 'mute', lines, limit: r.undo?.verification === 'PASS' && r.undo.receipt_format !== 'current' ? RECOVERY_LIMIT : null }
 }

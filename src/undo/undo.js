@@ -162,6 +162,8 @@ export async function undoMission({ repoDir, missionId, captureId, target, keys,
       subject: {
         capture_id: captureId,
         checks: verification.checks.length,
+        // Which kinds of check ran: without this list a reader cannot tell a full check from a partial one.
+        checked: [...new Set(verification.checks.map((c) => c.check))].sort(),
         failed: verification.failed.map((c) => ({ check: c.check, resource: c.resource, expected: c.expected, actual: c.actual })),
         ...(verification.not_checked?.length ? { not_checked: verification.not_checked.map((c) => ({ check: c.check, resource: c.resource })) } : {}),
         integration_tests: verification.integration_tests,
