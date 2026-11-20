@@ -1,0 +1,13 @@
+{
+ "read_at": "2026-11-20T12:09:27Z",
+ "queries": {
+  "SELECT count(*) FROM orders": "3",
+  "SELECT id, patch_id, status FROM orders ORDER BY id": [
+   "1|2|open",
+   "2|1|cancelled",
+   "3|4|open"
+  ],
+  "SELECT available_count FROM patches WHERE id = 1": "0",
+  "SELECT tgname, tgenabled FROM pg_trigger WHERE tgname = 'patches_release_sold_out'": "patches_release_sold_out|O"
+ }
+}
