@@ -24,7 +24,7 @@ function runLines(receipts, out) {
     out.not_verified.push({ id: 'authorization', text: 'No plan has been authorized in this mission', why: 'NO_AUTHORIZATION' })
   } else {
     const source = auth.subject?.passphrase_source ?? null
-    if (CHANNEL[source]) out.verified.push({ id: 'authorization', text: `Authorized with the approver key; passphrase ${CHANNEL[source]} (the channel, not who typed it)`, receipt: ref(auth) })
+    if (CHANNEL[source]) out.verified.push({ id: 'authorization', text: `Authorized with the approver key. The receipt records the passphrase channel (${CHANNEL[source]}), not who entered it.`, receipt: ref(auth) })
     else if (source === 'env') out.not_verified.push({ id: 'authorization', text: 'The approval was scripted: the passphrase came from the environment', why: 'SCRIPTED_APPROVAL', receipt: ref(auth) })
     else out.not_verified.push({ id: 'authorization', text: 'How the approver passphrase was given is not recorded (older receipt)', why: 'CHANNEL_NOT_RECORDED', receipt: ref(auth) })
     const reh = index.get(auth.refs?.rehearsal)

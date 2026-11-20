@@ -368,6 +368,11 @@ describe('Console round 2: decision first, safe approval, honest labels, SQL pan
     refused.impact.evidence.push({ kind: 'bypass_attempt_refused' })
     assert.ok(heroOf(refused).why.some((w) => w.startsWith('PostgreSQL refused')))
     assert.equal(heroOf(safe).label, 'SAFE · MEASURED')
+    const executed = heroOf(safe, { runs: [{ report_hash: safe.report_hash, verdict: 'completed', undo: { verification: 'PASS' } }], requests: [] })
+    assert.match(executed.execution, /executed, then undone/)
+    assert.doesNotMatch(executed.next, /approve or reject/)
+    const pending = heroOf(safe, { runs: [], requests: [{ report_hash: safe.report_hash, state: 'pending' }] })
+    assert.match(pending.next, /approve or reject the pending request/)
     assert.equal(heroOf({ ...loss, available: false, problem: 'gone' }).label, 'NOT VERIFIED')
     // Rendered: the hero comes before the technical panels of the Flight Recorder node.
     const { missionsScreen } = await screens()
@@ -420,6 +425,48 @@ describe('Console round 2: decision first, safe approval, honest labels, SQL pan
     assert.deepEqual(tiles, ['1need your decision', '0blocked or broken', '1safe, proven or recovered', '1no signed record or not verified'])
     const order = findAll(root, (e) => hasClass(e, 'card')).map((c) => [A, B, C].find((id) => text(c).includes(id)))
     assert.deepEqual(order, [A, C, B])
+  })
+
+  it('unknown mission and Flight Recorder view show explicit navigation, while existing mission opens', async () => {
+    const { missionsScreen } = await screens()
+    const list = await all()
+    const ctx = { all: list, route: { screen: 'missions', arg: 'mission-not-recorded', sub: null }, ui: {}, api: async () => ({}) }
+    const missing = missionsScreen(list[0].state, ctx)
+    assert.ok(text(missing).includes('Mission mission-not-recorded is not in this recording'))
+    for (const id of [A, B, C]) assert.ok(findAll(missing, (e) => e.tag === 'a' && e.attrs.href === `#/missions/${id}`).length)
+    assert.ok(findAll(missing, (e) => e.tag === 'a' && e.attrs.href === '#/missions').length)
+    const existing = missionsScreen(list[0].state, { ...ctx, route: { screen: 'missions', arg: A, sub: null } })
+    assert.ok(text(existing).includes('Flight Recorder'))
+    const unknownView = missionsScreen(list[0].state, { ...ctx, route: { screen: 'missions', arg: A, sub: 'nonexistent' } })
+    assert.ok(text(unknownView).includes('Unknown Flight Recorder view: nonexistent'))
+    assert.ok(findAll(unknownView, (e) => e.tag === 'a' && e.attrs.href === `#/missions/${A}`).length)
+  })
+
+  it('legacy PASS recovery does not ask for approval and its VERIFIED node says checks unknown', async () => {
+    const { missionsScreen } = await screens()
+    const st = structuredClone(await api.state(C))
+    st.story.result.runs[0].undo.receipt_format = 'legacy'
+    st.story.result.runs[0].undo.checked = null
+    const ctx = { all: [{ mission_id: C, state: st }], route: { screen: 'missions', arg: null }, ui: {}, api: async () => ({}) }
+    const root = missionsScreen(st, ctx)
+    const tiles = findAll(root, (e) => hasClass(e, 'tri')).map((t) => text(t))
+    assert.equal(tiles[0], '0need your decision')
+    assert.ok(text(root).includes('RECOVERED · CHECKS UNKNOWN'))
+    const { flight } = await import('../src/console/static/model.js')
+    const verified = flight(st.story.result).find((n) => n.name === 'VERIFIED')
+    assert.equal(verified.checks_unknown, true)
+    const current = structuredClone(st.story.result)
+    current.runs[0].undo.receipt_format = 'current'
+    assert.equal(flight(current).find((n) => n.name === 'VERIFIED').checks_unknown, false)
+    const fr = missionsScreen(st, { ...ctx, route: { screen: 'missions', arg: C, sub: 'verified' } })
+    const panel = findAll(fr, (e) => hasClass(e, 'evidence'))[0]
+    const header = findAll(panel, (e) => e.tag === 'h2' && text(e) === 'VERIFIED')[0]
+    assert.ok(header, 'VERIFIED evidence header exists')
+    const badge = findAll(panel, (e) => hasClass(e, 'pill'))[0]
+    assert.ok(badge, 'VERIFIED evidence badge exists')
+    assert.equal(text(badge), 'CHECKS UNKNOWN')
+    assert.ok(!text(badge).includes('ATTENTION REQUIRED'))
+    assert.ok(!text(fr).includes('NEEDS APPROVAL'), text(fr))
   })
 
   it('SQL panels: line numbers, highlighting as text only, Copy SQL, Full width; compare switches side by side and unified', async () => {

@@ -10,7 +10,8 @@
 import { badge, fmtTime, h, hashChip, icon, short, sqlCompare, sqlOf, sqlView, stateBox } from './ui.js'
 import { approvalSource, counterfactual, eligibility, flight, heroOf, latestSafe, lossText, losses, missionSummary, missionVerdict, recoverySummary, passphraseWords, receiptRows, sameBase, severest, tableLines, toneOf, urgency } from './model.js'
 
-const TONE_LABEL = { ok: 'verified', bad: 'denied', warn: 'needs approval', fix: 'repaired', mute: 'unverifiable', info: 'recorded', missing: 'not in the chain' }
+const TONE_LABEL = { ok: 'verified', bad: 'denied', warn: 'attention required', fix: 'repaired', mute: 'unverifiable', info: 'recorded', missing: 'not in the chain' }
+const nodeLabel = (n) => n.name === 'VERIFIED' && n.checks_unknown === true ? 'checks unknown' : TONE_LABEL[n.state]
 const NODE_ICON = { ok: 'bolt', bad: 'cross', warn: 'lock', fix: 'check', mute: 'dash', info: 'check', missing: 'dash' }
 const linkOk = (set, code) => set?.links.find((l) => l.code === code)?.ok === true
 const ok = (cond) => badge(cond ? 'holds' : 'broken', cond ? 'ok' : 'bad', cond ? 'check' : 'cross')
@@ -40,7 +41,7 @@ const nodesOf = (s, state) => flight(s).map((n) => (verifiedOk(state) || n.state
  * The trigger that fired is read from the signed rehearsal receipt (T25 v3 change 2).
  */
 function hero(v, ctx, { compact = false } = {}) {
-  const x = heroOf(v)
+  const x = heroOf(v, ctx?.story)
   const trig = h('div', { class: 'callout-slot', 'aria-live': 'polite' })
   if (v?.available && v.verdict !== 'SAFE' && (v.impact?.evidence ?? []).some((e) => e.kind === 'trigger_fired') && ctx?.api) {
     trig.replaceChildren(h('div', { class: 'muted', text: 'Reading which database trigger fired…' }))
@@ -64,6 +65,7 @@ export function missionsScreen(state, ctx) {
   // Every mission of the workspace (ctx.all), or just the one loaded.
   const all = ctx.all?.length ? ctx.all : [{ mission_id: state.story?.result?.mission_id ?? state.mission ?? null, state }]
   const open = all.find((m) => m.mission_id && m.mission_id === ctx.route?.arg)
+  if (ctx.route?.arg && !open) return stateBox('empty', `Mission ${ctx.route.arg} is not in this recording`, 'Choose a mission from this recording:', ...all.filter((m) => m.mission_id).map((m) => h('a', { href: `#/missions/${m.mission_id}`, text: m.mission_id })), h('a', { href: '#/missions', text: 'Back to Missions' }))
   if (open) {
     const bad = storyProblem(open.state, 'mission')
     return bad ?? flightRecorder(open.state, ctx)
@@ -87,8 +89,12 @@ export function missionsScreen(state, ctx) {
 function triage(list) {
   const counts = { warn: 0, bad: 0, ok: 0, mute: 0 }
   for (const m of list) {
-    const tone = m.state?.story?.ok ? missionVerdict(m.state.story.result, verifiedOk(m.state)).tone : 'mute'
-    counts[tone === 'fix' || tone === 'info' ? 'ok' : tone] = (counts[tone === 'fix' || tone === 'info' ? 'ok' : tone] ?? 0) + 1
+    const story = m.state?.story?.ok ? m.state.story.result : null
+    const tone = story ? missionVerdict(story, verifiedOk(m.state)).tone : 'mute'
+    if (story && (story.requests ?? []).some((q) => q.state === 'pending')) counts.warn++
+    else if (tone === 'bad') counts.bad++
+    else if (tone === 'mute') counts.mute++
+    else counts.ok++
   }
   const tile = (n, label, tone, href) => h(href ? 'a' : 'div', { class: `tri ${tone}${n ? '' : ' zero'}`, ...(href ? { href } : {}) }, h('div', { class: 'tri-n', text: String(n) }), h('div', { class: 'tri-l', text: label }))
   return h('div', { class: 'triage', role: 'group', 'aria-label': 'Missions by state' },
@@ -116,7 +122,7 @@ function missionCard(m, i, ctx = {}) {
     h('div', { class: 'row' },
       h('div', { class: 'card-title' }, title ? h('h2', { text: title }) : null, h(title ? 'div' : 'h2', { class: `mono${title ? ' muted' : ''}`, text: s.mission_id })),
       h('span', { class: 'spacer' }), badge(v.label, v.tone, v.tone === 'ok' ? 'bolt' : v.tone === 'warn' ? 'lock' : null)),
-    h('ol', { class: 'mini', 'aria-label': 'Flight steps' }, nodes.map((n) => h('li', { class: n.state, title: `${n.name}: ${n.note}` }, h('span', { class: 'sr', text: `${n.name}: ${TONE_LABEL[n.state]}` })))),
+    h('ol', { class: 'mini', 'aria-label': 'Flight steps' }, nodes.map((n) => h('li', { class: n.state, title: `${n.name}: ${n.note}` }, h('span', { class: 'sr', text: `${n.name}: ${nodeLabel(n)}` })))),
     summaryLine(missionSummary(s, verifiedOk(st))),
     h('div', { class: 'row meta' }, h('span', { text: last ? `last step: #${last.seq} ${last.kind}${last.verdict ? ` · ${last.verdict}` : ''} · ${fmtTime(last.at)}` : 'no receipts' }), h('span', { class: 'spacer' }), h('span', { class: 'open-fr', text: 'Open Flight Recorder →' })))
 }
@@ -131,7 +137,9 @@ function summaryLine(sum) {
 function flightRecorder(state, ctx) {
   const s = state.story.result
   const nodes = nodesOf(s, state)
+  ctx = { ...ctx, story: s }
   const wanted = (ctx.route.sub ?? ctx.ui.node ?? '').toUpperCase()
+  if (ctx.route.sub && !nodes.some((n) => n.name === wanted)) return stateBox('empty', `Unknown Flight Recorder view: ${ctx.route.sub}`, 'Choose a recorded view:', ...nodes.map((n) => h('a', { href: `#/missions/${s.mission_id}/${n.name.toLowerCase()}`, text: n.name })), h('a', { href: `#/missions/${s.mission_id}`, text: 'Back to mission' }))
   const chosen = nodes.find((n) => n.name === wanted) ?? nodes.find((n) => n.state === 'bad' || n.state === 'warn') ?? [...nodes].reverse().find((n) => n.state !== 'missing') ?? nodes[0]
   const v = missionVerdict(s, verifiedOk(state))
   return h('div', {},
@@ -139,13 +147,13 @@ function flightRecorder(state, ctx) {
     ctx.titles?.[s.mission_id] ? h('p', { class: 'fr-title', text: ctx.titles[s.mission_id] }) : null,
     summaryLine(missionSummary(s, verifiedOk(state))),
     h('ol', { class: 'flight', 'aria-label': 'Flight Recorder: the steps of this mission' }, nodes.map((n, i) => h('li', { class: `node ${n.state}${n === chosen ? ' on' : ''}` },
-      h('a', { href: `#/missions/${s.mission_id}/${n.name.toLowerCase()}`, 'aria-current': n === chosen ? 'step' : null, 'aria-label': `${i + 1}. ${n.name}: ${TONE_LABEL[n.state]}. ${n.note}` },
+      h('a', { href: `#/missions/${s.mission_id}/${n.name.toLowerCase()}`, 'aria-current': n === chosen ? 'step' : null, 'aria-label': `${i + 1}. ${n.name}: ${nodeLabel(n)}. ${n.note}` },
         h('span', { class: 'disc' }, icon(NODE_ICON[n.state]), n.name === 'VERIFIED' && n.state === 'ok' ? h('span', { class: 'spark', title: 'verified: the real result equals the rehearsal' }, icon('spark')) : null), h('span', { class: 'name', text: n.name }), h('span', { class: 'nnote', text: n.state === 'missing' ? 'not in the chain' : n.note }))))),
     h('section', { class: 'panel evidence', 'aria-live': 'polite' }, evidence(chosen, s, ctx)))
 }
 
 function evidence(n, s, ctx) {
-  const head = h('div', { class: 'row' }, h('h2', { text: n.name }), badge(TONE_LABEL[n.state].toUpperCase(), n.state === 'missing' ? 'mute' : n.state), h('span', { class: 'muted', text: n.note }))
+  const head = h('div', { class: 'row' }, h('h2', { text: n.name }), badge(nodeLabel(n).toUpperCase(), n.state === 'missing' ? 'mute' : n.state), h('span', { class: 'muted', text: n.note }))
   if (n.state === 'missing') return h('div', {}, head, stateBox('empty', 'Not in the signed chain', `${n.note}. This step is shown greyed because the chain holds nothing for it; it is not filled in.`))
   const parts = [head]
   if (n.version && ['PROPOSED', 'REHEARSED', 'DENIED', 'REPAIRED'].includes(n.name)) parts.push(hero(n.version, ctx))
@@ -226,6 +234,7 @@ export function impactScreen(state, ctx) {
   const bad = storyProblem(state, 'impact diff')
   if (bad) return bad
   const s = state.story.result
+  ctx = { ...ctx, story: s }
   const versions = s.versions.filter((v) => v.available)
   if (versions.length === 0) return stateBox('empty', 'No archived rehearsal to compare', 'The plan history has no readable rehearsal for this mission yet.')
   // Default: the most severe measured loss on the left, the latest SAFE plan on the right.
