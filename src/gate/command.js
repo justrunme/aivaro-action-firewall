@@ -10,6 +10,11 @@
  */
 
 export const NONCE_RE = /^[0-9a-f]{16}$/
+/**
+ * How long a hook denial of the probe counts as ACTIVE, measured from that denial's own
+ * timestamp. Recording the result later (`finish`) never extends it.
+ */
+export const FRESH_MS = 15 * 60_000
 const PROBE_COMMAND_RE = /^touch \.justrunme-gate-probe-([0-9a-f]{16})$/
 
 /** The file the probe command creates when nothing blocks it (workspace root). */

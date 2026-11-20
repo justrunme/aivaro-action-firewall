@@ -92,12 +92,12 @@ export function proofDebt({ receipts, contract = null, legacyVersions = 0, gate 
   const out = { verified: [], not_verified: [] }
 
   if (gate?.status === 'ACTIVE') {
-    const r = gate.observed?.hook_receipt ?? gate.recorded
+    const r = gate.observed?.hook_receipt ?? gate.recorded?.hook_receipt ?? gate.recorded
     out.verified.push({ id: 'gate', text: `A PreToolUse hook in this workspace denied the gate probe command at ${r?.at ?? '?'} (the receipt names the workspace, not a session)`, receipt: r ? { seq: r.seq, hash: r.hash } : null })
   } else if (gate?.status === 'INACTIVE') {
     out.not_verified.push({ id: 'gate', text: 'The gate probe command ran unblocked: the session that ran it is not gated', why: 'GATE_INACTIVE', receipt: gate.recorded ? { seq: gate.recorded.seq, hash: gate.recorded.hash } : null })
   } else {
-    out.not_verified.push({ id: 'gate', text: gate?.why === 'STALE' ? 'The last gate probe is older than 15 minutes' : gate?.why === 'WAITING_FOR_PROBE' ? 'Waiting for the agent to run the gate probe command' : 'No gate probe has shown that the current session is gated', why: gate?.why ?? 'NEVER_PROBED' })
+    out.not_verified.push({ id: 'gate', text: gate?.why === 'STALE' ? 'The hook denial of the last gate probe is older than 15 minutes' : gate?.why === 'HOOK_RECEIPT_MISSING' ? 'The last gate probe cites no hook denial found in the chain' : gate?.why === 'WAITING_FOR_PROBE' ? 'Waiting for the agent to run the gate probe command' : 'No gate probe has shown that the current session is gated', why: gate?.why ?? 'NEVER_PROBED' })
   }
 
   const run = runLines(receipts, out)

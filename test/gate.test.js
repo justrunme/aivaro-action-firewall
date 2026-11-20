@@ -13,7 +13,7 @@ import { stringify } from 'yaml'
 import { parseContract } from '../src/contract/parser.js'
 import { evaluate } from '../src/hook/evaluate.js'
 import { canaryName, probeCommand, probeNonce, probeReason } from '../src/gate/command.js'
-import { FRESH_MS, gateHealth, observeProbe } from '../src/gate/probe.js'
+import { FRESH_MS, finishProbe, gateHealth, observeProbe, pendingProbe } from '../src/gate/probe.js'
 import { loadOrCreateKeys } from '../src/receipts/keys.js'
 import { verifyChain } from '../src/receipts/chain.js'
 import { checkPolicy } from '../src/receipts/policy.js'
@@ -212,6 +212,65 @@ describe('gate probe: end to end with the real hook and CLI', () => {
     assert.deepEqual(forged({ subject: { nonce: 'ffffffffffffffff' } }), ['ACTIVE refers to a hook denial of another probe'])
     assert.deepEqual(forged({ subject: { started_at: new Date(Date.now() + 60_000).toISOString() } }), ['ACTIVE refers to a hook denial from before the probe started'])
     assert.deepEqual(forged({ verdict: 'INACTIVE' }), ['INACTIVE without the canary file'])
+  })
+
+  it('freshness counts from the hook denial: a late finish records UNKNOWN (stale), never a fresh ACTIVE', () => {
+    const s = setup()
+    const p = s.cli('gate-probe', 'start').out.result
+    s.agentRuns(p.command)
+    const before = s.chain().receipts
+    const denial = before.at(-1)
+    const t0 = Date.parse(denial.timestamp)
+    // Finish 30 minutes after the denial (the hook denial is the only evidence of a gated session).
+    const r = finishProbe({ repoDir: s.ws, keys: s.keys, missionId: CONTRACT.id, receipts: before, now: t0 + 30 * 60_000 })
+    assert.deepEqual([r.status, r.stale], ['UNKNOWN', true])
+    const rs = s.chain().receipts
+    const g = rs.at(-1)
+    assert.deepEqual([g.kind, g.verdict, g.subject.stale], ['gate_probe', 'UNKNOWN', true])
+    assert.deepEqual(checkPolicy(rs).findings, [])
+    const h = gateHealth({ repoDir: s.ws, receipts: rs, now: t0 + 30 * 60_000 })
+    assert.deepEqual([h.status, h.why], ['UNKNOWN', 'STALE'])
+    assert.equal(pendingProbe(s.ws), null)
+  })
+
+  it('a recorded ACTIVE ages from its hook denial, not from the gate_probe receipt', () => {
+    const s = setup()
+    const p = s.cli('gate-probe', 'start').out.result
+    s.agentRuns(p.command)
+    const before = s.chain().receipts
+    const t0 = Date.parse(before.at(-1).timestamp)
+    // Recorded 10 minutes after the denial: still fresh then.
+    const r = finishProbe({ repoDir: s.ws, keys: s.keys, missionId: CONTRACT.id, receipts: before, now: t0 + 10 * 60_000 })
+    assert.equal(r.status, 'ACTIVE')
+    const rs = s.chain().receipts
+    assert.deepEqual(checkPolicy(rs).findings, [])
+    assert.equal(gateHealth({ repoDir: s.ws, receipts: rs, now: t0 + 14 * 60_000 }).status, 'ACTIVE')
+    // 20 minutes after the denial: stale, although the gate_probe receipt is only 10 minutes old.
+    const h = gateHealth({ repoDir: s.ws, receipts: rs, now: t0 + 20 * 60_000 })
+    assert.deepEqual([h.status, h.why], ['UNKNOWN', 'STALE'])
+    assert.equal(h.recorded.hook_receipt.seq, before.at(-1).seq)
+  })
+
+  it('a recorded ACTIVE whose hook denial is not in the chain is UNKNOWN', () => {
+    const s = setup()
+    const p = s.cli('gate-probe', 'start').out.result
+    s.agentRuns(p.command)
+    s.cli('gate-probe', 'finish')
+    const rs = s.chain().receipts
+    const probe = rs.at(-1)
+    const h = gateHealth({ repoDir: s.ws, receipts: [{ ...probe, refs: { hook_decision: 'sha256:' + '0'.repeat(64) } }] })
+    assert.deepEqual([h.status, h.why], ['UNKNOWN', 'HOOK_RECEIPT_MISSING'])
+  })
+
+  it('the ordering policy refuses an ACTIVE recorded after its hook denial went stale', () => {
+    const s = setup()
+    const p = s.cli('gate-probe', 'start').out.result
+    s.agentRuns(p.command)
+    s.cli('gate-probe', 'finish')
+    const rs = s.chain().receipts
+    const probe = rs.at(-1)
+    const late = { ...probe, timestamp: new Date(Date.parse(rs.at(-2).timestamp) + FRESH_MS + 1000).toISOString() }
+    assert.deepEqual(checkPolicy([...rs.slice(0, -1), late]).findings.map((f) => f.rule), ['ACTIVE recorded after its hook denial went stale'])
   })
 
   it('gate-probe refuses another mission and unknown actions', () => {

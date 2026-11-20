@@ -13,7 +13,8 @@ const WHY = {
   PROBE_RECORDED: 'recorded by the last gate probe',
   WAITING_FOR_PROBE: 'waiting for the agent to run the probe command',
   NEVER_PROBED: 'no gate probe has been run for this workspace',
-  STALE: 'the last ACTIVE result is older than 15 minutes',
+  STALE: 'the hook denial of the last probe is older than 15 minutes (counted from the denial, not from when it was recorded)',
+  HOOK_RECEIPT_MISSING: 'the last probe cites no hook denial found in the chain',
 }
 
 /** "8 s ago", "4 min ago", or the time itself. */
@@ -33,7 +34,7 @@ const line = (ok, text, r) => h('div', { class: 'link' }, h('span', { class: ok 
 export function gateText(g) {
   if (!g) return 'Gate Health is not available.'
   if (g.status === 'ACTIVE') {
-    const r = g.observed?.hook_receipt ?? g.recorded
+    const r = g.observed?.hook_receipt ?? g.recorded?.hook_receipt ?? g.recorded
     return `A hook in this workspace denied the probe command ${r?.at ? ago(r.at) : ''} (${seqText(r)}). This covers the session that ran it, not every session, and not an agent that can read the key directory.`
   }
   if (g.status === 'INACTIVE') return 'The probe command ran without being blocked: the session that ran it is not protected by the gate. Check that the workspace is trusted, that JUSTRUNME_GATE=on reaches the hook, and the hook file.'
@@ -72,6 +73,7 @@ function gatePanel(g, ctx) {
     g?.pending && g.command
       ? h('div', { class: 'callout' }, h('div', { text: 'Ask the agent, in the session to check:' }), h('code', { class: 'mono', text: `Run this shell command in the workspace and report exactly what happened: ${g.command}` }))
       : null,
+    h('div', { class: 'muted', text: 'One probe at a time per workspace; a new probe replaces the pending one.' }),
     g?.last_hook_decision ? h('div', { class: 'muted', text: `Last hook decision in this workspace: ${g.last_hook_decision.verdict} ${ago(g.last_hook_decision.at)} (receipt #${g.last_hook_decision.seq}); for information only, it does not show which session was gated.` }) : null,
     buttons.length ? h('div', { class: 'row result' }, ...buttons) : null,
     out)
@@ -92,7 +94,7 @@ export function evidenceScreen(state, ctx) {
     h('div', { class: 'grid2' },
       h('section', { class: 'panel', 'aria-label': 'Proof debt' },
         h('h3', { text: 'Proof debt' }),
-        h('p', { class: 'muted', text: 'What the signed receipts prove, and what they do not. No score: a missing proof is listed, not weighed.' }),
+        h('p', { class: 'muted', text: 'What the signed receipts prove, and what they do not. No score: a missing proof is listed, not weighed. Coverage counts what the capture holds, not every table or file of the application.' }),
         h('div', { class: 'links verified' }, (r.verified ?? []).map((v) => line(true, v.text, v.receipt))),
         h('h4', { text: `Not verified (${(r.not_verified ?? []).length})` }),
         h('div', { class: 'links unverified' }, (r.not_verified ?? []).map((n) => line(false, n.text, n.receipt)))),

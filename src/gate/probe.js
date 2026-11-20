@@ -14,6 +14,14 @@
  * Recent hook receipts without a probe are shown for information only: they prove that a
  * hook ran in this workspace, not that the session being looked at is gated.
  *
+ * Freshness: ACTIVE lasts FRESH_MS from the timestamp of the hook denial itself, found in the
+ * verified chain through the gate_probe receipt's refs. Finishing a probe late never renews it: a
+ * denial already older than FRESH_MS is recorded as UNKNOWN (stale), and a recorded ACTIVE whose
+ * hook denial cannot be found is UNKNOWN.
+ *
+ * One pending probe per workspace (.justrunme/gate-probe.json); starting a probe replaces the
+ * pending one. Parallel sessions are not told apart: check them one after the other.
+ *
  * Limits. ACTIVE rests on a receipt signed with the operator key, which the hook loads from the
  * key directory without a passphrase. In a session the gate does not cover, an agent with a shell
  * can read that directory, sign a denial itself and remove the canary file: ACTIVE is evidence
@@ -25,12 +33,11 @@ import { randomBytes } from 'node:crypto'
 import { lstatSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { appendReceipt, receiptHash } from '../receipts/chain.js'
-import { NONCE_RE, canaryName, probeCommand, probeReason } from './command.js'
+import { FRESH_MS, NONCE_RE, canaryName, probeCommand, probeReason } from './command.js'
 
 const STATE_DIR = '.justrunme'
 const PROBE_FILE = 'gate-probe.json'
-/** An ACTIVE result older than this is reported as UNKNOWN (stale): sessions change. */
-export const FRESH_MS = 15 * 60_000
+export { FRESH_MS }
 
 const probePath = (repoDir) => path.join(repoDir, STATE_DIR, PROBE_FILE)
 
@@ -97,14 +104,17 @@ export function observeProbe({ repoDir, receipts, probe }) {
 export function finishProbe({ repoDir, keys, missionId, receipts, now = Date.now() }) {
   const probe = pendingProbe(repoDir)
   if (!probe) throw new ProbeError('NO_PROBE', 'no gate probe is pending; start one first')
-  const o = observeProbe({ repoDir, receipts, probe })
+  const seen = observeProbe({ repoDir, receipts, probe })
+  // A denial older than FRESH_MS is no longer evidence for the session now: record UNKNOWN (stale).
+  const stale = seen.status === 'ACTIVE' && now - Date.parse(seen.hook_receipt.at) > FRESH_MS
+  const o = stale ? { ...seen, status: 'UNKNOWN' } : seen
   const hash = appendReceipt({
     repoDir,
     keys,
     missionId,
     kind: 'gate_probe',
     verdict: o.status,
-    subject: { nonce: o.nonce, started_at: o.started_at, canary_present: o.canary_present, hook_receipt_seq: o.hook_receipt?.seq ?? null },
+    subject: { nonce: o.nonce, started_at: o.started_at, canary_present: o.canary_present, hook_receipt_seq: o.hook_receipt?.seq ?? null, ...(stale ? { stale: true } : {}) },
     refs: o.hook_receipt ? { hook_decision: o.hook_receipt.hash } : {},
     now,
   }).hash
@@ -119,7 +129,7 @@ export function finishProbe({ repoDir, keys, missionId, receipts, now = Date.now
       canaryRemoved = false
     }
   }
-  return { ...o, receipt: hash, canary_removed: canaryRemoved }
+  return { ...o, stale, receipt: hash, canary_removed: canaryRemoved }
 }
 
 /**
@@ -139,7 +149,15 @@ export function gateHealth({ repoDir, receipts, now = Date.now() }) {
   }
   const last = [...receipts].reverse().find((r) => r.kind === 'gate_probe') ?? null
   if (!last) return { status: 'UNKNOWN', why: 'NEVER_PROBED', pending: false, recorded: null, ...info }
-  const recorded = { seq: last.seq, hash: receiptHash(last), at: last.timestamp, verdict: last.verdict, canary_present: last.subject?.canary_present === true }
-  if (last.verdict === 'ACTIVE' && now - Date.parse(last.timestamp) > FRESH_MS) return { status: 'UNKNOWN', why: 'STALE', pending: false, recorded, ...info }
-  return { status: ['ACTIVE', 'INACTIVE'].includes(last.verdict) ? last.verdict : 'UNKNOWN', why: 'PROBE_RECORDED', pending: false, recorded, ...info }
+  const recorded = { seq: last.seq, hash: receiptHash(last), at: last.timestamp, verdict: last.verdict, canary_present: last.subject?.canary_present === true, stale: last.subject?.stale === true }
+  if (last.verdict === 'ACTIVE') {
+    // Age from the hook denial the receipt cites, never from when the result was recorded.
+    const hit = receipts.find((r) => receiptHash(r) === last.refs?.hook_decision && r.kind === 'hook_decision' && r.verdict === 'deny' && r.subject?.category === 'GATE_PROBE')
+    if (!hit) return { status: 'UNKNOWN', why: 'HOOK_RECEIPT_MISSING', pending: false, recorded, ...info }
+    recorded.hook_receipt = { seq: hit.seq, hash: receiptHash(hit), at: hit.timestamp }
+    if (now - Date.parse(hit.timestamp) > FRESH_MS) return { status: 'UNKNOWN', why: 'STALE', pending: false, recorded, ...info }
+    return { status: 'ACTIVE', why: 'PROBE_RECORDED', pending: false, recorded, ...info }
+  }
+  if (last.subject?.stale === true) return { status: 'UNKNOWN', why: 'STALE', pending: false, recorded, ...info }
+  return { status: last.verdict === 'INACTIVE' ? 'INACTIVE' : 'UNKNOWN', why: 'PROBE_RECORDED', pending: false, recorded, ...info }
 }
