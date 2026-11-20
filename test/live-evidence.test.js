@@ -41,7 +41,7 @@ const kinds = (rs) => rs.reduce((m, r) => ({ ...m, [r.kind]: (m[r.kind] ?? 0) + 
 const db = (run) => JSON.parse(readFileSync(path.join(EVIDENCE, run, 'db-after.json'), 'utf8')).queries
 
 describe('live evidence: every committed chain verifies offline', () => {
-  for (const [run, count] of [['live1', 17], ['live2', 28], ['probe', 9]]) {
+  for (const [run, count] of [['live1', 17], ['live2', 28], ['probe', 9], ['ide', 20]]) {
     it(`${run}: ${count} receipts, signatures, links and head anchor`, () => {
       const r = load(run)
       assert.deepEqual(r.findings, [])
@@ -57,6 +57,29 @@ describe('live evidence: every committed chain verifies offline', () => {
 })
 
 describe('live evidence: what the reports cite', () => {
+  it('ide: the live1 chain continued by three Kiro IDE calls in a trusted workspace (echo denied, read allowed, rm -rf denied)', () => {
+    const live1 = readFileSync(path.join(EVIDENCE, 'live1', 'receipts.jsonl'), 'utf8')
+    assert.ok(readFileSync(path.join(EVIDENCE, 'ide', 'receipts.jsonl'), 'utf8').startsWith(live1), 'receipts 0 to 16 are the committed live1 chain, unchanged')
+    const { receipts: rs } = load('ide')
+    assert.deepEqual(rs.slice(17).map((r) => [r.seq, r.kind, r.verdict, r.subject.tool, r.subject.category, r.subject.action_hash.slice(7, 23)]), [
+      [17, 'hook_decision', 'deny', 'execute_bash', 'NO_AUTHORIZATION', 'bab4f3fe7db6cea1'],
+      [18, 'hook_decision', 'allow', 'read_file', 'ALLOWED', '88cf6c909115537b'],
+      [19, 'hook_decision', 'deny', 'execute_bash', 'NO_AUTHORIZATION', 'a4d2db383d1cf5b7'],
+    ])
+    // The excerpt of the IDE's own log: hooks were skipped while the workspace was untrusted.
+    const log = readFileSync(path.join(EVIDENCE, 'ide', 'kiro-ide-log-excerpt.txt'), 'utf8')
+    assert.match(log, /isTrusted=false\)[\s\S]*hooks\.v2\.executionDisabledUntrustedWorkspace[\s\S]*isTrusted=true\)/)
+    assert.doesNotMatch(log.split('isTrusted=true')[1], /executionDisabled/, 'after trust the hooks are not disabled')
+    // The temporary invocation log of the hook: three calls, one per receipt, each with the gate on, the key directory set, in the workspace.
+    const calls = readFileSync(path.join(EVIDENCE, 'ide', 'hook-invocations.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l))
+    assert.equal(calls.length, 3)
+    assert.ok(calls.every((c) => c.gate === 'on' && c.home_set === true && c.cwd_is_ws === true))
+    calls.forEach((c, i) => {
+      const lag = Date.parse(rs[17 + i].timestamp) - Date.parse(c.ts)
+      assert.ok(lag >= 0 && lag < 5000, `receipt ${17 + i} follows hook call ${i} (${lag} ms)`)
+    })
+  })
+
   it('live1: block denied, first rehearsal SAFE, approval through stdin, run equal to the rehearsal', () => {
     const { receipts: rs, approver } = load('live1')
     assert.deepEqual(kinds(rs), { hook_decision: 13, rehearsal: 1, approval_requested: 1, authorization_issued: 1, run_result: 1 })

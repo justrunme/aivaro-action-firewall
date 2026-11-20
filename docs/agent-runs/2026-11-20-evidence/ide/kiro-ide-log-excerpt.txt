@@ -1,0 +1,9 @@
+2026-11-20 13:53:01.051 [info] [TrustMigration] starting (isTrusted=false)
+2026-11-20 13:53:01.251 [info] [KiroAgent] v2 hooks cache initialized (hooks load at session start)
+2026-11-20 13:53:01.251 [info] hooks.v2.executionDisabledUntrustedWorkspace
+2026-11-20 13:53:01.251 [info] [KiroAgent] v2 hooks loaded 1 standalone hooks from .kiro/hooks/
+2026-11-20 13:53:01.987 [info] [KiroAgent] v2 hooks loaded 1 standalone hooks from .kiro/hooks/
+2026-11-20 14:01:31.069 [info] [TrustMigration] starting (isTrusted=true)
+2026-11-20 14:01:31.268 [info] [KiroAgent] v2 hooks cache initialized (hooks load at session start)
+2026-11-20 14:01:31.268 [info] [KiroAgent] v2 hooks loaded 1 standalone hooks from .kiro/hooks/
+2026-11-20 14:01:31.595 [info] [KiroAgent] v2 hooks loaded 1 standalone hooks from .kiro/hooks/
