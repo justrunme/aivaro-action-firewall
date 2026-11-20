@@ -368,6 +368,8 @@ returns exit 2, and writes a denial receipt with
 | Approval assertion replayed for different action | approval/webauthn.js | Challenge is SHA-256(exact payload); assertion is single-use |
 | Home path or credential in audit log | privacy/redact.js | Redact before every write; enforced in receipt.js and impact.js |
 | pg_dump exposes passwords in dump file | capture/postgres.js | Use `.pgpass` or `PGPASSWORD` env; never log the env var |
+| Kiro IDE skips workspace hooks in an untrusted workspace (seen in IDE 1.0.411: log `hooks.v2.executionDisabledUntrustedWorkspace`; shell ran, no receipt) | Kiro IDE, outside JustRunMe | Not mitigated by JustRunMe. Documented in docs/agent-runs/2026-11-20-ide.md; the operator trusts the workspace and checks the gate is live (a harmless `echo` must be denied) before relying on it |
+| Agent reads the operator key directory (`JUSTRUNME_HOME`) to sign or approve | hook/evaluate.js | Any tool call naming the key directory or a directory containing it is denied (`PROTECTED_PATH`); shell is default-deny. Same OS user, so this holds only for calls the hook sees (docs/agent-runs/2026-11-20-probe.md) |
 
 ---
 

@@ -1142,3 +1142,13 @@ Not counted runs; checks of the integration before recording the demo. Both appr
   - The `ddc3043` commit of that day is marked as the operator's record.
 
 A real `setup`, `block`, `probe` and `down` with the new script ran on a fresh workspace. The new workspace was removed by `down`; the two live workspaces of Run 33 are kept for the Kiro IDE check. Not done: probing the file search and directory listing tools live (Kiro used the shell for those), and a shell step inside an authorized plan. `JRM_LIVE_FAULT` stays in the script as a test-only switch; it can only make setup fail and clean up. `npm run test:report` 511/511.
+
+---
+## Run 35 — Live Kiro IDE check of the hook
+| Field | Value |
+|-------|-------|
+| Date | 2026-11-20 |
+| Branch | `kiro/live-ide` from `main` at `fafe90e` |
+| Kiro | Kiro IDE 1.0.411, separate profile, `JUSTRUNME_GATE=on`, on the workspace of Run 33 (live1) |
+
+Not a counted run; report in `docs/agent-runs/2026-11-20-ide.md`. First attempt, workspace not trusted: the IDE loaded the hook file but did not execute it (its log: `hooks.v2.executionDisabledUntrustedWorkspace`), and `echo gate-check` ran; no receipt, and a temporary invocation log in the hook copy stayed empty. The `rm -rf` prompt was not sent. Second attempt, workspace trusted and a new chat: `echo` denied (#17), the mission file read allowed (#18), `rm -rf demo/migrations` denied (#19, the agent had reasoned it would proceed); the denial ids and receipt hashes the agent quoted match the chain; `verify` passes for 20 receipts; the IDE's tool names are `execute_bash` and `read_file`, so the hook adapter needed no change. Finding for the threat model: in an untrusted workspace the gate fails open without a message to the user (IDE 1.0.411; the IDE 1.2 changelog says untrusted workspaces now ask before each command, not tested). Evidence: `docs/agent-runs/2026-11-20-evidence/ide/` (chain, anchor, keys, IDE log excerpt), checked by `test/live-evidence.test.js`. Not done from the IDE: MCP tools, writes, a rehearse-approve-run cycle. The temporary log line was removed; the hook copy is byte-identical to `src/hook/pretooluse.js` again.
