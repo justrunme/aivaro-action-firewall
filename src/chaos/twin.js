@@ -18,7 +18,8 @@
  * Proven is only what the capture covers: files under allowed_paths, contract config files,
  * the named database, container images. Not checked: the health endpoint (the twin runs the
  * database only) and external effects. Shell steps get COMPOSE_PROJECT_NAME and COMPOSE_FILE of
- * the twin; a step that names the real project explicitly is not prevented (same OS user).
+ * the twin, but steps run on the host as the operator's OS user: a shell step can name the real
+ * Compose project explicitly. Chaos Twin does not sandbox untrusted shell code.
  *
  * Every resource is owned by the lifecycle the moment it exists and released on any outcome
  * (src/chaos/lifecycle.js); `deps` exists so that tests can inject failures at each step.
@@ -74,11 +75,15 @@ export function divergence(before, after, fileChecks = []) {
   }
 }
 
-/** @returns {string} the verdict of a recovery rehearsal */
-export function chaosVerdict({ failure, diverged, undoStatus }) {
+/**
+ * The verdict of a recovery rehearsal. RECOVERY PROVEN also needs a clean teardown: a twin that
+ * left resources behind is FAILED (the receipt keeps the undo result and the cleanup diagnostics apart).
+ * @returns {string}
+ */
+export function chaosVerdict({ failure, diverged, undoStatus, clean }) {
   if (failure) return 'FAILED'
   if (!diverged) return 'NOTHING TO RECOVER'
-  if (undoStatus === 'RECOVERED') return 'RECOVERY PROVEN'
+  if (undoStatus === 'RECOVERED') return clean === true ? 'RECOVERY PROVEN' : 'FAILED'
   if (undoStatus === 'RESTORED_UNVERIFIED') return 'RECOVERY UNVERIFIED'
   return 'RECOVERY FAILED'
 }
@@ -191,7 +196,7 @@ export async function rehearseRecovery({ repoDir, contract, contractHash, target
     keys_removed: made.home ? !existsSync(made.home) : true,
   }
   cleanup.clean = released.every((r) => r.released) && left !== null && left.containers + left.volumes + left.networks === 0 && cleanup.worktree_removed && cleanup.keys_removed
-  const verdict = chaosVerdict({ failure, diverged: diverged?.changed === true, undoStatus: undo?.status })
+  const verdict = chaosVerdict({ failure, diverged: diverged?.changed === true, undoStatus: undo?.status, clean: cleanup.clean })
 
   const subject = {
     plan_id: planId(contract),

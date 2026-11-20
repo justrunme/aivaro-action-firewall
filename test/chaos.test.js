@@ -70,7 +70,23 @@ describe('Chaos Twin: divergence and verdict', () => {
     assert.equal(d.changed, true)
     assert.equal(d.schema_changed, false)
     assert.deepEqual(d.files_changed, ['changed: demo/app.config.json', 'added: demo/new.txt'])
-    assert.equal(chaosVerdict({ failure: null, diverged: d.changed, undoStatus: 'RECOVERED' }), 'RECOVERY PROVEN')
+    assert.equal(chaosVerdict({ failure: null, diverged: d.changed, undoStatus: 'RECOVERED', clean: true }), 'RECOVERY PROVEN')
+  })
+
+  it('recovered but not cleaned up is FAILED, not RECOVERY PROVEN', () => {
+    assert.equal(chaosVerdict({ failure: null, diverged: true, undoStatus: 'RECOVERED', clean: false }), 'FAILED')
+    assert.equal(chaosVerdict({ failure: null, diverged: true, undoStatus: 'RECOVERED' }), 'FAILED', 'an unknown cleanup is not clean')
+  })
+
+  it('a recovered twin whose compose project could not be removed: FAILED, with the undo result and the cleanup kept apart', async () => {
+    const s = setup()
+    const r = await s.run(fakes({ after: { ...MEASURE, tables: { ...MEASURE.tables, orders: { rows: 2, checksum: 'x' } } }, downFails: true }).deps)
+    assert.equal(r.verdict, 'FAILED')
+    assert.equal(r.failure, null, 'no failure is invented')
+    assert.equal(r.undo.status, 'RECOVERED')
+    assert.equal(r.undo.verification.status, 'PASS')
+    assert.equal(r.cleanup.clean, false)
+    assert.match(r.cleanup.released.find((x) => x.resource === 'compose project').error, /docker compose down failed/)
   })
 
   it('database differences are found by schema, rows and checksums', () => {
