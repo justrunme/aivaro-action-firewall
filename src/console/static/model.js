@@ -192,7 +192,7 @@ export function flight(story) {
           : missing('no approval requested'),
     EXECUTED: f.run ? { state: f.run.verdict === 'completed' && (f.links ? linkOk('EXECUTED_AS_AUTHORIZED') : true) ? 'ok' : 'bad', note: `run ${f.run.verdict}`, receipt: rec(f.run), run: f.run } : missing('not run'),
     VERIFIED: f.run
-      ? { state: !((f.links ? linkOk('RESULT_AS_REHEARSED') : f.run.matches_rehearsal === true)) ? 'bad' : !f.run.undo ? 'ok' : f.run.undo.verification === 'PASS' ? (f.run.undo.receipt_format === 'current' ? 'ok' : 'warn') : f.run.undo.verification === 'FAIL' ? 'bad' : 'mute', note: `${f.run.matches_rehearsal ? 'result equals the rehearsal' : `${f.run.differences ?? '?'} difference(s) from the rehearsal`}${f.run.undo ? `; undone, recovery check ${f.run.undo.verification ?? '—'}` : ''}`, receipt: rec(f.run), run: f.run }
+      ? { state: !((f.links ? linkOk('RESULT_AS_REHEARSED') : f.run.matches_rehearsal === true)) ? 'bad' : !f.run.undo ? 'ok' : f.run.undo.verification === 'PASS' ? (f.run.undo.receipt_format === 'current' ? 'ok' : 'warn') : f.run.undo.verification === 'FAIL' ? 'bad' : 'mute', checks_unknown: f.run.undo?.verification === 'PASS' && f.run.undo.receipt_format !== 'current', note: `${f.run.matches_rehearsal ? 'result equals the rehearsal' : `${f.run.differences ?? '?'} difference(s) from the rehearsal`}${f.run.undo ? `; undone, recovery check ${f.run.undo.verification ?? '—'}${f.run.undo.verification === 'PASS' && f.run.undo.receipt_format !== 'current' ? ' (older receipt: checks not recorded)' : ''}` : ''}`, receipt: rec(f.run), run: f.run }
       : missing('nothing to verify yet'),
   }
   return FLIGHT.map((name) => ({ name, ...node[name] }))

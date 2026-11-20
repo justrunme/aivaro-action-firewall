@@ -437,8 +437,20 @@ describe('Console round 2: decision first, safe approval, honest labels, SQL pan
     const tiles = findAll(root, (e) => hasClass(e, 'tri')).map((t) => text(t))
     assert.equal(tiles[0], '0need your decision')
     assert.ok(text(root).includes('RECOVERED · CHECKS UNKNOWN'))
+    const { flight } = await import('../src/console/static/model.js')
+    const verified = flight(st.story.result).find((n) => n.name === 'VERIFIED')
+    assert.equal(verified.checks_unknown, true)
+    const current = structuredClone(st.story.result)
+    current.runs[0].undo.receipt_format = 'current'
+    assert.equal(flight(current).find((n) => n.name === 'VERIFIED').checks_unknown, false)
     const fr = missionsScreen(st, { ...ctx, route: { screen: 'missions', arg: C, sub: 'verified' } })
-    assert.ok(text(fr).includes('CHECKS UNKNOWN'), text(fr))
+    const panel = findAll(fr, (e) => hasClass(e, 'evidence'))[0]
+    const header = findAll(panel, (e) => e.tag === 'h2' && text(e) === 'VERIFIED')[0]
+    assert.ok(header, 'VERIFIED evidence header exists')
+    const badge = findAll(panel, (e) => hasClass(e, 'pill'))[0]
+    assert.ok(badge, 'VERIFIED evidence badge exists')
+    assert.equal(text(badge), 'CHECKS UNKNOWN')
+    assert.ok(!text(badge).includes('ATTENTION REQUIRED'))
     assert.ok(!text(fr).includes('NEEDS APPROVAL'), text(fr))
   })
 

@@ -11,7 +11,7 @@ import { badge, fmtTime, h, hashChip, icon, short, sqlCompare, sqlOf, sqlView, s
 import { approvalSource, counterfactual, eligibility, flight, heroOf, latestSafe, lossText, losses, missionSummary, missionVerdict, recoverySummary, passphraseWords, receiptRows, sameBase, severest, tableLines, toneOf, urgency } from './model.js'
 
 const TONE_LABEL = { ok: 'verified', bad: 'denied', warn: 'attention required', fix: 'repaired', mute: 'unverifiable', info: 'recorded', missing: 'not in the chain' }
-const nodeLabel = (n) => n.name === 'VERIFIED' && n.state === 'warn' && /checks.*(unknown|not record)/i.test(n.note) ? 'checks unknown' : TONE_LABEL[n.state]
+const nodeLabel = (n) => n.name === 'VERIFIED' && n.checks_unknown === true ? 'checks unknown' : TONE_LABEL[n.state]
 const NODE_ICON = { ok: 'bolt', bad: 'cross', warn: 'lock', fix: 'check', mute: 'dash', info: 'check', missing: 'dash' }
 const linkOk = (set, code) => set?.links.find((l) => l.code === code)?.ok === true
 const ok = (cond) => badge(cond ? 'holds' : 'broken', cond ? 'ok' : 'bad', cond ? 'check' : 'cross')
