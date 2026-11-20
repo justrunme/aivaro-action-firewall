@@ -15,6 +15,10 @@ import { verifyHistory } from '../history/archive.js'
 import { ProbeError, finishProbe, gateHealth, observeProbe, pendingProbe, startProbe } from '../gate/probe.js'
 import { proofDebt } from '../evidence/proofdebt.js'
 import { planId } from '../rehearsal/engine.js'
+import { computeFingerprint } from '../fidelity/fingerprint.js'
+import { baseHash } from '../fidelity/gate.js'
+import { loadTarget } from './target.js'
+import { errorSummary } from '../privacy/redact.js'
 import { EXIT } from './codes.js'
 import { CliError, contractOf, missionOf, operatorKeys, publicSide, verifiedChain } from './commands.js'
 
@@ -35,14 +39,27 @@ function chainOrFail(repoDir, missionId) {
   return chain
 }
 
-export function evidenceCmd({ repoDir, opts }) {
+export async function evidenceCmd({ repoDir, opts }) {
   const missionId = missionOf(repoDir, opts)
   const chain = chainOrFail(repoDir, missionId)
   const contract = contractIfAny(repoDir)
   const history = verifyHistory(repoDir, missionId, chain.receipts)
   const gate = gateHealth({ repoDir, receipts: chain.receipts })
   const own = contract?.id === missionId ? contract : null
-  const debt = proofDebt({ receipts: chain.receipts, contract: own, legacyVersions: history.legacy_versions, gate, planIdNow: own ? planId(own) : null })
+  // The current base is measured only when a RECOVERY PROVEN of this plan exists to compare it with.
+  let currentBase = null
+  let baseCheckError = null
+  const pid = own ? planId(own) : null
+  if (own && chain.receipts.some((r) => r.kind === 'recovery_rehearsal' && r.verdict === 'RECOVERY PROVEN' && r.subject?.plan_id === pid)) {
+    try {
+      const { target } = loadTarget(repoDir)
+      const parsed = contractOf(repoDir)
+      currentBase = baseHash(await computeFingerprint({ repoDir, target: { ...target, composeFile: path.resolve(repoDir, target.composeFile) }, contract: parsed.contract, contractHash: parsed.hash }))
+    } catch (err) {
+      baseCheckError = errorSummary(String(err?.message ?? err)).slice(0, 160)
+    }
+  }
+  const debt = proofDebt({ receipts: chain.receipts, contract: own, legacyVersions: history.legacy_versions, gate, planIdNow: pid, currentBase, baseCheckError })
   return { exit: EXIT.OK, result: { mission_id: missionId, receipts: chain.count, gate, ...debt } }
 }
 

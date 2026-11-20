@@ -103,5 +103,5 @@ export function evidenceScreen(state, ctx) {
         h('div', { class: 'links' },
           rr.last_verified_recovery ? line(true, `Last verified recovery ${ago(rr.last_verified_recovery.at)}`, rr.last_verified_recovery) : line(false, 'No recovery with a recorded list of checks has passed in this mission'),
           line(rr.latest_run_recovery === 'PASS' && Boolean(rr.latest_run_recovery_receipt), rr.latest_run_recovery === 'NOT_UNDONE' ? 'The latest run has not been undone' : rr.latest_run_recovery ? `Latest run recovery: ${rr.latest_run_recovery}` : 'No run yet', rr.latest_run_recovery_receipt),
-          line(rr.recovery_rehearsed === true && Boolean(rr.recovery_rehearsal_receipt), rr.recovery_rehearsal_note ?? 'Recovery rehearsal not recorded', rr.recovery_rehearsal_receipt)))))
+          line(rr.recovery_rehearsed === true && rr.recovery_rehearsal_state === 'current' && Boolean(rr.recovery_rehearsal_receipt), rr.recovery_rehearsal_note ?? 'Recovery rehearsal not recorded', rr.recovery_rehearsal_receipt)))))
 }
