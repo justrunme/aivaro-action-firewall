@@ -24,6 +24,7 @@ import { measureDatabase } from '../rehearsal/measure.js'
 import { chainPath, receiptHash, verifyChain } from '../receipts/chain.js'
 import { loadPublicKey, publicKeyHex } from '../receipts/keys.js'
 import { groupAlive, killGroup, run } from '../util/exec.js'
+import { PreflightError, checkDockerCli, checkDockerDaemon, checkNode } from './preflight.js'
 
 const DEMO_DIR = fileURLToPath(new URL('../../demo/', import.meta.url))
 const CLI_FILE = fileURLToPath(new URL('../cli/index.js', import.meta.url))
@@ -73,9 +74,9 @@ export function currentEndpoint(listing) {
  * environment that pins it: every docker process of the judge gets this
  * DOCKER_HOST and no DOCKER_CONTEXT, so none of them can reach another daemon.
  */
-async function pinLocalDocker(env) {
+async function pinLocalDocker(env, probe = run) {
   const base = childEnv(env, os.tmpdir())
-  const r = await run('docker', ['context', 'ls', '--format', '{{.Current}}\t{{.DockerEndpoint}}'], { timeoutMs: 20000, env: base })
+  const r = await probe('docker', ['context', 'ls', '--format', '{{.Current}}\t{{.DockerEndpoint}}'], { timeoutMs: 20000, env: base })
   if (r.code !== 0) throw new JudgeEnvironmentError('DOCKER_UNAVAILABLE', 'Docker is not available; the judge demo needs a running Docker daemon (the rest of JustRunMe does not)')
   const endpoint = currentEndpoint(r.stdout)
   if (!isLocalEndpoint(endpoint)) throw new JudgeEnvironmentError('REMOTE_DOCKER', 'the active Docker context does not point at a local socket; the judge demo runs only against a local Docker')
@@ -123,14 +124,24 @@ export async function sweepUntilQuiet(sweep, { deadlineMs = 30000, intervalMs = 
 }
 
 /** @returns {Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<void> }>} */
-export async function createBackend({ env = process.env } = {}) {
-  if (env.DOCKER_HOST && !env.DOCKER_HOST.startsWith('unix://')) {
-    throw new JudgeEnvironmentError('REMOTE_DOCKER', 'DOCKER_HOST points at a remote daemon; the judge demo runs only against a local Docker')
+export async function createBackend({ env = process.env, probe = run, nodeVersion = process.versions.node } = {}) {
+  // Preflight: nothing below this block runs, and nothing is created, unless it passes.
+  let cleanEnv
+  try {
+    checkNode(nodeVersion)
+    if (env.DOCKER_HOST && !env.DOCKER_HOST.startsWith('unix://')) {
+      throw new JudgeEnvironmentError('REMOTE_DOCKER', 'DOCKER_HOST points at a remote daemon; the judge demo runs only against a local Docker')
+    }
+    await checkDockerCli(probe, childEnv(env, os.tmpdir()))
+    cleanEnv = await pinLocalDocker(env, probe)
+    await checkDockerDaemon(probe, cleanEnv)
+  } catch (err) {
+    if (err instanceof PreflightError) throw new JudgeEnvironmentError(err.code, err.message)
+    throw err
   }
   const suffix = randomBytes(4).toString('hex')
   const missionId = `judge-${suffix}`
   const names = projectNames(suffix)
-  const cleanEnv = await pinLocalDocker(env)
   const version = await run('docker', ['version', '--format', '{{.Server.Version}}'], { timeoutMs: 20000, env: cleanEnv })
   if (version.code !== 0) throw new JudgeEnvironmentError('DOCKER_UNAVAILABLE', 'Docker is not available; the judge demo needs a running Docker daemon (the rest of JustRunMe does not)')
 
