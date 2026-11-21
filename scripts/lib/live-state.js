@@ -33,17 +33,14 @@ export function allowEnv(src, extra = {}) {
   return { ...env, ...extra }
 }
 
-// Kiro runs the hook command through a shell. A path with a space or a shell character would break
-// the command, and a hook that fails without exit code 2 lets the call through, so such a path is
-// refused instead of quoted.
-const SAFE_PATH_RE = /^\/[A-Za-z0-9._/-]+$/
-
-/** `node <file>` for the workspace hook, or an Error when the path is not plain. */
+// Kiro executes this command through a shell. Quote the absolute path as one
+// argument rather than rejecting valid temporary directories containing spaces.
+// Reject control characters and traversal before quoting; no shell expansion is possible.
 export function hookCommand(file) {
-  if (typeof file !== 'string' || !SAFE_PATH_RE.test(file) || file.split('/').includes('..')) {
-    throw new Error('the hook path holds characters a shell would split or expand; use a temp directory without them')
+  if (typeof file !== 'string' || !path.isAbsolute(file) || file.split('/').includes('..') || /[\x00-\x1f\x7f]/.test(file)) {
+    throw new Error('the hook path must be an absolute path without traversal or control characters')
   }
-  return `node ${file}`
+  return `node '${file.replaceAll("'", "'\\''")}'`
 }
 
 export function writeMarker(dir, nonce) {

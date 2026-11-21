@@ -57,7 +57,7 @@ const argv = process.argv.slice(2)
 const record = { argv, cwd: process.cwd(), env: process.env, hook: [] }
 const done = () => fs.appendFileSync(${JSON.stringify(kiroLog)}, JSON.stringify(record) + '\\n')
 if (argv[0] === '--version') { done(); console.log('kiro-cli 0.0.0-stub'); process.exit(0) }
-const hookFile = JSON.parse(fs.readFileSync('.kiro/hooks/pretooluse.json', 'utf8')).hooks[0].action.command.replace(/^node /, '')
+const hookFile = JSON.parse(fs.readFileSync('.kiro/hooks/pretooluse.json', 'utf8')).hooks[0].action.command.replace(/^node '/, '').replace(/'$/, '').replace(/'\\''/g, "'")
 const call = (tool_name, tool_input) => {
   const r = spawnSync(process.execPath, [hookFile], { input: JSON.stringify({ hook_event_name: 'preToolUse', cwd: process.cwd(), tool_name, tool_input }), env: process.env, encoding: 'utf8' })
   record.hook.push([tool_name, r.status])
@@ -162,6 +162,24 @@ describe('live-state: ownedState', () => {
     assert.match(ownedState(s, { tmp: root, prefix: 'live' }).join(';'), /install directory has no owner marker file/)
   })
 
+  it('normalizes a symlinked temporary root without allowing a symlinked workspace', () => {
+    const actual = tmp('jrm-liverun-root-')
+    const alias = path.join(os.tmpdir(), `jrm-liverun-alias-${process.pid}`)
+    symlinkSync(actual, alias)
+    tmps.push(alias)
+    const ws = tmp('jrm-live-ws-', actual)
+    const home = `${ws}-keys`
+    mkdirSync(home)
+    const install = tmp('jrm-live-install-', actual)
+    const nonce = 'ab'.repeat(16)
+    for (const d of [ws, home, install]) writeMarker(d, nonce)
+    const project = 'jrm-live-a1b2c3'
+    writeFileSync(path.join(ws, 'justrunme.target.json'), JSON.stringify({ project }))
+    const state = { ws, home, install, nonce, project, compose_started: true }
+    assert.deepEqual(ownedState(state, { tmp: realpathSync(alias), prefix: 'live' }), [])
+    assert.match(ownedState({ ...state, ws: path.join(alias, path.basename(ws)), home: path.join(alias, path.basename(ws)) + '-keys' }, { tmp: realpathSync(alias), prefix: 'live' }).join(';'), /workspace is not one this script made/)
+  })
+
   it('property: any other value in any field is refused', () => {
     const s = layout()
     const fields = ['nonce', 'ws', 'home', 'install', 'project']
@@ -179,10 +197,19 @@ describe('live-state: environment and hook command', () => {
     assert.ok(!ENV_ALLOW.some((k) => /PASS|SECRET|TOKEN|KEY|NODE_OPTIONS|JUSTRUNME/.test(k)))
   })
   it('writes a plain hook path and refuses one a shell would split or expand', () => {
-    assert.equal(hookCommand('/tmp/jrm-live-install-Ab3/src/hook/pretooluse.js'), 'node /tmp/jrm-live-install-Ab3/src/hook/pretooluse.js')
-    for (const bad of ['/tmp/a b/x.js', '/tmp/a;rm/x.js', '/tmp/$(x)/x.js', "/tmp/a'b/x.js", '/tmp/a"b/x.js', 'rel/x.js', '/tmp/../x.js', '/tmp/a\nb/x.js']) {
+    assert.equal(hookCommand('/tmp/jrm-live-install-Ab3/src/hook/pretooluse.js'), "node '/tmp/jrm-live-install-Ab3/src/hook/pretooluse.js'")
+    assert.equal(hookCommand('/tmp/dir with spaces/x.js'), "node '/tmp/dir with spaces/x.js'")
+    for (const bad of ['rel/x.js', '/tmp/../x.js', '/tmp/a\n b/x.js', '/tmp/\0/x.js']) {
       assert.throws(() => hookCommand(bad), /hook path/, JSON.stringify(bad))
     }
+    // A shell metacharacter or single quote in a directory name must stay data.
+    const malicious = "/tmp/a'; touch /tmp/SHOULD_NOT_EXIST; echo '/x.js"
+    const command = hookCommand(malicious)
+    const shell = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8' })
+    assert.notEqual(shell.status, 0)
+    assert.equal(existsSync('/tmp/SHOULD_NOT_EXIST'), false)
+    assert.match(command, /'\\''/)
+
   })
 })
 
@@ -247,7 +274,7 @@ describe('live-run: a whole run against stand-ins', () => {
       assert.ok(!readFileSync(f).includes(PASS), `the passphrase is in ${path.basename(f)}`)
     }
     const hook = JSON.parse(readFileSync(path.join(s.ws, '.kiro/hooks/pretooluse.json'), 'utf8')).hooks[0].action.command
-    assert.equal(hook, `node ${path.join(s.install, 'src/hook/pretooluse.js')}`)
+    assert.equal(hook, hookCommand(path.join(s.install, 'src/hook/pretooluse.js')))
     assert.ok(bin.docker().some((l) => l.includes(`-p ${s.project}`) && l.includes(' up -d ')))
   })
 
