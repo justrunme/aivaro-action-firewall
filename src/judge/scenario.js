@@ -6,6 +6,13 @@
  * Docker; tests pass a fake). Every action goes through the CLI, so the judge has
  * no path around the fidelity gate, the selection gate or the receipt chain.
  *
+ * Hidden-trigger case (opt-in, `justrunme judge --hidden-trigger`): the scenario adds
+ * the case from the recorded run. The statement is innocent
+ * (UPDATE patches SET available_count = 0), a trigger of the database deletes orders,
+ * and the rehearsal has to measure that on a real Postgres. Without the option the
+ * default steps run unchanged and the backend is never asked to install the trigger.
+ * With the option and a backend that cannot install it, the run fails closed.
+ *
  * backend: {
  *   cli(args) -> { exit, out }              run `justrunme <args>` against the demo workspace
  *   offlineCli(args) -> { exit, out }       same, with no Docker and no PATH
@@ -14,6 +21,8 @@
  *   stopStack() -> Promise                  remove the demo containers
  *   corruptChain() / restoreChain()         flip one byte of the receipt chain, and put it back
  *   readReceipts() -> { publicKey, receipts }
+ *   installHiddenTrigger() -> Promise       (needed only for the hidden-trigger option) add order status, cancel_patch_orders() and the trigger
+ *   useMigration('hidden_dangerous'|'hidden_safe')   the two plans of that case (hidden-trigger option only)
  * }
  */
 
@@ -41,16 +50,37 @@ export const STEPS = [
   ['tamper_restored', 'Putting the byte back makes the chain verify again'],
 ]
 
+export const HIDDEN_STEPS = [
+  ['hidden_rehearse_dangerous', 'Rehearse an innocent-looking UPDATE whose hidden trigger deletes orders'],
+  ['hidden_deny', 'Authorization of the hidden-trigger plan is denied'],
+  ['hidden_rehearse_safe', 'Rehearse the safe alternative (cancel the open orders, then update)'],
+  ['hidden_compare', 'Compare both rehearsals; the safe alternative is recommended'],
+  ['hidden_allow', 'Authorize the selected safe alternative'],
+  ['hidden_run', 'Run the safe alternative on the real database'],
+  ['hidden_undo', 'Undo the run and verify the recovery'],
+]
+
+/** The steps of one run, in order: the hidden-trigger case follows the first undo. */
+export function stepsFor(withHidden) {
+  if (!withHidden) return STEPS
+  const at = STEPS.findIndex(([id]) => id === 'undo') + 1
+  return [...STEPS.slice(0, at), ...HIDDEN_STEPS, ...STEPS.slice(at)]
+}
+
+const ordersEvidence = (r) => (r.evidence ?? []).find((e) => e.kind === 'protected_rows_lost' && e.table === 'orders') ?? null
+
 /** @returns {Promise<{ stepResults: object[], story: object, offline: object|null, receipts: object[], publicKey: string|null }>} */
-export async function runScenario(backend) {
+export async function runScenario(backend, { hiddenTrigger = false } = {}) {
   const results = new Map()
   const story = {}
   let offline = null
   let failed = false
   const state = {}
+  const withHidden = hiddenTrigger === true
+  const allSteps = stepsFor(withHidden)
 
   const step = async (id, expectedExit, args, checks, { offlineRun = false } = {}) => {
-    const title = STEPS.find(([i]) => i === id)[1]
+    const title = allSteps.find(([i]) => i === id)[1]
     if (failed) return results.set(id, skippedStep(id, title))
     let observed
     const t0 = performance.now()
@@ -81,6 +111,75 @@ export async function runScenario(backend) {
       story.error = { during: name, message: String(err?.message ?? err) }
       return undefined
     }
+  }
+
+  async function hiddenTriggerCase() {
+    await guarded('install the hidden trigger', () => backend.installHiddenTrigger())
+    state.hidden = { before: failed ? null : await guarded('measure before (hidden trigger)', () => backend.measure()) }
+    const h = (story.hidden_trigger = {
+      trigger: 'patches_release_sold_out',
+      statement: 'UPDATE patches SET available_count = 0 WHERE id = 1',
+      orders_in_real_database: state.hidden.before?.tables.orders?.rows ?? null,
+    })
+    await guarded('write the hidden-trigger plan', () => backend.useMigration('hidden_dangerous'))
+    await step('hidden_rehearse_dangerous', 10, ['rehearse'], async (r) => {
+      const lost = ordersEvidence(r)
+      const fired = (r.evidence ?? []).find((e) => e.kind === 'trigger_fired') ?? null
+      h.dangerous = { verdict: r.verdict, rows_lost: r.rows_lost, orders_before: lost?.rows_before ?? null, orders_after: lost?.rows_after ?? null, trigger_fired: fired }
+      state.hiddenDangerous = r.plan_id
+      state.hiddenBase = r.base_hash
+      return [
+        c('verdict is DATA LOSS', r.verdict === 'DATA LOSS', r.verdict),
+        c('orders lost were measured (fewer after than before)', lost !== null && lost.rows_after < lost.rows_before, lost),
+        c('the measured start equals the orders of the real database', lost?.rows_before === state.hidden.before?.tables.orders?.rows, lost?.rows_before),
+        c('the trigger that fired is named', fired !== null && JSON.stringify(fired).includes('patches_release_sold_out'), fired),
+        c('the real database was not touched', sameData(await backend.measure(), state.hidden.before)),
+      ]
+    })
+    await step('hidden_deny', 21, ['authorize'], (r, o) => {
+      h.denied = { error: o.out?.error?.code ?? null }
+      return [c('refused for DATA_LOSS', o.code === 'DATA_LOSS', o.code)]
+    })
+    await guarded('write the safe alternative', () => backend.useMigration('hidden_safe'))
+    await step('hidden_rehearse_safe', 0, ['rehearse'], (r) => {
+      const orders = (r.rows_lost ?? {}).orders
+      h.safe = { verdict: r.verdict, rows_lost: r.rows_lost }
+      state.hiddenSafe = r.plan_id
+      return [
+        c('verdict is SAFE', r.verdict === 'SAFE', r.verdict),
+        c('0 orders lost, measured', orders === 0, r.rows_lost),
+        c('same base as the hidden-trigger plan', typeof r.base_hash === 'string' && r.base_hash === state.hiddenBase),
+        c('a different plan', typeof r.plan_id === 'string' && r.plan_id !== state.hiddenDangerous),
+      ]
+    })
+    await step('hidden_compare', 0, ['compare'], (r) => {
+      h.selection = { recommended: r.recommended, decided_by: r.decided_by }
+      return [c('the safe alternative is recommended', r.recommended === state.hiddenSafe), c('decided by R15.4.1', r.decided_by === 'R15.4.1', r.decided_by)]
+    })
+    await step('hidden_allow', 0, ['authorize'], (r) => {
+      h.allowed = { plan_id: r.plan_id, selection_mode: r.selection?.mode ?? null }
+      return [c('the selected plan is authorized', r.plan_id === state.hiddenSafe), c('authorization follows the signed selection', r.selection?.mode === 'selected', r.selection?.mode)]
+    })
+    await step('hidden_run', 0, ['run'], async (r) => {
+      const after = await backend.measure()
+      state.hiddenCapture = r.capture_id
+      h.run = { ok: r.ok, orders_after: after.tables.orders?.rows ?? null, patches_changed: after.tables.patches?.checksum !== state.hidden.before?.tables.patches?.checksum }
+      return [
+        c('the run succeeded', r.ok === true),
+        c('every order of the real database survived', after.tables.orders?.rows === state.hidden.before?.tables.orders?.rows, after.tables.orders?.rows),
+        c('the patch row was updated', h.run.patches_changed),
+      ]
+    })
+    await step('hidden_undo', 0, ['undo', state.hiddenCapture ?? 'cap-00000000000000-000000'], async (r) => {
+      const after = await backend.measure()
+      h.undo = { status: r.status, evidence_status: r.evidence_status, verification: r.verification?.status ?? null }
+      return [
+        c('status is RECOVERED', r.status === 'RECOVERED', r.status),
+        c('recovery was verified', r.verification?.status === 'PASS', r.verification?.status),
+        c('evidence is recorded in the chain', r.evidence_status === 'recorded', r.evidence_status),
+        c('the database equals its state before the run', sameData(after, state.hidden.before)),
+      ]
+    })
   }
 
   await step('keys', 0, ['keys', 'init'], (r) => [c('a public key was created', typeof r.public_key === 'string')])
@@ -137,6 +236,7 @@ export async function runScenario(backend) {
       c('the database equals its state before the run', sameData(after, state.before) && !hasStatus(after)),
     ]
   })
+  if (withHidden) await hiddenTriggerCase()
   await step('verify', 0, ['verify'], (r) => [c('chain, policy and selection check out', r.ok === true), c('a receipt exists for every decision', (r.receipts ?? 0) >= 8, r.receipts)])
   await step('replay', 0, ['replay'], (r) => [c('the selection replays', r.ok === true)])
 
@@ -152,5 +252,5 @@ export async function runScenario(backend) {
   await step('tamper_restored', 0, ['verify'], (r) => [c('the chain verifies again', r.ok === true)], { offlineRun: true })
 
   const { publicKey, receipts } = (await guarded('read the receipts', () => backend.readReceipts())) ?? { publicKey: null, receipts: [] }
-  return { stepResults: STEPS.map(([id, title]) => results.get(id) ?? skippedStep(id, title)), story, offline, receipts, publicKey }
+  return { stepResults: allSteps.map(([id, title]) => results.get(id) ?? skippedStep(id, title)), story, offline, receipts, publicKey }
 }

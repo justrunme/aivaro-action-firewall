@@ -19,6 +19,7 @@
  *   justrunme evidence                      # Gate Health, ProofDebt, recovery readiness (read only)
  *   justrunme gate-probe start|status|finish  # is the agent's session gated? (exit 0 ACTIVE, 34 INACTIVE, 35 UNKNOWN)
  *   justrunme chaos [--fault-after <n>]     # rehearse the recovery on a disposable twin (exit 0 RECOVERY PROVEN, else 36)
+ *   justrunme judge [--hidden-trigger]      # one-command demo; the flag adds the hidden-trigger case (90 s budget)
  *   justrunme console [--port n]            # local Console on 127.0.0.1; keeps running
  * Common options: --repo <dir> (default: current directory), --mission <id>, --text.
  */
@@ -32,6 +33,8 @@ import { redactDeep } from '../privacy/redact.js'
 import { keyHome } from '../receipts/keys.js'
 import { EXIT } from './codes.js'
 import * as cmd from './commands.js'
+import { JudgeEnvironmentError, createBackend } from '../judge/env.js'
+import { runJudge } from '../judge/index.js'
 import { evidenceCmd, gateProbeCmd } from './evidence-commands.js'
 import { chaosCmd } from './chaos-command.js'
 
@@ -48,12 +51,29 @@ const OPTIONS = {
   plan: { type: 'string' },
   'passphrase-stdin': { type: 'boolean', default: false },
   'emergency-recovery': { type: 'boolean', default: false },
+  'hidden-trigger': { type: 'boolean', default: false },
   confirm: { type: 'string' },
   'fault-after': { type: 'string' },
   help: { type: 'boolean', short: 'h', default: false },
 }
 
 const USAGE = 'usage: justrunme <keys init|rehearse|compare|authorize|run|undo|verify|replay|status|receipt|reanchor|lock|judge|approver|approvals|approve|deny|history|evidence|gate-probe|chaos|console> [options]'
+
+/**
+ * `judge --hidden-trigger`: the default judge steps plus the hidden-trigger case, under its own
+ * named budget (HIDDEN_TRIGGER_BUDGET_MS). Plain `judge` stays in commands.js and is not changed.
+ */
+async function judgeHiddenTrigger({ opts }) {
+  if (opts.repo !== undefined || opts.mission !== undefined) throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'judge builds its own workspace; it takes no --repo or --mission')
+  let report
+  try {
+    report = await runJudge({ create: () => createBackend(), hiddenTrigger: true })
+  } catch (err) {
+    if (err instanceof JudgeEnvironmentError) throw new cmd.CliError(EXIT.JUDGE_ENVIRONMENT, err.code, err.message)
+    throw err
+  }
+  return { exit: report.judge.status === 'PASS' ? EXIT.OK : EXIT.JUDGE_FAILED, result: report }
+}
 
 async function dispatch(command, rest, repoDir, opts) {
   const ctx = { repoDir, opts }
@@ -84,7 +104,7 @@ async function dispatch(command, rest, repoDir, opts) {
     case 'lock':
       return cmd.lockCmd({ ...ctx, action: rest[0] })
     case 'judge':
-      return cmd.judgeCmd(ctx)
+      return opts['hidden-trigger'] ? judgeHiddenTrigger(ctx) : cmd.judgeCmd(ctx)
     case 'approver':
       if (rest[0] !== 'init') break
       return cmd.approverInit(ctx)
@@ -124,6 +144,12 @@ export function judgeSummaryLines(story) {
   }
   const removed = story?.selection?.removed
   if (Array.isArray(removed) && removed.length > 0) lines.push(`removed from selection: ${removed.length} plan${removed.length === 1 ? '' : 's'}`)
+  const h = story?.hidden_trigger
+  const d = h?.dangerous
+  if (typeof d?.verdict === 'string' && Number.isFinite(d.orders_before) && Number.isFinite(d.orders_after)) {
+    lines.push(`hidden trigger${typeof h.trigger === 'string' ? ` ${h.trigger}` : ''}: ${d.verdict}, orders ${d.orders_before} -> ${d.orders_after}`)
+    if (typeof h.safe?.verdict === 'string') lines.push(`hidden trigger safe alternative: ${h.safe.verdict}${lost(h.safe.rows_lost)}`)
+  }
   return lines
 }
 
@@ -165,6 +191,7 @@ export async function main(argv) {
     if (!command) throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
     if (opts.mission !== undefined && !MISSION_RE.test(opts.mission)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', 'invalid --mission')
     if (opts.plan !== undefined && !['rehearse', 'authorize', 'run'].includes(command)) throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--plan exists only for rehearse, authorize and run')
+    if (opts['hidden-trigger'] && command !== 'judge') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--hidden-trigger exists only for judge')
     if (opts['fault-after'] !== undefined && command !== 'chaos') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--fault-after exists only for chaos')
     if (opts['emergency-recovery'] && command !== 'undo') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--emergency-recovery exists only for undo')
     if (opts.confirm !== undefined && command !== 'undo' && command !== 'approve') throw new cmd.CliError(EXIT.USAGE, 'USAGE', '--confirm exists only for undo and approve')

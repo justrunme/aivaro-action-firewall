@@ -12,7 +12,7 @@ import { setTimeout as sleep } from 'node:timers/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { EXIT } from '../src/cli/codes.js'
-import { BUDGET_MS } from '../src/judge/report.js'
+import { BUDGET_MS, HIDDEN_TRIGGER_BUDGET_MS } from '../src/judge/report.js'
 
 const enabled = process.platform === 'linux' || process.env.JRM_DOCKER_TESTS === '1'
 const CLI = new URL('../src/cli/index.js', import.meta.url).pathname
@@ -90,6 +90,56 @@ describe('Demo judge: one command, a real Postgres, under 60 s', { skip: !enable
       }
 
       // Nothing is left: the stack, and the rehearsal copies the CLI started.
+      const suffix = rep.judge.mission_id.replace(/^judge-/, '')
+      for (const needle of [`jrm-judge-${suffix}`, `jrm-reh-judge${suffix}-`]) {
+        assert.deepEqual(leftovers(needle), { containers: '', volumes: '', networks: '' }, needle)
+      }
+    } finally {
+      caller.remove()
+    }
+  })
+
+  it('judge --hidden-trigger measures the hidden-trigger DATA LOSS, denies it, and runs and undoes the safe alternative', () => {
+    const caller = callerEnv()
+    const r = spawnSync(process.execPath, [CLI, 'judge', '--hidden-trigger'], { encoding: 'utf8', env: caller.env, timeout: 3 * HIDDEN_TRIGGER_BUDGET_MS })
+    try {
+      assert.equal(r.status, EXIT.OK, r.stdout + r.stderr)
+      const rep = JSON.parse(r.stdout).result
+      assert.equal(rep.judge.status, 'PASS', JSON.stringify(rep.findings))
+      assert.equal(rep.judge.budget_ms, HIDDEN_TRIGGER_BUDGET_MS)
+      assert.equal(rep.counts.failed + rep.counts.skipped, 0)
+      assert.deepEqual(rep.steps.map((s) => s.status), rep.steps.map(() => 'passed'))
+      assert.ok(rep.steps.some((x) => x.id === 'hidden_undo' && x.status === 'passed'))
+      if (rep.judge.budget_enforced) assert.ok(rep.judge.elapsed_ms < HIDDEN_TRIGGER_BUDGET_MS, `judge took ${rep.judge.elapsed_ms} ms`)
+
+      // The default story is still there.
+      assert.equal(rep.story.dangerous.verdict, 'DATA LOSS')
+      assert.equal(rep.story.safe.verdict, 'SAFE')
+
+      // The hero case from the recorded run, measured on the real Postgres.
+      const h = rep.story.hidden_trigger
+      assert.equal(h.trigger, 'patches_release_sold_out')
+      assert.equal(h.orders_in_real_database, 3)
+      assert.equal(h.dangerous.verdict, 'DATA LOSS')
+      assert.deepEqual([h.dangerous.orders_before, h.dangerous.orders_after], [3, 2])
+      assert.equal(h.dangerous.rows_lost.orders, 1)
+      assert.ok(JSON.stringify(h.dangerous.trigger_fired).includes('patches_release_sold_out'))
+      assert.equal(h.dangerous.trigger_fired.fired, 1, JSON.stringify(h.dangerous.trigger_fired))
+      assert.equal(h.denied.error, 'DATA_LOSS')
+      assert.equal(h.safe.verdict, 'SAFE')
+      assert.equal(h.safe.rows_lost.orders, 0)
+      assert.equal(h.selection.decided_by, 'R15.4.1')
+      assert.equal(h.allowed.selection_mode, 'selected')
+      assert.deepEqual([h.run.ok, h.run.orders_after, h.run.patches_changed], [true, 3, true])
+      assert.deepEqual([h.undo.status, h.undo.evidence_status, h.undo.verification], ['RECOVERED', 'recorded', 'PASS'])
+
+      assert.deepEqual([rep.counts.mismatches, rep.counts.policy_violations], [0, 0])
+      assert.ok(rep.counts.receipts_verified >= 16)
+      assert.ok(rep.receipts.filter((x) => x.kind === 'rehearsal').length >= 4)
+      for (const text of [r.stdout, r.stderr]) {
+        assert.ok(!text.includes('canary-not-a-real'), 'caller credentials are not in the output')
+        assert.ok(!text.includes(os.homedir()), 'no home directory path in the output')
+      }
       const suffix = rep.judge.mission_id.replace(/^judge-/, '')
       for (const needle of [`jrm-judge-${suffix}`, `jrm-reh-judge${suffix}-`]) {
         assert.deepEqual(leftovers(needle), { containers: '', volumes: '', networks: '' }, needle)

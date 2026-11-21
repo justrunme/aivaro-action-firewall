@@ -7,6 +7,8 @@
  */
 
 export const BUDGET_MS = 60000
+// The opt-in hidden-trigger run adds four rehearsals (about 67 s in total on the reference Mac), so it has its own budget.
+export const HIDDEN_TRIGGER_BUDGET_MS = 90000
 
 /**
  * @typedef {object} StepResult

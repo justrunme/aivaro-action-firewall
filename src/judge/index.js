@@ -6,7 +6,7 @@
  */
 
 import { performance } from 'node:perf_hooks'
-import { buildReport } from './report.js'
+import { BUDGET_MS, HIDDEN_TRIGGER_BUDGET_MS, buildReport } from './report.js'
 import { runScenario } from './scenario.js'
 
 /**
@@ -19,14 +19,15 @@ const once = (cleanup) => {
 }
 
 /**
- * @param {{ create: () => Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<object> }> }} deps
+ * hiddenTrigger: opt-in extra case (justrunme judge --hidden-trigger) with its own budget.
+ * @param {{ hiddenTrigger?: boolean, create: () => Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<object> }> }} deps
  */
-export async function runJudge({ create }) {
+export async function runJudge({ create, hiddenTrigger = false }) {
   const t0 = performance.now()
   const env = await create()
   const cleanup = once(env.cleanup)
   try {
-    const scenario = await runScenario(env.backend)
+    const scenario = await runScenario(env.backend, { hiddenTrigger })
     const cleanupStatus = await cleanup()
     return buildReport({
       stepResults: scenario.stepResults,
@@ -38,6 +39,7 @@ export async function runJudge({ create }) {
       offline: scenario.offline,
       story: scenario.story,
       cleanup: cleanupStatus,
+      budgetMs: hiddenTrigger ? HIDDEN_TRIGGER_BUDGET_MS : BUDGET_MS,
     })
   } finally {
     await cleanup()
