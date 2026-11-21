@@ -1,5 +1,7 @@
 # JustRunMe — Devpost draft (Kiroween, Frankenstein)
 
+**Primary category to select on Devpost: Frankenstein** — the Kiro workflow, MCP, CLI, PostgreSQL/Docker rehearsals, receipts, and Console are combined into one entry. This is the intended category, **not a claim that the form has been submitted**. [Submission checklist](CHECKLIST.md).
+
 ## Elevator pitch
 An agent's migration quietly deletes orders. JustRunMe catches the loss in a disposable rehearsal, blocks the run, and verifies a safer result. Rehearse. Run. Recover.
 
@@ -21,7 +23,7 @@ npm ci
 node src/cli/index.js judge --text
 ```
 
-The judge command creates temporary demo resources, rehearses a destructive change and a safe alternative, runs and undoes the safe plan, verifies the receipt chain and detects tampering. It does not need your own server, production keys or database credentials. For a separate local evidence view, run `node src/cli/index.js console` and open the tokenized URL it prints. For an existing mission, `justrunme evidence` reports what its verified receipts prove and what remains unchecked; `justrunme gate-probe` checks whether the agent session is actually gated. Neither command establishes that arbitrary host-side code is safe.
+The judge command creates temporary demo resources, rehearses a destructive change and a safe alternative, runs and undoes the safe plan, verifies the receipt chain and detects tampering. It does not need your own server, production keys or database credentials. In a documented fresh-clone check, the judge took **38.4 seconds on its first run and 37.5 seconds on its second**, with `postgres:16.3-alpine` **already cached both times**; a first Docker image pull was not measured. [Recording runbook, PR #37](https://github.com/justrunme/justrunme-zero/pull/37) (the runbook is not yet on `main`). For a separate local evidence view, run `node src/cli/index.js console` and open the tokenized URL it prints. For an existing mission, `justrunme evidence` reports what its verified receipts prove and what remains unchecked; `justrunme gate-probe` checks whether the agent session is actually gated. Neither command establishes that arbitrary host-side code is safe.
 
 ## How we built it
 
@@ -36,6 +38,9 @@ The hidden-trigger experiment exposed a flaw in our first definition of success.
 We added **LOGIC BYPASS** detection in the rehearsal copy for T25 v2, including attempts to bypass existing database behavior temporarily. The recorded live Kiro run then denied a `DISABLE TRIGGER` plan as `LOGIC BYPASS`. T25 v2 was a separate, small experiment: the treatment completed **3 of 5** Task A runs by the runner's criteria versus **4 of 5** controls; a stricter interpretation of one treatment run gives **2 of 5**. These are not evidence of a general advantage. Coverage still has boundaries, including untested PostgreSQL mechanisms such as event triggers, RLS policies, extension functions and role/database settings. We also had to distinguish scripted approvals from human authorization, report unavailable recovery checks, and clean up judge-demo resources.
 
 ## Accomplishments
+
+- **Gate decisions, separate from rehearsal:** in a reproducible Node 24 test corpus, **13 of 13 destructive tool actions were denied and 1 harmless file read was allowed**. These were gate decisions with `JUSTRUNME_GATE=on`, **not 13 measured PostgreSQL rehearsals**, and do not establish universal protection against alternate shell forms or bypasses. [Committed gate examples](../EXAMPLES.md).
+- **Recorded Chaos Twin recovery (2026-11-20):** a database-container `SIGKILL` after step 2 was followed by undo **RECOVERED** and verdict **RECOVERY PROVEN**; **21 checks, 0 failed**, signed receipt-chain verification and clean resource cleanup with no leftover containers, volumes or networks. The [public recorded evidence](../evidence/chaos-live-2026-11-20/README.md) includes `chaos.json`, `verify.json`, the signed receipt, public key and a portable receipt/anchor verification command. This was a separate recorded database-only run, **not a live video take** or a sandbox for untrusted shell; health check was not configured.
 
 - A recorded Kiro CLI run caught the hidden trigger's loss of **1 of 3 orders**, rejected a trigger-bypass attempt, and executed a revised plan that matched its rehearsal with all 3 orders retained.
 - A clean-tree test report records **571 passed, 0 failed, 0 skipped** on Node.js 24.22.3 at the documented commit. This is a point-in-time result, not a claim about every machine or future commit.
@@ -54,6 +59,10 @@ Extend bypass detection to untested PostgreSQL mechanisms such as event triggers
 
 Kiro CLI and IDE, Kiro specs/steering/agents/hooks, Node.js (24+), JavaScript, `@modelcontextprotocol/server`, `yaml`, `zod`, Docker Compose, PostgreSQL 16, Node's built-in HTTP server, Ed25519 signatures, and `fast-check` for development tests. The Console uses no front-end framework.
 
+## Submission video
+
+The [planned 1:36 demo video script](../DEMO_VIDEO.md) is **under the 3-minute limit** stated in the [submission checklist](CHECKLIST.md). The video has **not yet been recorded, publicly uploaded or submitted**, so the script is not a substitute for the required public video.
+
 ## Try it out
 
 https://github.com/justrunme/justrunme-zero
@@ -67,5 +76,9 @@ Sources (internal; remove this section before pasting into Devpost):
 - Judge behavior, evidence/gate-probe self-checks and prerequisites: src/cli/index.js; test/demo-judge.test.js; README.md
 - Rehearsal, approval, recovery, Console and limitations: README.md; src/console/static/; test/console-missions.test.js; test/demo-chaos.test.js
 - Kiro features and evidence: .kiro/specs/justrunme-zero/; .kiro/steering/; .kiro/agents/; .kiro/hooks/; docs/agent-runs/; docs/KIRO_LOG.md
+- Gate test corpus and its scope (13 denied, 1 allowed; not rehearsals): docs/EXAMPLES.md; test/gate-examples.test.js
+- Recorded Chaos Twin recovery, signed receipt, original CLI verification and portable signature check: docs/evidence/chaos-live-2026-11-20/README.md; docs/evidence/chaos-live-2026-11-20/chaos.json; docs/evidence/chaos-live-2026-11-20/verify.json
+- Fresh-clone judge timings (both Docker image cached): docs/submission/RECORDING_RUNBOOK.md in open PR #37 (not current main); README.md for npm ci and judge command
+- Frankenstein category, video under 3 minutes and missing public upload: docs/submission/CHECKLIST.md; docs/DEMO_VIDEO.md (1:36 script)
 - Dependencies: package.json; demo/docker-compose.yml
 -->
