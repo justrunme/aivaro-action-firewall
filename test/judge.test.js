@@ -15,6 +15,9 @@ import { JudgeEnvironmentError, childEnv, createBackend, currentEndpoint, isLoca
 import { down, dump, imageDigests, psql, up } from '../src/rehearsal/compose.js'
 import { EXIT } from '../src/cli/codes.js'
 import { judgeSummaryLines, main, textOf } from '../src/cli/index.js'
+import { runJudge } from '../src/judge/index.js'
+
+const CLEAN = { ok: true, status: 'clean', leftovers: [], errors: [] }
 
 /** A scripted stand-in for the CLI: behaves like a correct JustRunMe, with hooks to break one step. */
 function fakeBackend({ override = {}, verifierAcceptsAnything = false } = {}) {
@@ -75,7 +78,7 @@ function fakeBackend({ override = {}, verifierAcceptsAnything = false } = {}) {
 }
 
 const report = (scenario, extra = {}) =>
-  buildReport({ stepResults: scenario.stepResults, elapsedMs: 30000, imagesCached: true, missionId: 'judge-test', publicKey: scenario.publicKey, receipts: scenario.receipts, offline: scenario.offline, story: scenario.story, ...extra })
+  buildReport({ stepResults: scenario.stepResults, elapsedMs: 30000, imagesCached: true, missionId: 'judge-test', publicKey: scenario.publicKey, receipts: scenario.receipts, offline: scenario.offline, story: scenario.story, cleanup: CLEAN, ...extra })
 
 describe('Judge scenario (T19)', () => {
   it('passes when every step does what a correct JustRunMe does, in the documented order', async () => {
@@ -175,11 +178,11 @@ describe('Judge scenario (T19)', () => {
 
 describe('Judge report (T19.3)', () => {
   const steps = (n, status = 'passed') => Array.from({ length: n }, (_, i) => ({ id: `s${i}`, title: 't', status, expected_exit: 0, observed_exit: 0, code: null, checks: [] }))
-  const build = (over) => buildReport({ stepResults: steps(3), elapsedMs: 1000, imagesCached: true, missionId: 'judge-x', publicKey: null, receipts: [], offline: { receipts: 9, chain_findings: 0, policy_findings: 0 }, story: {}, ...over })
+  const build = (over) => buildReport({ stepResults: steps(3), elapsedMs: 1000, imagesCached: true, missionId: 'judge-x', publicKey: null, receipts: [], offline: { receipts: 9, chain_findings: 0, policy_findings: 0 }, story: {}, cleanup: CLEAN, ...over })
 
   it('has the fields R8.4 asks for', () => {
     const r = build({})
-    assert.deepEqual(Object.keys(r).sort(), ['counts', 'findings', 'judge', 'limits', 'operator_public_key', 'receipts', 'steps', 'story'])
+    assert.deepEqual(Object.keys(r).sort(), ['cleanup', 'counts', 'findings', 'judge', 'limits', 'operator_public_key', 'receipts', 'steps', 'story'])
     assert.ok(r.limits.some((l) => /approver key/.test(l)), 'the report says the demo approves by itself')
     assert.deepEqual(Object.keys(r.counts).sort(), ['failed', 'mismatches', 'passed', 'policy_violations', 'receipts_verified', 'skipped', 'steps'])
     assert.ok(['PASS', 'FAIL'].includes(r.judge.status))
@@ -322,6 +325,75 @@ describe('judge --text summary lines', () => {
 
   it('leaves the JSON report unchanged: no summary field is added', async () => {
     const { rep } = await textFor(fakeBackend())
-    assert.deepEqual(Object.keys(rep), ['judge', 'counts', 'findings', 'story', 'steps', 'receipts', 'operator_public_key', 'limits'])
+    assert.deepEqual(Object.keys(rep), ['judge', 'counts', 'cleanup', 'findings', 'story', 'steps', 'receipts', 'operator_public_key', 'limits'])
+  })
+})
+
+describe('Judge verdict follows the cleanup status (T49)', () => {
+  const env = (cleanup, calls = { n: 0 }) => ({
+    backend: fakeBackend(),
+    missionId: 'judge-c',
+    imagesCached: true,
+    cleanup: async () => {
+      calls.n++
+      return typeof cleanup === 'function' ? cleanup() : cleanup
+    },
+  })
+
+  it('PASS only with a clean cleanup, and the cleanup runs once', async () => {
+    const calls = { n: 0 }
+    const r = await runJudge({ create: async () => env(CLEAN, calls) })
+    assert.equal(r.judge.status, 'PASS')
+    assert.deepEqual(r.cleanup, CLEAN)
+    assert.equal(calls.n, 1)
+  })
+
+  it('FAIL with the leftover resources listed when objects remain', async () => {
+    const left = { ok: false, status: 'leftovers', leftovers: [{ kind: 'volume', id: 'jrm-reh-judgeab-data' }], errors: ['volume_remove_failed'] }
+    const r = await runJudge({ create: async () => env(left) })
+    assert.equal(r.judge.status, 'FAIL')
+    const f = r.findings.find((x) => x.code === 'CLEANUP_INCOMPLETE')
+    assert.deepEqual(f.leftovers, left.leftovers)
+    assert.deepEqual(f.errors, ['volume_remove_failed'])
+    assert.equal(r.cleanup.status, 'leftovers')
+  })
+
+  it('FAIL when the daemon could not be asked (unverified), a cleanup that throws, or a status that is missing', async () => {
+    const unverified = { ok: false, status: 'unverified', leftovers: [], errors: ['container_list_failed'] }
+    for (const c of [unverified, () => { throw new Error('boom') }, undefined, { status: 'clean' }, { ok: true, status: 'clean', leftovers: [{ kind: 'network', id: 'n' }], errors: [] }]) {
+      const r = await runJudge({ create: async () => env(c) })
+      assert.equal(r.judge.status, 'FAIL')
+      assert.equal(r.cleanup.ok, false)
+      assert.ok(r.findings.some((x) => x.code === 'CLEANUP_INCOMPLETE'))
+    }
+  })
+
+  it('a backend error still runs the cleanup once, fails the report and raises no unhandled rejection', async () => {
+    const calls = { n: 0 }
+    const e = env(CLEAN, calls)
+    e.backend.cli = async () => { throw new Error('backend broke') }
+    const unhandled = []
+    const on = (x) => unhandled.push(x)
+    process.on('unhandledRejection', on)
+    const r = await runJudge({ create: async () => e })
+    await new Promise((res) => setImmediate(res))
+    process.removeListener('unhandledRejection', on)
+    assert.equal(r.judge.status, 'FAIL')
+    assert.equal(calls.n, 1)
+    assert.deepEqual(unhandled, [])
+  })
+
+  it('a rejecting cleanup alongside a backend error leaves a FAIL report, not a crash', async () => {
+    const e = env(() => { throw new Error('cleanup broke') })
+    e.backend.cli = async () => { throw new Error('backend broke') }
+    const r = await runJudge({ create: async () => e })
+    assert.equal(r.judge.status, 'FAIL')
+    assert.ok(r.findings.some((x) => x.code === 'CLEANUP_INCOMPLETE'))
+  })
+
+  it('buildReport without a cleanup status is FAIL', () => {
+    const r = buildReport({ stepResults: [], elapsedMs: 1, imagesCached: true, missionId: 'm', publicKey: null, receipts: [], offline: null, story: {} })
+    assert.equal(r.judge.status, 'FAIL')
+    assert.deepEqual(r.cleanup.errors, ['cleanup_status_missing'])
   })
 })

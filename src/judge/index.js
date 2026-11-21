@@ -10,14 +10,24 @@ import { buildReport } from './report.js'
 import { runScenario } from './scenario.js'
 
 /**
- * @param {{ create: () => Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<void> }> }} deps
+ * Cleanup runs once; its status is kept. A failing cleanup never throws out of here:
+ * it becomes an unverified status, which the report turns into FAIL.
+ */
+const once = (cleanup) => {
+  let pending = null
+  return () => (pending ??= Promise.resolve().then(cleanup).catch(() => ({ ok: false, status: 'unverified', leftovers: [], errors: ['cleanup_failed'] })))
+}
+
+/**
+ * @param {{ create: () => Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<object> }> }} deps
  */
 export async function runJudge({ create }) {
   const t0 = performance.now()
   const env = await create()
+  const cleanup = once(env.cleanup)
   try {
     const scenario = await runScenario(env.backend)
-    await env.cleanup()
+    const cleanupStatus = await cleanup()
     return buildReport({
       stepResults: scenario.stepResults,
       elapsedMs: performance.now() - t0,
@@ -27,8 +37,9 @@ export async function runJudge({ create }) {
       receipts: scenario.receipts,
       offline: scenario.offline,
       story: scenario.story,
+      cleanup: cleanupStatus,
     })
   } finally {
-    await env.cleanup()
+    await cleanup()
   }
 }

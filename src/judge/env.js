@@ -87,22 +87,89 @@ async function pinLocalDocker(env, probe = run) {
 /** Names that identify what this judge run created, for removal when it ends early. */
 export const projectNames = (suffix) => ({ stack: `jrm-judge-${suffix}`, rehearsalPrefix: `jrm-reh-judge${suffix}-` })
 
+const SWEEPS = [
+  { kind: 'container', list: ['ps', '-a', '-q'], rm: ['rm', '-f', '-v'] },
+  { kind: 'volume', list: ['volume', 'ls', '-q'], rm: ['volume', 'rm', '-f'] },
+  { kind: 'network', list: ['network', 'ls', '-q'], rm: ['network', 'rm'] },
+]
+
 /**
- * Containers, volumes and networks of the rehearsal copies the child CLI started.
- * @returns {Promise<number>} how many objects were found (and removal was attempted for)
+ * One pass over the containers, volumes and networks of the rehearsal copies the
+ * child CLI started. A list command that fails (daemon unreachable, timeout) is an
+ * error, never "nothing found": silence from a dead daemon must not read as clean.
+ * @param {string} prefix
+ * @param {NodeJS.ProcessEnv} env
+ * @param {typeof run} [docker] injectable runner, same shape as `run`
+ * @returns {Promise<{ found: { kind: string, id: string }[], errors: string[] }>}
  */
-async function sweepRehearsalCopies(prefix, env) {
-  let found = 0
-  for (const [list, rm] of [
-    [['ps', '-a', '-q', '--filter', `name=${prefix}`], ['rm', '-f', '-v']],
-    [['volume', 'ls', '-q', '--filter', `name=${prefix}`], ['volume', 'rm', '-f']],
-    [['network', 'ls', '-q', '--filter', `name=${prefix}`], ['network', 'rm']],
-  ]) {
-    const ids = (await run('docker', list, { env, timeoutMs: 30000 })).stdout.split('\n').filter(Boolean)
-    found += ids.length
-    if (ids.length > 0) await run('docker', [...rm, ...ids], { env, timeoutMs: 60000 })
+export async function sweepRehearsalDetailed(prefix, env, docker = run) {
+  const found = []
+  const errors = []
+  for (const { kind, list, rm } of SWEEPS) {
+    const r = await docker('docker', [...list, '--filter', `name=${prefix}`], { env, timeoutMs: 30000 })
+    if (r.code !== 0) {
+      errors.push(`${kind}_list_failed`)
+      continue
+    }
+    const ids = r.stdout.split('\n').map((l) => l.trim()).filter(Boolean)
+    for (const id of ids) found.push({ kind, id })
+    if (ids.length > 0) {
+      const removed = await docker('docker', [...rm, ...ids], { env, timeoutMs: 60000 })
+      if (removed.code !== 0) errors.push(`${kind}_remove_failed`)
+    }
   }
-  return found
+  return { found, errors }
+}
+
+/**
+ * Remove the rehearsal copies and prove it. `ok` is true only when two sweeps in a
+ * row found nothing and no docker command failed; otherwise `status` is
+ * 'leftovers' (objects still there) or 'unverified' (docker could not be asked).
+ * @returns {Promise<{ ok: boolean, status: 'clean' | 'leftovers' | 'unverified', leftovers: { kind: string, id: string }[], errors: string[] }>}
+ */
+export async function cleanupRehearsalCopies(prefix, env, { docker = run, ...sweepOptions } = {}) {
+  let last = { found: [], errors: [] }
+  const quiet = await sweepUntilQuiet(async () => {
+    last = await sweepRehearsalDetailed(prefix, env, docker)
+    return last.found.length + last.errors.length
+  }, sweepOptions)
+  const ok = quiet && last.found.length === 0 && last.errors.length === 0
+  const status = ok ? 'clean' : last.found.length > 0 ? 'leftovers' : 'unverified'
+  return { ok, status, leftovers: last.found, errors: [...new Set(last.errors)] }
+}
+
+/**
+ * Signal handling that never exits before cleanup has finished. Handlers stay
+ * installed until then, so a repeated Ctrl-C or SIGTERM is absorbed (and noted)
+ * instead of falling back to the default, which would kill the process mid-cleanup.
+ * @param {{ cleanup: () => Promise<{ ok?: boolean } | void>, proc?: { on: Function, removeListener: Function, stderr?: { write: Function } }, exit?: (code: number) => void }} deps
+ */
+export function installSignalGuard({ cleanup, proc = process, exit = (code) => process.exit(code) }) {
+  let running = null
+  let repeats = 0
+  const handlers = ['SIGINT', 'SIGTERM'].map((sig) => {
+    const h = () => {
+      if (running) {
+        repeats++
+        return
+      }
+      running = Promise.resolve()
+        .then(cleanup)
+        .catch(() => ({ ok: false }))
+        .then((status) => {
+          const clean = !status || status.ok !== false
+          if (!clean) proc.stderr?.write('judge cleanup incomplete: leftovers or unverified state; see the cleanup status\n')
+          remove()
+          exit(sig === 'SIGINT' ? 130 : 143)
+        })
+    }
+    return [sig, h]
+  })
+  const remove = () => {
+    for (const [s, h] of handlers) proc.removeListener(s, h)
+  }
+  for (const [s, h] of handlers) proc.on(s, h)
+  return { remove, repeats: () => repeats, done: () => running }
 }
 
 const pause = (ms) => new Promise((r) => setTimeout(r, ms))
@@ -123,8 +190,8 @@ export async function sweepUntilQuiet(sweep, { deadlineMs = 30000, intervalMs = 
   return clean >= 2
 }
 
-/** @returns {Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<void> }>} */
-export async function createBackend({ env = process.env, probe = run, nodeVersion = process.versions.node } = {}) {
+/** @returns {Promise<{ backend: object, missionId: string, imagesCached: boolean, cleanup: () => Promise<import('./report.js').CleanupStatus>, cleanupStatus: () => object | null }>} */
+export async function createBackend({ env = process.env, probe = run, nodeVersion = process.versions.node, docker = run } = {}) {
   // Preflight: nothing below this block runs, and nothing is created, unless it passes.
   let cleanEnv
   try {
@@ -150,33 +217,50 @@ export async function createBackend({ env = process.env, probe = run, nodeVersio
   let overrideFile = null
   let real = null
   let stackDown = false
-  let finished = false
   const children = new Set()
   const track = (child) => {
     children.add(child)
     child.on('close', () => children.delete(child))
   }
+  // Fail closed: the status is 'clean' only when every step was verified.
   const cleanup = async () => {
+    const errors = []
     // The CLI children lead their own process groups: this stops them and the docker
     // processes they started, then waits (bounded) until those groups are gone.
     const groups = [...children].map((c) => c.pid).filter(Boolean)
     for (const c of children) killGroup(c)
     for (let i = 0; i < 50 && groups.some(groupAlive); i++) await pause(100)
-    if (real && real.env && !stackDown) stackDown = (await down(real)).code === 0
-    await sweepUntilQuiet(() => sweepRehearsalCopies(names.rehearsalPrefix, cleanEnv))
-    for (const d of [repoDir, home, overrideFile && path.dirname(overrideFile)]) if (d) rmSync(d, { recursive: true, force: true })
+    if (groups.some(groupAlive)) errors.push('processes_alive')
+    if (real && real.env && !stackDown) {
+      stackDown = (await down(real)).code === 0
+      if (!stackDown) errors.push('stack_down_failed')
+    }
+    const copies = await cleanupRehearsalCopies(names.rehearsalPrefix, cleanEnv, { docker })
+    errors.push(...copies.errors)
+    const leftovers = [...copies.leftovers]
+    if (real && real.env && !stackDown) leftovers.push({ kind: 'stack', id: names.stack })
+    for (const d of [repoDir, home, overrideFile && path.dirname(overrideFile)]) {
+      if (!d) continue
+      try {
+        rmSync(d, { recursive: true, force: true })
+      } catch {
+        errors.push('directory_remove_failed')
+        // base name only: no absolute paths in output
+        leftovers.push({ kind: 'directory', id: path.basename(d) })
+      }
+    }
+    const ok = errors.length === 0 && copies.ok && leftovers.length === 0
+    const status = ok ? 'clean' : leftovers.length > 0 ? 'leftovers' : 'unverified'
+    return { ok, status, leftovers, errors: [...new Set(errors)] }
   }
+  let cleanupStatus = null
+  let finishing = null
   // Installed before anything is created: Ctrl-C during the first `up` removes it too.
-  const onSignal = (sig) => () => {
-    cleanup().finally(() => process.exit(sig === 'SIGINT' ? 130 : 143))
-  }
-  const handlers = [['SIGINT', onSignal('SIGINT')], ['SIGTERM', onSignal('SIGTERM')]]
-  for (const [s, h] of handlers) process.once(s, h)
-  const finish = async () => {
-    if (finished) return
-    finished = true
-    for (const [s, h] of handlers) process.removeListener(s, h)
-    await cleanup()
+  const guard = installSignalGuard({ cleanup: () => finish() })
+  const finish = () => {
+    // Concurrent and repeated callers share one cleanup and its status.
+    finishing ??= cleanup().catch(() => ({ ok: false, status: 'unverified', leftovers: [], errors: ['cleanup_failed'] })).then((st) => (cleanupStatus = st))
+    return finishing
   }
 
   try {
@@ -263,9 +347,17 @@ export async function createBackend({ env = process.env, probe = run, nodeVersio
         return { publicKey: publicKey ? publicKeyHex(publicKey) : null, receipts: v.receipts.map((r) => ({ seq: r.seq, kind: r.kind, verdict: r.verdict ?? null, hash: receiptHash(r) })) }
       },
     }
-    return { backend, missionId, imagesCached, cleanup: finish }
+    // `cleanup` is idempotent and resolves with the same status every time.
+    const cleanupAndRelease = async () => {
+      const st = await finish()
+      if (!guard.done()) guard.remove()
+      return st
+    }
+    return { backend, missionId, imagesCached, cleanup: cleanupAndRelease, cleanupStatus: () => cleanupStatus }
   } catch (err) {
-    await finish()
+    const st = await finish()
+    if (!guard.done()) guard.remove()
+    if (err && typeof err === 'object' && !st.ok) err.cleanup = st
     throw err
   }
 }
