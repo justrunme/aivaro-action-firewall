@@ -6,7 +6,7 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { JudgeEnvironmentError, createBackend } from '../src/judge/env.js'
-import { PreflightError, checkDockerCli, checkDockerDaemon, checkNode } from '../src/judge/preflight.js'
+import { CLI_TIMEOUT_MS, PreflightError, checkDockerCli, checkDockerDaemon, checkNode } from '../src/judge/preflight.js'
 
 const ok = { code: 0, stdout: '', stderr: '', timedOut: false }
 
@@ -60,14 +60,16 @@ describe('Judge preflight', () => {
     assert.equal(calls.length, 0)
   })
 
-  it('happy path: passing probes raise nothing, and the daemon probe has a short timeout', async () => {
+  it('happy path: passing probes raise nothing, and the daemon probe uses the shared 20000 ms timeout', async () => {
     const seen = []
     const probe = async (cmd, args, opts) => {
-      seen.push(opts.timeoutMs)
+      seen.push({ args, timeoutMs: opts.timeoutMs })
       return ok
     }
     await checkDockerCli(probe, {})
     await checkDockerDaemon(probe, {})
-    assert.ok(seen.every((t) => t <= 10000))
+    assert.equal(seen.find((s) => s.args[0] === 'info').timeoutMs, 20000)
+    assert.equal(seen.find((s) => s.args[0] === '--version').timeoutMs, CLI_TIMEOUT_MS)
+    assert.ok(seen.every((s) => Number.isFinite(s.timeoutMs)))
   })
 })
