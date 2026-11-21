@@ -6,8 +6,8 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import fc from 'fast-check'
-import { runScenario, STEPS } from '../src/judge/scenario.js'
-import { BUDGET_MS, buildReport } from '../src/judge/report.js'
+import { runScenario, STEPS, HIDDEN_STEPS, stepsFor } from '../src/judge/scenario.js'
+import { BUDGET_MS, HIDDEN_TRIGGER_BUDGET_MS, buildReport } from '../src/judge/report.js'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -395,5 +395,123 @@ describe('Judge verdict follows the cleanup status (T49)', () => {
     const r = buildReport({ stepResults: [], elapsedMs: 1, imagesCached: true, missionId: 'm', publicKey: null, receipts: [], offline: null, story: {} })
     assert.equal(r.judge.status, 'FAIL')
     assert.deepEqual(r.cleanup.errors, ['cleanup_status_missing'])
+  })
+})
+
+describe('Judge hidden-trigger case is opt-in', () => {
+  const hiddenIds = HIDDEN_STEPS.map(([id]) => id)
+
+  /** The correct JustRunMe for the hero case: the plan is one UPDATE, a trigger deletes orders, 3 -> 2. */
+  function hiddenFake({ safeLoses = 0 } = {}) {
+    const b = fakeBackend()
+    const base = b.cli
+    const flags = { installed: 0, ran: false }
+    const evidence = [{ kind: 'protected_rows_lost', table: 'orders', rows_before: 12, rows_after: 11 }, { kind: 'trigger_fired', trigger: 'patches_release_sold_out', count: 1 }]
+    const hidden = (k) => k === 'hidden_dangerous' || k === 'hidden_safe'
+    const answers = {
+      rehearse: () => b.state.kind === 'hidden_dangerous'
+        ? { exit: 10, out: { result: { verdict: 'DATA LOSS', rows_lost: { orders: 1 }, evidence, plan_id: 'plan-hd', base_hash: 'base-2' } } }
+        : { exit: 0, out: { result: { verdict: 'SAFE', rows_lost: { orders: safeLoses }, plan_id: 'plan-hs', base_hash: 'base-2' } } },
+      authorize: () => b.state.kind === 'hidden_dangerous'
+        ? { exit: 21, out: { error: { code: 'DATA_LOSS', message: 'rehearsal measured data loss' } } }
+        : { exit: 0, out: { result: { plan_id: 'plan-hs', selection: { mode: 'selected' } } } },
+      compare: () => ({ exit: 0, out: { result: { recommended: 'plan-hs', decided_by: 'R15.4.1', removed: [{ plan_id: 'plan-hd' }] } } }),
+    }
+    b.cli = async (args) => (hidden(b.state.kind) && answers[args[0]] ? answers[args[0]](args) : base(args))
+    b.installHiddenTrigger = async () => { flags.installed++ }
+    const measure = b.measure
+    b.measure = async () => {
+      const m = await measure()
+      return flags.ran && b.state.kind === 'hidden_safe' && b.state.migrated ? { ...m, tables: { ...m.tables, patches: { rows: 3, checksum: 'b2' } } } : m
+    }
+    return { b, flags }
+  }
+
+  it('the default scenario never installs the trigger and runs none of the hidden steps', async () => {
+    const { b, flags } = hiddenFake()
+    const s = await runScenario(b)
+    assert.deepEqual(s.stepResults.map((r) => r.id), STEPS.map(([id]) => id))
+    assert.equal(flags.installed, 0)
+    assert.equal(s.story.hidden_trigger, undefined)
+    const r = report(s)
+    assert.equal(r.judge.status, 'PASS')
+    assert.equal(r.judge.budget_ms, BUDGET_MS)
+    assert.equal(r.judge.budget_ms, 60000)
+  })
+
+  it('--hidden-trigger adds the steps after the first undo and records the measured numbers', async () => {
+    const { b, flags } = hiddenFake()
+    // run() of the safe hidden plan changes the patch row; the fake notices through the flag.
+    const run = b.cli
+    b.cli = async (args) => { if (args[0] === 'run') flags.ran = true; return run(args) }
+    const s = await runScenario(b, { hiddenTrigger: true })
+    assert.equal(flags.installed, 1)
+    assert.deepEqual(s.stepResults.map((r) => r.id), stepsFor(true).map(([id]) => id))
+    assert.deepEqual(s.stepResults.map((r) => r.id).filter((id) => hiddenIds.includes(id)), hiddenIds)
+    assert.ok(s.stepResults.every((r) => r.status === 'passed'), JSON.stringify(s.stepResults.filter((r) => r.status !== 'passed')))
+    const h = s.story.hidden_trigger
+    assert.equal(h.trigger, 'patches_release_sold_out')
+    assert.deepEqual([h.dangerous.verdict, h.dangerous.orders_before, h.dangerous.orders_after, h.dangerous.rows_lost.orders], ['DATA LOSS', 12, 11, 1])
+    assert.equal(h.denied.error, 'DATA_LOSS')
+    assert.deepEqual([h.safe.verdict, h.safe.rows_lost.orders], ['SAFE', 0])
+    assert.deepEqual([h.undo.status, h.undo.verification], ['RECOVERED', 'PASS'])
+    assert.ok(s.stepResults.findIndex((r) => r.id === 'hidden_rehearse_dangerous') > s.stepResults.findIndex((r) => r.id === 'undo'))
+    assert.ok(s.stepResults.findIndex((r) => r.id === 'hidden_undo') < s.stepResults.findIndex((r) => r.id === 'verify'))
+  })
+
+  it('fails closed when the backend cannot install the trigger, and when the safe alternative loses rows', async () => {
+    const { b } = hiddenFake()
+    delete b.installHiddenTrigger
+    const s = await runScenario(b, { hiddenTrigger: true })
+    assert.equal(report(s, { budgetMs: HIDDEN_TRIGGER_BUDGET_MS }).judge.status, 'FAIL')
+    assert.equal(s.stepResults.find((r) => r.id === 'hidden_rehearse_dangerous').status, 'skipped')
+    const lossy = await runScenario(hiddenFake({ safeLoses: 1 }).b, { hiddenTrigger: true })
+    assert.equal(lossy.stepResults.find((r) => r.id === 'hidden_rehearse_safe').status, 'failed')
+  })
+
+  it('the hidden-trigger run has its own named budget of 90 s; the default stays 60 s', async () => {
+    assert.equal(HIDDEN_TRIGGER_BUDGET_MS, 90000)
+    assert.equal(BUDGET_MS, 60000)
+    const mk = (hiddenTrigger) => {
+      const { b } = hiddenFake()
+      return { create: async () => ({ backend: b, missionId: 'judge-x', imagesCached: true, cleanup: async () => CLEAN }), hiddenTrigger }
+    }
+    // An elapsed time of 75 s is over the default budget, inside the hidden-trigger one.
+    const realNow = performance.now.bind(performance)
+    const clock = (ms) => { let n = 0; performance.now = () => (n++ === 0 ? 0 : ms) }
+    try {
+      clock(75000)
+      const withFlag = await runJudge(mk(true))
+      assert.equal(withFlag.judge.budget_ms, HIDDEN_TRIGGER_BUDGET_MS)
+      assert.ok(!withFlag.findings.some((f) => f.code === 'OVER_BUDGET'), JSON.stringify(withFlag.findings))
+      clock(90000)
+      const over = await runJudge(mk(true))
+      assert.equal(over.judge.status, 'FAIL')
+      assert.deepEqual(over.findings.find((f) => f.code === 'OVER_BUDGET'), { code: 'OVER_BUDGET', elapsed_ms: 90000, budget_ms: HIDDEN_TRIGGER_BUDGET_MS })
+      clock(75000)
+      const plain = await runJudge(mk(false))
+      assert.equal(plain.judge.status, 'FAIL')
+      assert.deepEqual(plain.findings.find((f) => f.code === 'OVER_BUDGET'), { code: 'OVER_BUDGET', elapsed_ms: 75000, budget_ms: BUDGET_MS })
+      assert.equal(plain.story.hidden_trigger, undefined)
+    } finally {
+      performance.now = realNow
+    }
+  })
+
+  it('the flag exists only for judge, and judge --hidden-trigger still takes no --repo', async () => {
+    const other = await main(['verify', '--hidden-trigger'])
+    assert.equal(other.exit, EXIT.USAGE)
+    const repo = await main(['judge', '--hidden-trigger', '--repo', '.'])
+    assert.equal(repo.exit, EXIT.USAGE)
+  })
+
+  it('--text shows the measured hidden-trigger numbers only when they were recorded', async () => {
+    const { b, flags } = hiddenFake()
+    const run = b.cli
+    b.cli = async (args) => { if (args[0] === 'run') flags.ran = true; return run(args) }
+    const lines = judgeSummaryLines((await runScenario(b, { hiddenTrigger: true })).story)
+    assert.ok(lines.includes('hidden trigger patches_release_sold_out: DATA LOSS, orders 12 -> 11'), lines.join('|'))
+    assert.ok(lines.includes('hidden trigger safe alternative: SAFE, rows lost: 0 (orders 0)'), lines.join('|'))
+    assert.equal(judgeSummaryLines({ hidden_trigger: { trigger: 'x', dangerous: {} } }).length, 0)
   })
 })

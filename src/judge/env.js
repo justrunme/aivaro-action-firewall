@@ -33,8 +33,17 @@ const CLI_FILE = fileURLToPath(new URL('../cli/index.js', import.meta.url))
 // only the rows with quantity >= 10; the safe plan only adds a column.
 export const DANGEROUS_SQL = 'CREATE TABLE orders_v2 AS SELECT id, patch_id, quantity FROM orders WHERE quantity >= 10;\nDROP TABLE orders;\nALTER TABLE orders_v2 RENAME TO orders;\n'
 export const SAFE_SQL = "ALTER TABLE orders ADD COLUMN status TEXT NOT NULL DEFAULT 'new';\n"
-const MIGRATIONS = { dangerous: 'demo/migrations/003_consolidate_orders.sql', safe: 'demo/migrations/003_add_order_status.sql' }
-const SQL = { dangerous: DANGEROUS_SQL, safe: SAFE_SQL }
+// Hidden-trigger case: the plan is one innocent UPDATE; the loss comes from a trigger in the database.
+export const HIDDEN_DANGEROUS_SQL = 'UPDATE patches SET available_count = 0 WHERE id = 1;\n'
+export const HIDDEN_SAFE_SQL = 'SELECT cancel_patch_orders(1);\nUPDATE patches SET available_count = 0 WHERE id = 1;\n'
+// Database-side state the plan does not show: order status, cancel_patch_orders() and the trigger that deletes open orders.
+export const HIDDEN_TRIGGER_SQL = `ALTER TABLE orders ADD COLUMN status TEXT NOT NULL DEFAULT 'open';
+CREATE FUNCTION cancel_patch_orders(p INT) RETURNS INT LANGUAGE sql AS $$ WITH c AS (UPDATE orders SET status = 'cancelled' WHERE patch_id = p AND status = 'open' RETURNING 1) SELECT count(*)::int FROM c $$;
+CREATE FUNCTION release_sold_out() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.available_count = 0 THEN DELETE FROM orders WHERE patch_id = NEW.id AND status = 'open'; END IF; RETURN NEW; END $$;
+CREATE TRIGGER patches_release_sold_out AFTER UPDATE OF available_count ON patches FOR EACH ROW EXECUTE FUNCTION release_sold_out();
+`
+const MIGRATIONS = { dangerous: 'demo/migrations/003_consolidate_orders.sql', safe: 'demo/migrations/003_add_order_status.sql', hidden_dangerous: 'demo/migrations/004_mark_hollow_creek_sold_out.sql', hidden_safe: 'demo/migrations/004_cancel_orders_then_mark_sold_out.sql' }
+const SQL = { dangerous: DANGEROUS_SQL, safe: SAFE_SQL, hidden_dangerous: HIDDEN_DANGEROUS_SQL, hidden_safe: HIDDEN_SAFE_SQL }
 
 export class JudgeEnvironmentError extends Error {
   constructor(code, message) {
@@ -326,6 +335,10 @@ export async function createBackend({ env = process.env, probe = run, nodeVersio
             resources: { databases: ['pumpkin_patch'], config_files: [], compose_services: ['db'] },
           })
         )
+      },
+      async installHiddenTrigger() {
+        const r = await psql(real, { sql: HIDDEN_TRIGGER_SQL })
+        if (r.code !== 0) throw new JudgeEnvironmentError('SEED_FAILED', `installing the hidden trigger failed: ${r.stderr.trim().split('\n').slice(-1)[0]}`)
       },
       async stopStack() {
         // Only counts as stopped when docker says so; otherwise cleanup tries again.
