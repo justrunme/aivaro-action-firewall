@@ -6,6 +6,12 @@ JustRunMe rehearses Kiro agents’ proposed changes on a disposable copy, measur
 
 > The agent says “Just run me.” JustRunMe says “Prove it first.”
 
+An agent migration can silently delete orders through a database trigger. JustRunMe catches the loss in a disposable rehearsal before the real run.
+
+**Try it (Node.js 24+, local Docker):** `npm ci && node src/cli/index.js judge --text`
+
+**Measured:** in one five-run-per-arm experiment, code review approved **5/5** destructive plans (each direct run lost **1 of 3** orders); JustRunMe denied **5/5** first rehearsals and the eventual real runs lost **0** orders. **Limit:** 3/5 revised plans bypassed the trigger during execution, so this is not proof of business-rule correctness. [Protocol and results](docs/agent-runs/T25-results-v1.md).
+
 ![Flight Recorder showing a denied, repaired and verified mission](docs/img/console-flight-recorder.png)
 
 “Zero” in the repository name means **zero unverified execution**, not zero risk.
@@ -92,6 +98,7 @@ justrunme approve <request_id> --confirm <plan_id>
 justrunme deny <request_id> --reason "..."
 justrunme history                       # versions, approvals, runs and the links between them
 justrunme console [--port n]            # local Console; prints a URL with a per-start token
+justrunme chaos [--fault-after <n>]     # disposable recovery rehearsal (exit 0 RECOVERY PROVEN; otherwise 36)
 ```
 
 See [exit codes, operator-key handling, emergency recovery and complete command semantics](docs/DETAILS.md#cli).

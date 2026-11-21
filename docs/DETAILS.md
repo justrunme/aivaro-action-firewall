@@ -2,10 +2,10 @@
 
 This is the full technical reference preserved from the earlier README. The [judge-facing overview](../README.md) is the short entry point.
 
-# JustRunMe
+## Overview
 
 **Rehearse. Run. Recover.**
-The mission simulator and undo engine for Kiro agents.
+Rehearses Kiro agents’ changes on a disposable copy and undoes them with verified recovery.
 
 > AI says "Just run me." We say "Prove it first."
 
