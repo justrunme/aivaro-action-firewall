@@ -24,7 +24,8 @@ import { allowEnv, ENV_ALLOW, hookCommand, MARKER, ownedState, writeMarker } fro
 
 const SCRIPT = fileURLToPath(new URL('../scripts/live-run.mjs', import.meta.url))
 const tmps = []
-const tmp = (p, base = os.tmpdir()) => {
+const SAFE_TMP = realpathSync('/tmp') // independent of inherited TMPDIR (which may contain spaces)
+const tmp = (p, base = SAFE_TMP) => {
   const d = realpathSync(mkdtempSync(path.join(base, p)))
   tmps.push(d)
   return d
@@ -57,7 +58,7 @@ const argv = process.argv.slice(2)
 const record = { argv, cwd: process.cwd(), env: process.env, hook: [] }
 const done = () => fs.appendFileSync(${JSON.stringify(kiroLog)}, JSON.stringify(record) + '\\n')
 if (argv[0] === '--version') { done(); console.log('kiro-cli 0.0.0-stub'); process.exit(0) }
-const hookFile = JSON.parse(fs.readFileSync('.kiro/hooks/pretooluse.json', 'utf8')).hooks[0].action.command.replace(/^node '/, '').replace(/'$/, '').replace(/'\\''/g, "'")
+const hookFile = JSON.parse(fs.readFileSync('.kiro/hooks/pretooluse.json', 'utf8')).hooks[0].action.command.replace(/^node /, '')
 const call = (tool_name, tool_input) => {
   const r = spawnSync(process.execPath, [hookFile], { input: JSON.stringify({ hook_event_name: 'preToolUse', cwd: process.cwd(), tool_name, tool_input }), env: process.env, encoding: 'utf8' })
   record.hook.push([tool_name, r.status])
@@ -164,7 +165,7 @@ describe('live-state: ownedState', () => {
 
   it('normalizes a symlinked temporary root without allowing a symlinked workspace', () => {
     const actual = tmp('jrm-liverun-root-')
-    const alias = path.join(os.tmpdir(), `jrm-liverun-alias-${process.pid}`)
+    const alias = path.join(SAFE_TMP, `jrm-liverun-alias-${process.pid}`)
     symlinkSync(actual, alias)
     tmps.push(alias)
     const ws = tmp('jrm-live-ws-', actual)
@@ -197,19 +198,27 @@ describe('live-state: environment and hook command', () => {
     assert.ok(!ENV_ALLOW.some((k) => /PASS|SECRET|TOKEN|KEY|NODE_OPTIONS|JUSTRUNME/.test(k)))
   })
   it('writes a plain hook path and refuses one a shell would split or expand', () => {
-    assert.equal(hookCommand('/tmp/jrm-live-install-Ab3/src/hook/pretooluse.js'), "node '/tmp/jrm-live-install-Ab3/src/hook/pretooluse.js'")
-    assert.equal(hookCommand('/tmp/dir with spaces/x.js'), "node '/tmp/dir with spaces/x.js'")
-    for (const bad of ['rel/x.js', '/tmp/../x.js', '/tmp/a\n b/x.js', '/tmp/\0/x.js']) {
+    assert.equal(hookCommand('/tmp/jrm-live-install-Ab3/src/hook/pretooluse.js'), 'node /tmp/jrm-live-install-Ab3/src/hook/pretooluse.js')
+    for (const bad of ['rel/x.js', '/tmp/../x.js', '/tmp/a b/x.js', "/tmp/a'b/x.js", '/tmp/$(x)/x.js', '/tmp/a\n b/x.js', '/tmp/\0/x.js']) {
       assert.throws(() => hookCommand(bad), /hook path/, JSON.stringify(bad))
     }
-    // A shell metacharacter or single quote in a directory name must stay data.
-    const malicious = "/tmp/a'; touch /tmp/SHOULD_NOT_EXIST; echo '/x.js"
-    const command = hookCommand(malicious)
-    const shell = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8' })
-    assert.notEqual(shell.status, 0)
-    assert.equal(existsSync('/tmp/SHOULD_NOT_EXIST'), false)
-    assert.match(command, /'\\''/)
-
+  })
+  it('refuses a spaced temporary root but works with a safe override even when TMPDIR has spaces', () => {
+    const spaced = tmp('jrm spaced root-')
+    const safe = tmp('jrm-liverun-safe-')
+    const bin = stubs()
+    const out = tmp('jrm-liverun-out-')
+    const bad = runner(bin, spaced)(['--out', out, 'setup'], { input: PASS + '\n' })
+    assert.equal(bad.status, 3, bad.stderr)
+    assert.match(bad.stderr, /set JRM_LIVE_TMP.*spaceless/)
+    assert.deepEqual(ours(spaced), [])
+    const good = runner(bin, spaced, { JRM_LIVE_TMP: safe })(['--out', out, 'setup'], { input: PASS + '\n' })
+    assert.equal(good.status, 0, good.stderr)
+    const state = JSON.parse(readFileSync(path.join(out, 'live-state.json'), 'utf8'))
+    assert.deepEqual(ownedState(state, { tmp: safe, prefix: 'live' }), [])
+    const down = runner(bin, spaced, { JRM_LIVE_TMP: safe })(['--out', out, 'down'])
+    assert.equal(down.status, 0, down.stderr)
+    assert.deepEqual(ours(safe), [])
   })
 })
 
