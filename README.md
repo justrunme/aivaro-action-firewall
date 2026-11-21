@@ -27,7 +27,7 @@ An agent migration can silently delete orders through a database trigger. JustRu
 
 ## Why Frankenstein?
 
-A probabilistic [LLM agent](docs/agent-runs/2026-11-20-live2.md) is stitched to deterministic [PostgreSQL forensics](src/judge/scenario.js) that inspect triggers and measure lost rows; an [Ed25519 signed, hash-chained receipt ledger](src/receipts/chain.js) records what happened. [Chaos engineering](src/chaos/twin.js) kills the disposable database with `SIGKILL` and tests [verified undo](docs/evidence/chaos-live-2026-11-20/README.md); [human approval outside the agent channel](src/receipts/approver.js) gates the real run. These components complement, not replace, Kiro’s controls.
+A probabilistic [LLM agent](docs/agent-runs/2026-11-20-live2.md) is stitched to deterministic [PostgreSQL trigger inspection](src/rehearsal/measure.js) and [row-loss auditing](src/rehearsal/observe.js) that inspect triggers and measure lost rows; an [Ed25519 signed, hash-chained receipt ledger](src/receipts/chain.js) records what happened. [Chaos engineering](src/chaos/twin.js) kills the disposable database with `SIGKILL` and tests [verified undo](docs/evidence/chaos-live-2026-11-20/README.md); [human approval outside the agent channel](src/receipts/approver.js) gates the real run. These components complement, not replace, Kiro’s controls.
 
 “Zero” in the repository name means **zero unverified execution**, not zero risk.
 
