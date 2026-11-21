@@ -21,7 +21,7 @@ npm ci
 node src/cli/index.js judge --text
 ```
 
-The judge command creates temporary demo resources, rehearses a destructive change and a safe alternative, runs and undoes the safe plan, verifies the receipt chain and detects tampering. It does not need your own server, production keys or database credentials. For a separate local evidence view, run `node src/cli/index.js console` and open the tokenized URL it prints.
+The judge command creates temporary demo resources, rehearses a destructive change and a safe alternative, runs and undoes the safe plan, verifies the receipt chain and detects tampering. It does not need your own server, production keys or database credentials. For a separate local evidence view, run `node src/cli/index.js console` and open the tokenized URL it prints. For an existing mission, `justrunme evidence` reports what its verified receipts prove and what remains unchecked; `justrunme gate-probe` checks whether the agent session is actually gated. Neither command establishes that arbitrary host-side code is safe.
 
 ## How we built it
 
@@ -31,7 +31,9 @@ We stitched together the Kiro agent loop, an MCP server, a Node.js CLI, Docker C
 
 ## Challenges we ran into
 
-The hidden-trigger test exposed a gap in our first definition of success. In a preregistered five-run treatment experiment, all five destructive first plans were caught, but **zero of five** completed the intended change while letting the trigger act: some revisions bypassed the trigger temporarily. We reported that limitation and added checks for persistent database logic changes; temporary bypasses and other database mechanisms remain important limitations. We also had to distinguish scripted approvals from human authorization, make missing recovery checks visible rather than counting them as successes, and ensure the judge demonstration cleans up its temporary resources.
+The hidden-trigger experiment exposed a flaw in our first definition of success. In T25 v1, **5 of 5** destructive first plans were denied after rehearsal measured `orders` falling from **3 to 2**. The runner marked **3 of 5** final attempts as task successes, but all three achieved that by disabling or bypassing the trigger during the update; **0 of 5** completed the task while letting the trigger act. A safe-looking final database state was not enough.
+
+We added **LOGIC BYPASS** detection in the rehearsal copy for T25 v2, including attempts to bypass existing database behavior temporarily. The recorded live Kiro run then denied a `DISABLE TRIGGER` plan as `LOGIC BYPASS`. T25 v2 was a separate, small experiment: the treatment completed **3 of 5** Task A runs by the runner's criteria versus **4 of 5** controls; a stricter interpretation of one treatment run gives **2 of 5**. These are not evidence of a general advantage. Coverage still has boundaries, including untested PostgreSQL mechanisms such as event triggers, RLS policies, extension functions and role/database settings. We also had to distinguish scripted approvals from human authorization, report unavailable recovery checks, and clean up judge-demo resources.
 
 ## Accomplishments
 
@@ -46,7 +48,7 @@ Outcome checks are necessary but not sufficient: a plan can leave the database l
 
 ## What's next
 
-Tighten coverage of temporary database-logic bypasses and other PostgreSQL mechanisms, reduce exposure of production data inside rehearsals, expand recovery and environment testing, and improve the judge onboarding path. This is a research/demo implementation: **do not rely on it to protect real production data yet**.
+Extend bypass detection to untested PostgreSQL mechanisms such as event triggers, RLS policies, extension functions and role/database settings, reduce exposure of production data inside rehearsals, expand recovery and environment testing, and improve the judge onboarding path. This is a research/demo implementation: **do not rely on it to protect real production data yet**.
 
 ## Built with
 
@@ -60,8 +62,9 @@ https://github.com/justrunme/justrunme-zero
 Sources (internal; remove this section before pasting into Devpost):
 - Pain, 3 -> 2 rows, trigger-bypass refusal, final 3/3 and recorded Kiro configuration: docs/agent-runs/2026-11-20-live2.md; test/live-evidence.test.js
 - Preregistered five-run experiment and limitations: docs/agent-runs/T25-results-v1.md; docs/agent-runs/T25-preregistration.md
+- Separate T25 v2 experiment and bypass detection: docs/agent-runs/T25-results-v2.md; test/demo-bypass.test.js; src/rehearsal/observe.js; src/authorize/authorization.js
 - Point-in-time 571/0/0 test result and exact commit: docs/test-report.json
-- Judge behavior and prerequisites: src/cli/index.js; test/demo-judge.test.js; README.md
+- Judge behavior, evidence/gate-probe self-checks and prerequisites: src/cli/index.js; test/demo-judge.test.js; README.md
 - Rehearsal, approval, recovery, Console and limitations: README.md; src/console/static/; test/console-missions.test.js; test/demo-chaos.test.js
 - Kiro features and evidence: .kiro/specs/justrunme-zero/; .kiro/steering/; .kiro/agents/; .kiro/hooks/; docs/agent-runs/; docs/KIRO_LOG.md
 - Dependencies: package.json; demo/docker-compose.yml
