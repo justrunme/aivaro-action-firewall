@@ -17,8 +17,8 @@ JustRunMe uses Kiro for specification, implementation and live agent checks. Thi
 | Feature | Evidence and scope |
 | --- | --- |
 | Specs | [Run 3](KIRO_LOG.md#run-3--2026-11-16-2002-cet-berlin) and [task specification](../.kiro/specs/justrunme-zero/tasks.md) |
-| Steering and custom agents | [Run 3](KIRO_LOG.md), [Run 4](KIRO_LOG.md), [current definitions](../.kiro/agents/) |
-| Hooks and gate | [Run 8](KIRO_LOG.md), [gate session](agent-runs/2026-11-20-gate.md) |
+| Steering and custom agents | [Run 3](KIRO_LOG.md#run-3--2026-11-16-2002-cet-berlin), [Run 4](KIRO_LOG.md#run-4--2026-11-16-2006-cet-berlin), [current definitions](../.kiro/agents/) |
+| Hooks and gate | [Run 8](KIRO_LOG.md#run-8--t13-contract-parser-and-pretooluse-gate), [gate session](agent-runs/2026-11-20-gate.md) |
 | CLI agent run | [Live run 1](agent-runs/2026-11-20-live1.md), [live run 2](agent-runs/2026-11-20-live2.md) |
 | IDE hook check | [IDE report](agent-runs/2026-11-20-ide.md): untrusted workspace did not execute the hook; trusted workspace did |
 | Security probe | [Probe report](agent-runs/2026-11-20-probe.md): only the recorded tool attempts are covered |
@@ -31,7 +31,6 @@ JustRunMe uses Kiro for specification, implementation and live agent checks. Thi
 - The current task file has **72 distinct checked subtask IDs** matching `T<number>[.<suffix>]`; **61** do not appear *literally* anywhere in the session log. Many are covered by parent-task references such as T11 or T12, so this is a **traceability gap**, not proof they were not implemented.
 - Run 5 has no machine-readable date in its opening metadata; its narrative has dated work. Later entries sometimes document the date but not the time/model. Missing details remain *not recorded* rather than guessed.
 - Git commits on `main` establish repository changes, **not who generated each line**. The log's claims about Kiro authorship are not independently provable from Git alone. Earlier closed/superseded branches are not silently counted as mainline work.
-- The engineering reference may be under review on another branch; this audit uses only files on `origin/main`.
 
 ## Reproduce counts
 
@@ -44,4 +43,17 @@ find docs/agent-runs -maxdepth 1 -name '*.md' | wc -l
 git log origin/main --format='%h' -- docs/KIRO_LOG.md | wc -l
 ```
 
-For the checked-ID and literal-log-reference comparison, use the Python audit snippet documented in the PR description; counts above are from the same checked-out `origin/main` baseline.
+Checked subtask IDs and exact log mentions (run from repo root):
+
+```sh
+python3 - <<'PY_AUDIT'
+import pathlib, re
+s = pathlib.Path('.kiro/specs/justrunme-zero/tasks.md').read_text()
+log = pathlib.Path('docs/KIRO_LOG.md').read_text()
+ids = set(re.findall(r'\[x\]\s*(T\d+(?:\.[A-Za-z0-9]+)?)', s))
+missing = {i for i in ids if not re.search(r'(?<![\w.])' + re.escape(i) + r'(?![\w.])', log)}
+print('checked:', len(ids), 'without literal log mention:', len(missing))
+PY_AUDIT
+```
+
+Counts use the task and log files from the same `origin/main` baseline.
