@@ -24,7 +24,8 @@ import { allowEnv, ENV_ALLOW, hookCommand, MARKER, ownedState, writeMarker } fro
 
 const SCRIPT = fileURLToPath(new URL('../scripts/live-run.mjs', import.meta.url))
 const tmps = []
-const tmp = (p, base = os.tmpdir()) => {
+const SAFE_TMP = realpathSync('/tmp') // independent of inherited TMPDIR (which may contain spaces)
+const tmp = (p, base = SAFE_TMP) => {
   const d = realpathSync(mkdtempSync(path.join(base, p)))
   tmps.push(d)
   return d
@@ -162,6 +163,24 @@ describe('live-state: ownedState', () => {
     assert.match(ownedState(s, { tmp: root, prefix: 'live' }).join(';'), /install directory has no owner marker file/)
   })
 
+  it('normalizes a symlinked temporary root without allowing a symlinked workspace', () => {
+    const actual = tmp('jrm-liverun-root-')
+    const alias = path.join(SAFE_TMP, `jrm-liverun-alias-${process.pid}`)
+    symlinkSync(actual, alias)
+    tmps.push(alias)
+    const ws = tmp('jrm-live-ws-', actual)
+    const home = `${ws}-keys`
+    mkdirSync(home)
+    const install = tmp('jrm-live-install-', actual)
+    const nonce = 'ab'.repeat(16)
+    for (const d of [ws, home, install]) writeMarker(d, nonce)
+    const project = 'jrm-live-a1b2c3'
+    writeFileSync(path.join(ws, 'justrunme.target.json'), JSON.stringify({ project }))
+    const state = { ws, home, install, nonce, project, compose_started: true }
+    assert.deepEqual(ownedState(state, { tmp: realpathSync(alias), prefix: 'live' }), [])
+    assert.match(ownedState({ ...state, ws: path.join(alias, path.basename(ws)), home: path.join(alias, path.basename(ws)) + '-keys' }, { tmp: realpathSync(alias), prefix: 'live' }).join(';'), /workspace is not one this script made/)
+  })
+
   it('property: any other value in any field is refused', () => {
     const s = layout()
     const fields = ['nonce', 'ws', 'home', 'install', 'project']
@@ -183,6 +202,23 @@ describe('live-state: environment and hook command', () => {
     for (const bad of ['/tmp/a b/x.js', '/tmp/a;rm/x.js', '/tmp/$(x)/x.js', "/tmp/a'b/x.js", '/tmp/a"b/x.js', 'rel/x.js', '/tmp/../x.js', '/tmp/a\nb/x.js']) {
       assert.throws(() => hookCommand(bad), /hook path/, JSON.stringify(bad))
     }
+  })
+  it('refuses a spaced temporary root but works with a safe override even when TMPDIR has spaces', () => {
+    const spaced = tmp('jrm spaced root-')
+    const safe = tmp('jrm-liverun-safe-')
+    const bin = stubs()
+    const out = tmp('jrm-liverun-out-')
+    const bad = runner(bin, spaced)(['--out', out, 'setup'], { input: PASS + '\n' })
+    assert.equal(bad.status, 3, bad.stderr)
+    assert.match(bad.stderr, /set JRM_LIVE_TMP.*spaceless/)
+    assert.deepEqual(ours(spaced), [])
+    const good = runner(bin, spaced, { JRM_LIVE_TMP: safe })(['--out', out, 'setup'], { input: PASS + '\n' })
+    assert.equal(good.status, 0, good.stderr)
+    const state = JSON.parse(readFileSync(path.join(out, 'live-state.json'), 'utf8'))
+    assert.deepEqual(ownedState(state, { tmp: safe, prefix: 'live' }), [])
+    const down = runner(bin, spaced, { JRM_LIVE_TMP: safe })(['--out', out, 'down'])
+    assert.equal(down.status, 0, down.stderr)
+    assert.deepEqual(ours(safe), [])
   })
 })
 
