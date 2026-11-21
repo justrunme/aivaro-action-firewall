@@ -108,7 +108,26 @@ async function dispatch(command, rest, repoDir, opts) {
   throw new cmd.CliError(EXIT.USAGE, 'USAGE', USAGE)
 }
 
-function textOf(out) {
+/**
+ * Up to three summary lines for `judge --text`, taken only from values the scenario
+ * recorded in result.story. A value that is absent produces no line, so a failed or
+ * partial run never shows a verdict, a count or a SAFE that was not measured.
+ */
+export function judgeSummaryLines(story) {
+  const lines = []
+  const lost = (rows) => {
+    const nums = rows && typeof rows === 'object' ? Object.entries(rows).filter(([, n]) => Number.isFinite(n)) : []
+    return nums.length === 0 ? '' : `, rows lost: ${nums.reduce((a, [, n]) => a + n, 0)} (${nums.map(([t, n]) => `${t} ${n}`).join(', ')})`
+  }
+  for (const [label, p] of [['dangerous plan', story?.dangerous], ['safe plan', story?.safe]]) {
+    if (typeof p?.verdict === 'string') lines.push(`${label}: ${p.verdict}${lost(p.rows_lost)}`)
+  }
+  const removed = story?.selection?.removed
+  if (Array.isArray(removed) && removed.length > 0) lines.push(`removed from selection: ${removed.length} plan${removed.length === 1 ? '' : 's'}`)
+  return lines
+}
+
+export function textOf(out) {
   const lines = [`${out.command}: ${out.ok ? 'ok' : 'not ok'} (exit ${out.exit_code})`]
   if (out.error) {
     lines.push(`${out.error.code}: ${out.error.message}`)
@@ -117,6 +136,7 @@ function textOf(out) {
   if (out.command === 'judge' && out.result?.steps) {
     const j = out.result.judge
     lines.push(`${j.status} in ${(j.elapsed_ms / 1000).toFixed(1)} s (budget ${j.budget_ms / 1000} s, ${j.budget_enforced ? 'enforced' : 'not enforced: images were downloaded'})`)
+    for (const l of judgeSummaryLines(out.result.story)) lines.push(`  ${l}`)
     for (const s of out.result.steps) lines.push(`  ${s.status === 'passed' ? 'ok  ' : s.status === 'failed' ? 'FAIL' : 'skip'} ${s.title}${s.duration_ms === undefined ? '' : ` (${(s.duration_ms / 1000).toFixed(1)} s)`}`)
     lines.push(`receipts verified: ${out.result.counts.receipts_verified}, mismatches: ${out.result.counts.mismatches}, policy violations: ${out.result.counts.policy_violations}`)
   } else if (out.result) {
