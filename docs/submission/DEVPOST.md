@@ -23,7 +23,7 @@ npm ci
 node src/cli/index.js judge --text
 ```
 
-The judge command creates temporary demo resources, rehearses a destructive change and a safe alternative, runs and undoes the safe plan, verifies the receipt chain and detects tampering. It does not need your own server, production keys or database credentials. In a documented fresh-clone check, the judge took **38.4 seconds on its first run and 37.5 seconds on its second**, with `postgres:16.3-alpine` **already cached both times**; a first Docker image pull was not measured. [Recording runbook, PR #37](https://github.com/justrunme/justrunme-zero/pull/37) (the runbook is not yet on `main`). For a separate local evidence view, run `node src/cli/index.js console` and open the tokenized URL it prints. For an existing mission, `justrunme evidence` reports what its verified receipts prove and what remains unchecked; `justrunme gate-probe` checks whether the agent session is actually gated. Neither command establishes that arbitrary host-side code is safe.
+The judge command creates temporary demo resources, rehearses a destructive change and a safe alternative, runs and undoes the safe plan, verifies the receipt chain and detects tampering. It does not need your own server, production keys or database credentials. In a documented fresh-clone check, the judge took **38.4 seconds on its first run and 37.5 seconds on its second**, with `postgres:16.3-alpine` **already cached both times**; a first Docker image pull was not measured. [Recording runbook](RECORDING_RUNBOOK.md). For a separate local evidence view, run `node src/cli/index.js console` and open the tokenized URL it prints. For an existing mission, `justrunme evidence` reports what its verified receipts prove and what remains unchecked; `justrunme gate-probe` checks whether the agent session is actually gated. Neither command establishes that arbitrary host-side code is safe.
 
 ## How we built it
 
@@ -78,7 +78,7 @@ Sources (internal; remove this section before pasting into Devpost):
 - Kiro features and evidence: .kiro/specs/justrunme-zero/; .kiro/steering/; .kiro/agents/; .kiro/hooks/; docs/agent-runs/; docs/KIRO_LOG.md
 - Gate test corpus and its scope (13 denied, 1 allowed; not rehearsals): docs/EXAMPLES.md; test/gate-examples.test.js
 - Recorded Chaos Twin recovery, signed receipt, original CLI verification and portable signature check: docs/evidence/chaos-live-2026-11-20/README.md; docs/evidence/chaos-live-2026-11-20/chaos.json; docs/evidence/chaos-live-2026-11-20/verify.json
-- Fresh-clone judge timings (both Docker image cached): docs/submission/RECORDING_RUNBOOK.md in open PR #37 (not current main); README.md for npm ci and judge command
+- Fresh-clone judge timings (both Docker image cached): [docs/submission/RECORDING_RUNBOOK.md](RECORDING_RUNBOOK.md); README.md for npm ci and judge command
 - Frankenstein category, video under 3 minutes and missing public upload: docs/submission/CHECKLIST.md; docs/DEMO_VIDEO.md (1:36 script)
 - Dependencies: package.json; demo/docker-compose.yml
 -->
