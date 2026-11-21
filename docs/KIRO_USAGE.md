@@ -30,7 +30,7 @@ The [operator agent config](../.kiro/agents/justrunme-operator.json) declares th
 
 ## Recorded evidence
 
-- [Kiro session log](KIRO_LOG.md): **36 numbered Run headings** (1–5 and 7–37; Run 6 is not recorded). Several headings include multiple attempts or follow-up edits, so 36 is not a count of invocations.
+- [Kiro session log](KIRO_LOG.md): **40 primary numbered Run headings** (Runs 1–40 inclusive; Run 6 is recorded as a level-three heading). Additional follow-up and loop subheadings are not counted. Several headings include multiple attempts or follow-up edits, so 40 is not a count of invocations.
 - [Specification and task checkboxes](../.kiro/specs/justrunme-zero/tasks.md): requirements, design and task tracking.
 - [Steering](../.kiro/steering/): **4 current files** (product, engineering, scope, operator loop).
 - [Agents](../.kiro/agents/): **5 current definitions** (builder, skeptic, operator and two T25 roles).
