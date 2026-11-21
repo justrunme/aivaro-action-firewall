@@ -5,14 +5,15 @@
  */
 import { describe, it, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
 import os from 'node:os'
 import path from 'node:path'
-import { chaosVerdict, divergence, rehearseRecovery } from '../src/chaos/twin.js'
+import { chaosVerdict, divergence, gatherRunMetadata, hashResultFiles, rehearseRecovery } from '../src/chaos/twin.js'
 import { createLifecycle } from '../src/chaos/lifecycle.js'
 import { proofDebt } from '../src/evidence/proofdebt.js'
 import { loadOrCreateKeys } from '../src/receipts/keys.js'
-import { receiptHash, verifyChain } from '../src/receipts/chain.js'
+import { chainPath, receiptHash, verifyChain } from '../src/receipts/chain.js'
 import { checkPolicy } from '../src/receipts/policy.js'
 
 const dirs = []
@@ -25,6 +26,8 @@ const tmp = (p) => {
 const MEASURE = { schema_hash: 'sha256:s', tables: { orders: { rows: 3, checksum: 'a' }, patches: { rows: 5, checksum: 'b' } } }
 const CONTRACT = { id: 'mission-chaos-test', plan: [{ id: 's1', tool: 'shell', args: ['echo', 'x'], reversibility: true }], protected_tables: ['orders'], irreversible_actions: [], resources: { databases: ['pumpkin_patch'], config_files: [], compose_services: ['db'] }, allowed_paths: ['demo/'] }
 const TARGET = { project: 'jrm-real', composeFile: 'demo/docker-compose.yml', dbService: 'db', dbUser: 'demo_user', dbName: 'pumpkin_patch' }
+
+const META = { git: { commit: 'a'.repeat(40), dirty: false, dirty_scope: 'tracked files' }, node: { version: 'v24.0.0' }, docker: { version: '27.0.1' }, postgres: { version: '16.3' } }
 
 /** Fake external steps; `log` records every acquire and release, `fail` makes one step throw. */
 function fakes({ after = MEASURE, fileChecks = [], undoStatus = 'RECOVERED', fail = null, downFails = false } = {}) {
@@ -53,6 +56,7 @@ function fakes({ after = MEASURE, fileChecks = [], undoStatus = 'RECOVERED', fai
     measureDatabase: step('measure', after),
     verifyFiles: () => fileChecks,
     undoMission: step('undo', { status: undoStatus, resources: [{ resource: 'postgres', status: 'succeeded' }], verification: { status: 'PASS', checks: [{ check: 'row_count', ok: true }], failed: [], not_checked: [], coverage: null } }),
+    gatherRunMetadata: step('metadata', META),
     leftovers: step('leftovers', { containers: 0, volumes: 0, networks: 0 }),
   }
   return { deps, log, copyDir, overrideDir }
@@ -61,7 +65,7 @@ function setup() {
   const repoDir = tmp('jrm-chaos-ws-')
   mkdirSync(path.join(repoDir, 'demo'))
   const keys = loadOrCreateKeys(tmp('jrm-chaos-home-'))
-  return { repoDir, keys, run: (deps) => rehearseRecovery({ repoDir, contract: CONTRACT, contractHash: 'sha256:c', target: TARGET, keys, deps }) }
+  return { repoDir, keys, run: (deps, extra = {}) => rehearseRecovery({ repoDir, contract: CONTRACT, contractHash: 'sha256:c', target: TARGET, keys, deps, ...extra }) }
 }
 
 describe('Chaos Twin: divergence and verdict', () => {
@@ -118,6 +122,73 @@ describe('Chaos Twin: divergence and verdict', () => {
     const s = setup()
     const r = await s.run(fakes({ fileChecks: [{ check: 'file_sha256', resource: 'demo/a', ok: false }], undoStatus: 'NOT_RECOVERED' }).deps)
     assert.equal(r.verdict, 'RECOVERY FAILED')
+  })
+})
+
+describe('Chaos Twin: run metadata in the signed receipt', () => {
+  const sha = (b) => 'sha256:' + createHash('sha256').update(b).digest('hex')
+  const signed = (s) => verifyChain({ repoDir: s.repoDir, home: s.keys.home, publicKey: s.keys.publicKey, missionId: CONTRACT.id })
+
+  it('git commit, dirty flag, versions, scenario parameters and result file hashes are in the signed subject, and the chain verifies', async () => {
+    const s = setup()
+    writeFileSync(path.join(s.repoDir, 'demo', 'result.json'), '{"ok":true}')
+    const r = await s.run(fakes().deps, { afterStep: 1, resultFiles: ['demo/result.json'] })
+    const c = signed(s)
+    assert.equal(c.ok, true, JSON.stringify(c.findings))
+    const m = c.receipts.at(-1).subject.run_metadata
+    assert.deepEqual([m.git.commit, m.git.dirty, m.node.version, m.docker.version, m.postgres.version], ['a'.repeat(40), false, 'v24.0.0', '27.0.1', '16.3'])
+    assert.deepEqual([m.scenario.after_step, m.scenario.of_steps, m.scenario.crash, m.scenario.db_name], [1, 1, 'SIGKILL', 'pumpkin_patch'])
+    assert.deepEqual(m.result_files, [{ path: 'demo/result.json', sha256: sha('{"ok":true}'), bytes: 11 }])
+    assert.deepEqual(r.run_metadata, m)
+  })
+
+  it('tampering with a metadata field breaks the chain', async () => {
+    const s = setup()
+    await s.run(fakes().deps)
+    const file = chainPath(s.repoDir, CONTRACT.id)
+    assert.ok(readFileSync(file, 'utf8').includes('v24.0.0'))
+    writeFileSync(file, readFileSync(file, 'utf8').replace('v24.0.0', 'v99.0.0'))
+    assert.equal(signed(s).ok, false)
+  })
+
+  it('a probe that fails is an explicit unavailable marker with a diagnostic, the receipt still verifies', async () => {
+    const s = setup()
+    const f = fakes()
+    f.deps.gatherRunMetadata = async () => { throw new Error('docker not found') }
+    const r = await s.run(f.deps)
+    assert.equal(r.run_metadata.status, 'unavailable')
+    assert.match(r.run_metadata.diagnostic, /docker not found/)
+    assert.equal(r.run_metadata.git, undefined, 'no version is invented')
+    assert.equal(signed(s).ok, true)
+  })
+
+  it('a run that fails before the versions can be read says so', async () => {
+    const s = setup()
+    const r = await s.run(fakes({ fail: 'dump' }).deps)
+    assert.equal(r.run_metadata.status, 'unavailable')
+    assert.equal(signed(s).ok, true)
+  })
+
+  it('result files: missing, outside the workspace, too large and non-files are marked, never read in full', () => {
+    const repo = tmp('jrm-chaos-rf-')
+    const outside = tmp('jrm-chaos-out-')
+    writeFileSync(path.join(outside, 'secret.txt'), 'x')
+    symlinkSync(path.join(outside, 'secret.txt'), path.join(repo, 'link.txt'))
+    mkdirSync(path.join(repo, 'dir'))
+    writeFileSync(path.join(repo, 'big.bin'), Buffer.alloc(8 * 1024 * 1024 + 1))
+    const out = hashResultFiles(repo, ['missing.txt', 'link.txt', '../x', 'dir', 'big.bin'])
+    assert.ok(out.every((e) => e.status === 'unavailable' && e.diagnostic && !e.sha256), JSON.stringify(out))
+    assert.match(out[3].diagnostic, /not a regular file/)
+    assert.match(out[4].diagnostic, /larger than/)
+  })
+
+  it('gatherRunMetadata reads Node itself and marks what it cannot read', async () => {
+    const m = await gatherRunMetadata({ repoDir: path.join(tmp('jrm-chaos-nogit-'), 'nope') })
+    assert.equal(m.node.version, process.version)
+    assert.equal(m.git.status, 'unavailable')
+    assert.equal(m.postgres.status, 'unavailable')
+    const p = await gatherRunMetadata({ repoDir: tmp('jrm-chaos-nogit2-'), twin: {}, psql: async () => ({ code: 0, stdout: '16.3\n', stderr: '' }) })
+    assert.equal(p.postgres.version, '16.3')
   })
 })
 
