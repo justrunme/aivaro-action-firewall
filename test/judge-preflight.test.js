@@ -60,6 +60,68 @@ describe('Judge preflight', () => {
     assert.equal(calls.length, 0)
   })
 
+  describe('DOCKER_DEFAULT_PLATFORM', () => {
+    const info = (stdout, extra = {}) => ({ code: 0, stdout, stderr: '', timedOut: false, ...extra })
+    const daemon = (stdout, extra) => fakeProbe({ info: info(stdout, extra) })
+    const envErr = (e) => e instanceof PreflightError && e.code === 'DOCKER_PLATFORM_ENV' && e.message.includes('ENV') && e.message.includes('unset DOCKER_DEFAULT_PLATFORM') && !e.message.includes('\n')
+    const ctx = { code: 0, stdout: 'true\tunix:///var/run/docker.sock\n', stderr: '', timedOut: false }
+    // After the preflight createBackend runs `docker version` through the real runner, not the probe. A PATH with
+    // no docker makes that spawn fail, so a run that reaches it (DOCKER_UNAVAILABLE) has passed the whole preflight
+    // and nothing is created.
+    const NO_DOCKER_PATH = '/nonexistent-justrunme-path'
+    const backendProbe = (infoAnswer) => fakeProbe({ context: ctx, info: infoAnswer })
+
+    it('unset or empty: keeps the plain server-version probe', async () => {
+      for (const env of [{}, { DOCKER_DEFAULT_PLATFORM: '' }]) {
+        const { probe, calls } = daemon('26.1.0')
+        await checkDockerDaemon(probe, env)
+        assert.deepEqual(calls, [['docker', 'info', '--format', '{{.ServerVersion}}']])
+      }
+    })
+
+    it('set: one probe returns version plus OS/arch', async () => {
+      const { probe, calls } = daemon('26.1.0 linux/aarch64')
+      await checkDockerDaemon(probe, { DOCKER_DEFAULT_PLATFORM: 'linux/arm64' })
+      assert.deepEqual(calls, [['docker', 'info', '--format', '{{.ServerVersion}} {{.OSType}}/{{.Architecture}}']])
+    })
+
+    it('matching: passes, including arch aliases and variants', async () => {
+      for (const [plat, out] of [['linux/arm64', 'linux/aarch64'], ['linux/amd64', 'linux/x86_64'], ['linux/arm64/v8', 'linux/arm64'], ['linux', 'linux/x86_64']]) {
+        await checkDockerDaemon(daemon(`26.1.0 ${out}\n`).probe, { DOCKER_DEFAULT_PLATFORM: plat })
+      }
+    })
+
+    it('mismatching: fails closed with an ENV error and the unset hint', async () => {
+      for (const [plat, out] of [['linux/amd64', 'linux/aarch64'], ['linux/arm64', 'linux/x86_64'], ['windows/amd64', 'linux/x86_64']]) {
+        await assert.rejects(checkDockerDaemon(daemon(`26.1.0 ${out}`).probe, { DOCKER_DEFAULT_PLATFORM: plat }), envErr)
+      }
+    })
+
+    it('unparseable: bad variable and bad daemon output fail closed; failed or timed-out probe is unreachable', async () => {
+      await assert.rejects(checkDockerDaemon(daemon('26.1.0 linux/arm64').probe, { DOCKER_DEFAULT_PLATFORM: 'not a platform' }), envErr)
+      for (const out of ['garbage', '', 'linux/arm64']) {
+        await assert.rejects(checkDockerDaemon(daemon(out).probe, { DOCKER_DEFAULT_PLATFORM: 'linux/arm64' }), envErr)
+      }
+      for (const extra of [{ code: 1 }, { timedOut: true }]) {
+        await assert.rejects(checkDockerDaemon(daemon('26.1.0 linux/arm64', extra).probe, { DOCKER_DEFAULT_PLATFORM: 'linux/arm64' }), (e) => e.code === 'DOCKER_DAEMON_UNREACHABLE')
+      }
+    })
+
+    it('createBackend: mismatched env is rejected as DOCKER_PLATFORM_ENV before any resource step', async () => {
+      const { probe, calls } = backendProbe(info('26.1.0 linux/aarch64'))
+      await rejectsWith(createBackend({ env: { PATH: '/bin', DOCKER_DEFAULT_PLATFORM: 'linux/amd64' }, probe }), 'DOCKER_PLATFORM_ENV')
+      assert.deepEqual(calls.map((c) => c[1]), ['--version', 'context', 'info'])
+    })
+
+    it('createBackend: matching and unset pass the platform check and reach the step after the preflight', async () => {
+      for (const [env, out] of [[{ DOCKER_DEFAULT_PLATFORM: 'linux/arm64' }, '26.1.0 linux/aarch64'], [{}, '26.1.0']]) {
+        const { probe, calls } = backendProbe(info(out))
+        await rejectsWith(createBackend({ env: { PATH: NO_DOCKER_PATH, ...env }, probe }), 'DOCKER_UNAVAILABLE')
+        assert.deepEqual(calls.map((c) => c[1]), ['--version', 'context', 'info'])
+      }
+    })
+  })
+
   it('happy path: passing probes raise nothing, and the daemon probe uses the shared 20000 ms timeout', async () => {
     const seen = []
     const probe = async (cmd, args, opts) => {
