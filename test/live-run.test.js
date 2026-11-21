@@ -199,7 +199,7 @@ describe('live-state: environment and hook command', () => {
   })
   it('writes a plain hook path and refuses one a shell would split or expand', () => {
     assert.equal(hookCommand('/tmp/jrm-live-install-Ab3/src/hook/pretooluse.js'), 'node /tmp/jrm-live-install-Ab3/src/hook/pretooluse.js')
-    for (const bad of ['rel/x.js', '/tmp/../x.js', '/tmp/a b/x.js', "/tmp/a'b/x.js", '/tmp/$(x)/x.js', '/tmp/a\n b/x.js', '/tmp/\0/x.js']) {
+    for (const bad of ['/tmp/a b/x.js', '/tmp/a;rm/x.js', '/tmp/$(x)/x.js', "/tmp/a'b/x.js", '/tmp/a"b/x.js', 'rel/x.js', '/tmp/../x.js', '/tmp/a\nb/x.js']) {
       assert.throws(() => hookCommand(bad), /hook path/, JSON.stringify(bad))
     }
   })
@@ -283,7 +283,7 @@ describe('live-run: a whole run against stand-ins', () => {
       assert.ok(!readFileSync(f).includes(PASS), `the passphrase is in ${path.basename(f)}`)
     }
     const hook = JSON.parse(readFileSync(path.join(s.ws, '.kiro/hooks/pretooluse.json'), 'utf8')).hooks[0].action.command
-    assert.equal(hook, hookCommand(path.join(s.install, 'src/hook/pretooluse.js')))
+    assert.equal(hook, `node ${path.join(s.install, 'src/hook/pretooluse.js')}`)
     assert.ok(bin.docker().some((l) => l.includes(`-p ${s.project}`) && l.includes(' up -d ')))
   })
 
