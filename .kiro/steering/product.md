@@ -22,7 +22,7 @@ An agent submits a typed YAML contract describing its plan: tool calls, expected
 ### Rehearsal and Impact Report
 Before the real run, JustRunMe forks the workspace into a git worktree and clones the application's Docker Compose project into an isolated network namespace. The agent's plan executes against this disposable copy. After the rehearsal completes, JustRunMe emits a structured impact report: files changed (with diff stats), database row counts before and after, schema delta, containers affected, and wall-clock duration.
 
-### Simulation Fidelity
+### Rehearsal fidelity
 At the end of rehearsal, JustRunMe records a fingerprint of the source state (git HEAD, Postgres row counts and schema hash, container image digests). Before the real run begins, the fingerprint is re-checked. If the source state has drifted from the rehearsed state, the real run is blocked. The operator must re-rehearse or explicitly override with a signed justification.
 
 ### Undo Mission

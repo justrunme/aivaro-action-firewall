@@ -1,7 +1,7 @@
 {
   "name": "justrunme-zero",
   "version": "0.1.0",
-  "description": "Rehearse. Run. Recover. The mission simulator and undo engine for Kiro agents.",
+  "description": "Rehearse. Run. Recover. The mission rehearsal and undo engine for Kiro agents.",
   "type": "module",
   "engines": {
     "node": ">=24.0.0"

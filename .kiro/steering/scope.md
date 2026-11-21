@@ -7,7 +7,7 @@
 | Mission Contract | Parse and validate YAML; fail-closed on schema errors |
 | Rehearsal | git worktree fork + isolated Docker Compose project copy |
 | Impact Report | File diff stats, DB row counts/schema delta, container image list, wall-clock time |
-| Simulation Fidelity | Fingerprint at rehearsal; re-check before real run; block on mismatch |
+| Rehearsal fidelity | Fingerprint at rehearsal; re-check before real run; block on mismatch |
 | Undo Mission | Pre-run capture of tracked files, `pg_dump`, container config; one-command restore |
 | Recovery Verification | Checksums, row counts, schema hash, health endpoint, test suite pass/fail |
 | Irreversible Action Flags | Explicit flag in impact report; require out-of-band approval |
