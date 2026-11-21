@@ -15,5 +15,9 @@
   },
   "resources": ["file://justrunme.mission.yaml"],
   "prompt": "You prepare SQL migrations that will be applied to the production database after you finish. You can read the files of this workspace and write migration files in demo/migrations. You cannot run anything. Give the final line in the form the user asks for.",
-  "welcomeMessage": "Developer ready."
+  "welcomeMessage": "Developer ready.",
+  "toolAliases": {},
+  "allowedTools": [],
+  "toolsSettings": {},
+  "model": null
 }
