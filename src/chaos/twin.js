@@ -24,8 +24,8 @@
  * Every resource is owned by the lifecycle the moment it exists and released on any outcome
  * (src/chaos/lifecycle.js); `deps` exists so that tests can inject failures at each step.
  */
-import { randomBytes } from 'node:crypto'
-import { existsSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import { createHash, randomBytes } from 'node:crypto'
+import { existsSync, mkdtempSync, openSync, closeSync, fstatSync, readFileSync, realpathSync, rmSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { captureState } from '../capture/capture.js'
@@ -109,7 +109,74 @@ function removeOwnDir(dir, prefix) {
   rmSync(dir, { recursive: true, force: true })
 }
 
-const DEFAULT_DEPS = { computeFingerprint, createWorkspaceCopy, loadOrCreateKeys, writeNoPortsOverride, up, down, assertIsolated, dump, psql, planRoleOf, captureState, executeSteps, crash, measureDatabase, verifyFiles, undoMission, leftovers }
+export const UNAVAILABLE = 'unavailable'
+export const MAX_RESULT_FILE_BYTES = 8 * 1024 * 1024
+const unavailable = (reason) => ({ status: UNAVAILABLE, diagnostic: errorSummary(String(reason ?? 'unknown')).slice(0, 200) })
+const versionOf = (value) => (typeof value === 'string' && value.trim() ? { version: value.trim().slice(0, 100) } : unavailable('empty answer'))
+async function probe(fn) {
+  try {
+    return await fn()
+  } catch (err) {
+    return unavailable(err?.message ?? err)
+  }
+}
+async function cmdVersion(cmd, args, opts = {}) {
+  const r = await run(cmd, args, { timeoutMs: 15000, ...opts })
+  if (r.code !== 0) return unavailable(`${cmd} exited ${r.code}${r.timedOut ? ' (timed out)' : ''}: ${r.stderr}`)
+  return versionOf(r.stdout)
+}
+
+/**
+ * Where the evidence was made: git commit and dirty flag of the real workspace (tracked files
+ * only), Node, Docker and PostgreSQL versions. Every command runs with an argv array, no shell.
+ * A value that cannot be read is an explicit `{ status: 'unavailable', diagnostic }`, never a guess.
+ * @param {{ repoDir: string, twin?: any, psql?: Function }} a
+ */
+export async function gatherRunMetadata({ repoDir, twin = null, psql: runPsql = null }) {
+  const git = await probe(async () => {
+    const head = await cmdVersion('git', ['-C', repoDir, 'rev-parse', 'HEAD'])
+    if (head.status === UNAVAILABLE) return head
+    const st = await run('git', ['-C', repoDir, 'status', '--porcelain', '--untracked-files=no'], { timeoutMs: 15000 })
+    if (st.code !== 0) return { commit: head.version, dirty: unavailable(`git status exited ${st.code}: ${st.stderr}`) }
+    return { commit: head.version, dirty: st.stdout.trim().length > 0, dirty_scope: 'tracked files' }
+  })
+  const docker = await probe(() => cmdVersion('docker', ['version', '--format', '{{.Server.Version}}']))
+  const postgres = twin && runPsql
+    ? await probe(async () => {
+      const r = await runPsql(twin, { sql: 'SHOW server_version' })
+      return r.code === 0 ? versionOf(r.stdout) : unavailable(`psql exited ${r.code}: ${r.stderr}`)
+    })
+    : unavailable('no twin database was reachable')
+  return { git, node: { version: process.version }, docker, postgres }
+}
+
+/**
+ * sha256 of result files, read-only. A path must stay inside the real workspace and name a
+ * regular file of at most MAX_RESULT_FILE_BYTES; anything else is listed as unavailable with the reason.
+ * @param {string} repoDir @param {string[]} paths relative to repoDir
+ */
+export function hashResultFiles(repoDir, paths = []) {
+  const root = realpathSync(repoDir)
+  return paths.map((rel) => {
+    const entry = { path: String(rel) }
+    let fd = null
+    try {
+      const real = realpathSync(path.resolve(root, rel))
+      if (real !== root && !real.startsWith(root + path.sep)) return { ...entry, ...unavailable('outside the workspace') }
+      fd = openSync(real, 'r')
+      const st = fstatSync(fd)
+      if (!st.isFile()) return { ...entry, ...unavailable('not a regular file') }
+      if (st.size > MAX_RESULT_FILE_BYTES) return { ...entry, ...unavailable(`larger than ${MAX_RESULT_FILE_BYTES} bytes`) }
+      return { ...entry, sha256: 'sha256:' + createHash('sha256').update(readFileSync(fd)).digest('hex'), bytes: st.size }
+    } catch (err) {
+      return { ...entry, ...unavailable(err?.code ?? err?.message) }
+    } finally {
+      if (fd !== null) closeSync(fd)
+    }
+  })
+}
+
+const DEFAULT_DEPS = { computeFingerprint, createWorkspaceCopy, loadOrCreateKeys, writeNoPortsOverride, up, down, assertIsolated, dump, psql, planRoleOf, captureState, executeSteps, crash, measureDatabase, verifyFiles, undoMission, leftovers, gatherRunMetadata, hashResultFiles }
 
 /**
  * @param {object} a
@@ -119,10 +186,11 @@ const DEFAULT_DEPS = { computeFingerprint, createWorkspaceCopy, loadOrCreateKeys
  * @param {import('../rehearsal/compose.js').Target} a.target real target, composeFile relative to repoDir
  * @param {{ privateKey: any, publicKey: any, home: string }} a.keys operator keys: only the final receipt
  * @param {number | null} [a.afterStep] steps run before the crash; default: every step
+ * @param {string[]} [a.resultFiles] result files (relative to repoDir) whose sha256 goes into the signed payload
  * @param {(twin: any) => unknown} [a.inspect] called with the twin target once it is isolated and loaded (tests)
  * @param {Partial<typeof DEFAULT_DEPS>} [a.deps] replacements for tests
  */
-export async function rehearseRecovery({ repoDir, contract, contractHash, target, keys, afterStep = null, inspect = null, deps = {}, clock = Date.now }) {
+export async function rehearseRecovery({ repoDir, contract, contractHash, target, keys, afterStep = null, resultFiles = [], inspect = null, deps = {}, clock = Date.now }) {
   const d = { ...DEFAULT_DEPS, ...deps }
   const plan = contract.plan
   const k = afterStep ?? plan.length
@@ -138,6 +206,7 @@ export async function rehearseRecovery({ repoDir, contract, contractHash, target
   const made = { copy: null, home: null, override: null, composeStarted: false }
 
   let base = null
+  let runMetadata = null
   let failure = null
   let steps = []
   let diverged = null
@@ -172,6 +241,7 @@ export async function rehearseRecovery({ repoDir, contract, contractHash, target
     const data = await d.dump(realTarget, { privileges: Boolean(target.planUser) })
     if ((await d.psql(twin, { input: data })).code !== 0) throw new Error('loading the twin database failed')
     if (inspect) await inspect(twin)
+    runMetadata = await probe(() => d.gatherRunMetadata({ repoDir, twin, psql: d.psql }))
 
     const manifest = await d.captureState({ repoDir: copy.dir, contract, target: twin, keys: twinKeys })
     steps = await d.executeSteps({ plan: plan.slice(0, k), cwd: copy.dir, target: twin, mode: 'rehearsal' })
@@ -198,7 +268,22 @@ export async function rehearseRecovery({ repoDir, contract, contractHash, target
   cleanup.clean = released.every((r) => r.released) && left !== null && left.containers + left.volumes + left.networks === 0 && cleanup.worktree_removed && cleanup.keys_removed
   const verdict = chaosVerdict({ failure, diverged: diverged?.changed === true, undoStatus: undo?.status, clean: cleanup.clean })
 
+  const run_metadata = {
+    ...(runMetadata ?? { status: UNAVAILABLE, diagnostic: 'the twin did not reach the point where versions are read' }),
+    scenario: {
+      after_step: k,
+      of_steps: plan.length,
+      crash: 'SIGKILL',
+      plan: plan.map((p) => ({ id: p.id, tool: p.tool, reversibility: p.reversibility })),
+      db_service: target.dbService,
+      db_name: target.dbName,
+      compose_file: target.composeFile,
+    },
+    plan_files: snapshot.files,
+    result_files: await probe(() => d.hashResultFiles(repoDir, resultFiles)),
+  }
   const subject = {
+    run_metadata,
     plan_id: planId(contract),
     files_hash: hashValue(snapshot.files),
     base_hash: base,
