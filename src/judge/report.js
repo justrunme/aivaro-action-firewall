@@ -20,11 +20,34 @@ export const BUDGET_MS = 60000
  */
 
 /**
+ * @typedef {object} CleanupStatus
+ * @property {boolean} ok
+ * @property {'clean'|'leftovers'|'unverified'} status
+ * @property {{ kind: string, id: string }[]} leftovers
+ * @property {string[]} errors
+ */
+
+/**
+ * Fail closed: a missing or malformed cleanup status counts as unverified, and
+ * anything other than an explicit clean status with no leftovers is not a pass.
+ * @param {unknown} c
+ * @returns {CleanupStatus}
+ */
+export function normalizeCleanup(c) {
+  if (c && typeof c === 'object' && c.ok === true && c.status === 'clean' && (!Array.isArray(c.leftovers) || c.leftovers.length === 0) && (!Array.isArray(c.errors) || c.errors.length === 0)) {
+    return { ok: true, status: 'clean', leftovers: [], errors: [] }
+  }
+  const leftovers = Array.isArray(c?.leftovers) ? c.leftovers.map((l) => ({ kind: String(l?.kind), id: String(l?.id) })) : []
+  const errors = Array.isArray(c?.errors) ? c.errors.map(String) : c ? [] : ['cleanup_status_missing']
+  return { ok: false, status: leftovers.length > 0 ? 'leftovers' : 'unverified', leftovers, errors }
+}
+
+/**
  * @param {{ stepResults: StepResult[], elapsedMs: number, imagesCached: boolean, missionId: string, publicKey: string|null,
  *           receipts: { seq: number, kind: string, verdict: string|null, hash: string }[], offline: { receipts: number, chain_findings: number, policy_findings: number } | null,
- *           story: object, budgetMs?: number }} input
+ *           story: object, cleanup?: CleanupStatus, budgetMs?: number }} input
  */
-export function buildReport({ stepResults, elapsedMs, imagesCached, missionId, publicKey, receipts, offline, story, budgetMs = BUDGET_MS }) {
+export function buildReport({ stepResults, elapsedMs, imagesCached, missionId, publicKey, receipts, offline, story, cleanup, budgetMs = BUDGET_MS }) {
   const failed = stepResults.filter((s) => s.status === 'failed')
   const skipped = stepResults.filter((s) => s.status === 'skipped')
   // The 60 s promise holds with the images on the machine. A first run that has to
@@ -36,6 +59,8 @@ export function buildReport({ stepResults, elapsedMs, imagesCached, missionId, p
   for (const s of skipped) findings.push({ code: 'STEP_SKIPPED', step: s.id })
   if (story?.error) findings.push({ code: 'BACKEND_ERROR', during: story.error.during })
   if (budgetEnforced && !withinBudget) findings.push({ code: 'OVER_BUDGET', elapsed_ms: elapsedMs, budget_ms: budgetMs })
+  const cleanupStatus = normalizeCleanup(cleanup)
+  if (!cleanupStatus.ok) findings.push({ code: 'CLEANUP_INCOMPLETE', status: cleanupStatus.status, leftovers: cleanupStatus.leftovers, errors: cleanupStatus.errors })
   const ok = findings.length === 0
   return {
     judge: {
@@ -56,6 +81,7 @@ export function buildReport({ stepResults, elapsedMs, imagesCached, missionId, p
       mismatches: offline?.chain_findings ?? null,
       policy_violations: offline?.policy_findings ?? null,
     },
+    cleanup: cleanupStatus,
     findings,
     story,
     steps: stepResults,
