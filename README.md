@@ -10,6 +10,13 @@ An agent migration can silently delete orders through a database trigger. JustRu
 
 **Try it (Node.js 24+, local Docker):** `npm ci && node src/cli/index.js judge --text`
 
+## Proof you can check
+
+- **Judge quickstart:** [`npm ci` and `node src/cli/index.js judge --text`](docs/JUDGE_QUICKSTART.md) — a recorded fresh-clone judge run passed in **37.4 s** at `de256225`; the later `npm ci` + full-suite check at `0ea290b` was a separate run. Docker image was cached.
+- **Gate decisions:** [13 of 13 destructive actions denied, 1 harmless read allowed](docs/EXAMPLES.md) with the gate enabled. These are tool-call decisions, **not** database-rehearsal measurements or universal shell protection.
+- **Recorded Chaos Twin recovery:** [RECOVERY PROVEN, 21 checks, 0 failed](docs/evidence/chaos-live-2026-11-20/README.md) after a database `SIGKILL`, with a signed receipt and public key. Run the **portable receipt/anchor verification command** in that README; it is not the full CLI policy/history check. This twin does **not** sandbox untrusted host shell.
+- **Point-in-time test report:** [571 passed, 0 failed, 0 skipped on Node v24.22.3](docs/test-report.json), measured at commit **`5c2188327e008ea0ea76ff36325f8792ec7956d8`**, not this README head.
+
 **Measured:** in one five-run-per-arm experiment, code review approved **5/5** destructive plans (each direct run lost **1 of 3** orders); JustRunMe denied **5/5** first rehearsals and the eventual real runs lost **0** orders. **Limit:** 3/5 revised plans bypassed the trigger during execution, so this is not proof of business-rule correctness. [Protocol and results](docs/agent-runs/T25-results-v1.md).
 
 ![Flight Recorder showing a denied, repaired and verified mission](docs/img/console-flight-recorder.png)
