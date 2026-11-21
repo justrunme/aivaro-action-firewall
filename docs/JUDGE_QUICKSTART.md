@@ -1,6 +1,6 @@
 # Fresh-clone judge quickstart (Mac, 21 November 2026)
 
-This is a recorded fresh-checkout test of **origin/main at `de256225e4936ad38955c7cbd0b9eb917ce20ea6`**, not a claim that every host or Node version works. The checkout was newly cloned into `/tmp/jrm-judge-refresh-87xMgm` (resolved by macOS to `/private/tmp/jrm-judge-refresh-87xMgm`). It was not the development checkout.
+This records two fresh-checkout checks: the original full judge and test run at **origin/main `de256225e4936ad38955c7cbd0b9eb917ce20ea6`**, and a later **`npm ci`-only** verification at **origin/main `0ea290b97be9bc199fa802f61bd0f6043a005950`** (Round 1). These are separate revisions, not one combined test run. Neither proves every host or Node version works. The checkout was newly cloned into `/tmp/jrm-judge-refresh-87xMgm` (resolved by macOS to `/private/tmp/jrm-judge-refresh-87xMgm`). It was not the development checkout.
 
 ## Prerequisites observed
 
@@ -15,12 +15,13 @@ This is a recorded fresh-checkout test of **origin/main at `de256225e4936ad38955
 | --- | --- | --- |
 | `git clone --branch main --single-branch https://github.com/justrunme/justrunme-zero.git /tmp/jrm-judge-refresh-87xMgm` | Exit 0, commit `de25622` | Fresh /tmp folder (path has no spaces) |
 | `git config user.name "Andrey Lesnikov"` and `git config user.email "52860508+justrunme@users.noreply.github.com"` inside the clone | Exit 0 | Repo-local identity only |
-| `npm install` | Exit 0; 6 packages installed, 0 vulnerabilities reported | **1 s** |
+| `npm install` (original `de25622` run; superseded as setup guidance by README `npm ci`) | Exit 0; 6 packages installed, 0 vulnerabilities reported | **1 s** |
+| `npm ci` (new clone `/tmp/jrm-review30-dCvEGN`, `0ea290b`; **README-prescribed command**) | Exit 0; 6 packages added, 7 audited, **0 vulnerabilities** | **0.71 s** (`/usr/bin/time -p`) |
 | `npm test` (Node 26.13.1) | **Exit 0**; 573 tests, 573 pass, 0 fail, 0 skipped | **117 s** |
 | `node src/cli/index.js judge --text` | **Exit 0**; `judge: ok (exit 0)`, `PASS in 37.4 s (budget 60 s, enforced)` | **38 s** |
 | `node src/cli/index.js console --port 47891` | Started, printed localhost URL with per-start token; root returned HTTP **200** and title `JustRunMe Console` | Local HTTP probe; process stopped afterwards |
 
-`npm install` was used as documented in README. A separate `npx --yes node@24 --test test/*.test.js` run on Node 24.22.3 also passed all 573 tests (exit 0, 47 s); this is not the exact npm script invocation. The README does explicitly document `npm test` and `node src/cli/index.js judge --text`; its CLI reference documents `justrunme console [--port n]`. The console port `47891` was free during this test. Never publish or reuse the Console's per-start token.
+The original `de25622` test used `npm install`; **current README instead prescribes `npm ci`**. The Round 1 fresh clone at `0ea290b` ran exactly `npm ci` successfully (6 packages, 0 vulnerabilities). The 573/573 test, judge, and Console measurements below belong to **`de25622`**, not to the later `npm ci` clone. A separate `npx --yes node@24 --test test/*.test.js` run on Node 24.22.3 also passed all 573 tests (exit 0, 47 s); this is not the exact npm script invocation. The README does explicitly document `npm test` and `node src/cli/index.js judge --text`; its CLI reference documents `justrunme console [--port n]`. The console port `47891` was free during this test. Never publish or reuse the Console's per-start token.
 
 ## Judge demo: expected output
 
@@ -48,7 +49,7 @@ For the Console, use `node src/cli/index.js console --port 47891` (or omit `--po
 ## Troubleshooting and gaps found
 
 1. **Full test suite now passes on Node 26.** The fresh clone at `de25622` passed 573/573 tests (exit 0, 117 s). The earlier 10 live-run failures recorded against `316625a` are no longer reproduced. This confirms the tested revision and environment, not every platform or future revision.
-2. **README doesn't give a fully linear fresh-start path.** Its Development section suggests `npm install` and `npm test`, while the judge command appears much earlier under the CLI reference. `npm ci` is not prescribed. A judge needs to locate the separate `judge --text` and `console` sections. This document puts them together without changing the README.
+2. **README now gives a one-line judge start:** `npm ci && node src/cli/index.js judge --text` near the top. Its “Try the judge demo” section also shows `npm ci`, `judge --text`, and `console` together. `npm test` remains in the separate Development section; a judge seeking full-suite verification still needs to locate it. This document retains the measured fresh-checkout evidence without changing README.
 3. **Docker is mandatory for judge mode.** This run had a local daemon and cached image, so first-time image pull time and no-Docker error output were **not** measured. The 60-second budget was enforced here because the image was cached.
 4. **Node version coverage is limited.** Node 26.13.1 passed the full npm test command; Node 24.22.3 passed the equivalent direct Node test invocation. Other versions and platforms were not tested in this fresh clone.
 5. **No browser UI acceptance test was performed.** HTTP 200 confirms that the Console served HTML, not that its interactive workflows were exercised.
@@ -58,6 +59,6 @@ For the Console, use `node src/cli/index.js console --port 47891` (or omit `--po
 - The judge command removed its own temporary containers, networks and volumes: no `jrm-judge-*` resources remained in `docker ps -a`, `docker network ls` or `docker volume ls` after the run; the judge command reported successful cleanup.
 - The Console listener on port `47891` was stopped and verified absent with `lsof`.
 - No unrelated Docker resources were intentionally modified.
-- The temporary fresh clone was left in place for reproducibility; it is **not** a running container or service.
+- Both temporary fresh clones (`/tmp/jrm-judge-refresh-87xMgm` at `de25622`, `/tmp/jrm-review30-dCvEGN` at `0ea290b`) were left in place for reproducibility; it is **not** a running container or service.
 
 No Kiro CLI credits were used for this documentation/verification task; no entry was added to `docs/KIRO_LOG.md`.
