@@ -14,7 +14,7 @@ import path from 'node:path'
 import { JudgeEnvironmentError, childEnv, createBackend, currentEndpoint, isLocalEndpoint, projectNames } from '../src/judge/env.js'
 import { down, dump, imageDigests, psql, up } from '../src/rehearsal/compose.js'
 import { EXIT } from '../src/cli/codes.js'
-import { main } from '../src/cli/index.js'
+import { judgeSummaryLines, main, textOf } from '../src/cli/index.js'
 
 /** A scripted stand-in for the CLI: behaves like a correct JustRunMe, with hooks to break one step. */
 function fakeBackend({ override = {}, verifierAcceptsAnything = false } = {}) {
@@ -285,5 +285,43 @@ describe('judge command line', () => {
       assert.equal(r.output.error.code, 'USAGE')
     }
     assert.deepEqual([EXIT.JUDGE_FAILED, EXIT.JUDGE_ENVIRONMENT], [40, 41])
+  })
+})
+
+describe('judge --text summary lines', () => {
+  const textFor = async (backend) => {
+    const s = await runScenario(backend)
+    const rep = report(s)
+    return { rep, text: textOf({ command: 'judge', ok: rep.judge.status === 'PASS', exit_code: rep.judge.status === 'PASS' ? 0 : EXIT.JUDGE_FAILED, result: rep }) }
+  }
+
+  it('shows the recorded dangerous and safe verdicts, rows lost and removed plans right after the status line', async () => {
+    const { text } = await textFor(fakeBackend())
+    const lines = text.split('\n')
+    assert.match(lines[0], /^judge: ok/)
+    assert.match(lines[1], /^PASS in /)
+    assert.equal(lines[2], '  dangerous plan: DATA LOSS, rows lost: 1 (orders 1, patches 0)')
+    assert.equal(lines[3], '  safe plan: SAFE, rows lost: 0 (orders 0, patches 0)')
+    assert.equal(lines[4], '  removed from selection: 1 plan')
+    assert.ok(text.includes('receipts verified: 9'), 'existing lines are kept')
+  })
+
+  it('never prints SAFE when the safe plan was not rehearsed, and keeps the failing step visible', async () => {
+    const backend = fakeBackend({ override: { rehearse: () => ({ exit: 10, out: { result: { verdict: 'DATA LOSS', rows_lost: { orders: 2 }, plan_id: 'plan-d', base_hash: 'base-1' } } }) } })
+    const { rep, text } = await textFor(backend)
+    assert.equal(rep.judge.status, 'FAIL')
+    assert.ok(!/SAFE/.test(text.replace(/DATA LOSS/g, '')), 'no SAFE anywhere in the output')
+    assert.ok(text.includes('safe plan: DATA LOSS, rows lost: 2 (orders 2)'), 'the recorded verdict is shown as measured')
+    assert.ok(text.includes('FAIL'))
+  })
+
+  it('prints no summary line at all when nothing was recorded', () => {
+    assert.deepEqual(judgeSummaryLines(undefined), [])
+    assert.deepEqual(judgeSummaryLines({ dangerous: { verdict: undefined }, safe: {}, selection: { removed: [] } }), [])
+  })
+
+  it('leaves the JSON report unchanged: no summary field is added', async () => {
+    const { rep } = await textFor(fakeBackend())
+    assert.deepEqual(Object.keys(rep), ['judge', 'counts', 'findings', 'story', 'steps', 'receipts', 'operator_public_key', 'limits'])
   })
 })
